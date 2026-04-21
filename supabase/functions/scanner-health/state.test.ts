@@ -107,3 +107,53 @@ Deno.test("latest observed timeout overrides stale scanners row metadata", () =>
   assert(state.state_label === "timeout", "expected latest timeout to win");
   assert(state.latest_run_status === "timeout", "expected latest observed status");
 });
+
+Deno.test("paused scanners render as disabled", () => {
+  const state = deriveScannerState(
+    {
+      status: "paused",
+      cadence: "daily",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T08:05:00Z",
+      last_probe_status: "ok",
+    },
+    [],
+    [],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.state_label === "disabled", "paused scanners should render as disabled");
+  assert(state.health === "yellow", "paused scanners should remain operator-visible");
+  assert(
+    state.state_reason.includes("paused"),
+    "expected paused status to surface in the reason",
+  );
+});
+
+Deno.test("partial state surfaces structured partial reason when present", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "3h",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "partial",
+      last_probe_at: null,
+      last_probe_status: null,
+    },
+    [{
+      status: "partial",
+      started_at: "2026-04-21T08:00:00Z",
+      completed_at: "2026-04-21T08:00:20Z",
+      warnings: ["budget exhausted"],
+      metrics: { partial_reasons: ["budget_exhausted_keyword_phase"] },
+    }],
+    [],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(
+    state.state_reason.includes("budget_exhausted_keyword_phase"),
+    "expected structured partial reason to surface",
+  );
+});

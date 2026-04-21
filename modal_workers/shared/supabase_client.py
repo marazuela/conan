@@ -11,6 +11,7 @@ service_role-only; same for filings, scanner_runs). Modal workers never hold a u
 Public API matches spec.md §7.1 with the subset needed by Phase 1 scanners:
   SupabaseClient()                       # reads SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
   .load_scanner_config(name) -> ScannerConfig
+  .load_scanner_statuses(names) -> dict[name,status]
   .open_scanner_run(scanner_id) -> str   # returns run_id
   .close_scanner_run(run_id, status, signals_emitted, errors)
   .upsert_filing(filing) -> str          # returns filing id (UUID)
@@ -185,6 +186,22 @@ class SupabaseClient:
             timeout_hard_s=r["timeout_hard_s"],
             config=r.get("config") or {},
         )
+
+    def load_scanner_statuses(self, scanner_names: List[str]) -> Dict[str, str]:
+        unique = sorted({name for name in scanner_names if name})
+        if not unique:
+            return {}
+        in_clause = ",".join(f'"{name}"' for name in unique)
+        rows = self._rest(
+            "GET",
+            "scanners",
+            params={"name": f"in.({in_clause})", "select": "name,status"},
+        ) or []
+        return {
+            row["name"]: row["status"]
+            for row in rows
+            if row.get("name") and row.get("status")
+        }
 
     def update_scanner_last_run(self, scanner_id: str, last_run_utc: str,
                                 last_run_status: str, last_run_signals: int) -> None:

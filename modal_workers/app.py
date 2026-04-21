@@ -16,13 +16,15 @@ NOT hosted here (by design, spec.md §7.4 revised 2026-04-20):
     scheduled task (see `.claude/skills/thesis_writer.md`). Modal doesn't draft theses.
   - `candidate_aging`    — same pattern; a separate skill.
 
-Cadences (from config/scanner_registry.json):
-  - 3h:      edgar_filing_monitor, fda_pdufa_pipeline, lse_rns_scanner,
-             tdnet_scanner, asx_scanner
-  - daily:   esma_short_scanner, congressional_trading, sedar_plus_scanner,
-             hkex_scanner, kind_scanner, bse_nse_scanner, cvm_scanner,
-             bmv_scanner, courtlistener_scanner, sec_enforcement_scanner
-  - weekly:  takeover_candidate_scanner, pre_phase3_readout_scanner
+Active scheduled subset (operator bandwidth cap, 2026-04-22):
+  - 3h:      edgar_filing_monitor, fda_pdufa_pipeline
+  - weekly:  takeover_candidate_scanner
+  - daily fetchers (universe maintenance, not signal emitters):
+             fda_adcomm_pdufa, sec_8k_mna
+
+All other scanner `_once` functions remain deployed for manual/on-demand use,
+but are intentionally omitted from the scheduled dispatch buckets until they are
+re-enabled in the registry/operator UI.
 
 Secret requirements (populate via `modal secret create scanner-secrets ...`):
   - SEC_USER_AGENT          — required by edgar, fda_pdufa, takeover_candidate,
@@ -137,8 +139,12 @@ def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
 
 # --- 3h cadence ---
 
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
 def edgar_filing_monitor_once() -> dict:
+    # Flagship EDGAR now runs budgeted full coverage by default (not one rotating
+    # category only), with issuer filtering, market-cap triage, retries, and
+    # structured telemetry. Give it room above the soft budget so it can finish
+    # filing-type coverage and persist after_insert state safely.
     return _run("edgar_filing_monitor")
 
 @app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
@@ -281,16 +287,11 @@ def reporting_weekly_once() -> dict:
 # ==========================================================================
 
 _SCANNERS_3H: List[str] = [
-    "edgar_filing_monitor", "fda_pdufa_pipeline", "lse_rns_scanner",
-    "tdnet_scanner", "asx_scanner",
+    "edgar_filing_monitor", "fda_pdufa_pipeline",
 ]
-_SCANNERS_DAILY: List[str] = [
-    "esma_short_scanner", "congressional_trading", "sedar_plus_scanner",
-    "hkex_scanner", "kind_scanner", "bse_nse_scanner", "cvm_scanner",
-    "bmv_scanner", "courtlistener_scanner", "sec_enforcement_scanner",
-]
+_SCANNERS_DAILY: List[str] = []
 _SCANNERS_WEEKLY: List[str] = [
-    "takeover_candidate_scanner", "pre_phase3_readout_scanner",
+    "takeover_candidate_scanner",
 ]
 
 # Catalyst-universe fetchers run alongside daily scanners. They use the same
@@ -302,6 +303,16 @@ _FETCHERS_DAILY: List[str] = [
     "fda_adcomm_pdufa",
     "sec_8k_mna",
 ]
+
+
+def _load_dispatch_statuses(names: List[str]) -> tuple[dict[str, str], Optional[str]]:
+    if not names:
+        return {}, None
+    try:
+        from modal_workers.shared.supabase_client import SupabaseClient
+        return SupabaseClient().load_scanner_statuses(names), None
+    except Exception as e:  # noqa: BLE001 — status gating should not block the bucket
+        return {}, f"{type(e).__name__}: {e}"
 
 
 def _dispatch(names: List[str]) -> dict:
@@ -325,9 +336,19 @@ def _dispatch(names: List[str]) -> dict:
     except Exception as e:  # noqa: BLE001 — reaper is advisory; don't block dispatch
         reaper_error = f"{type(e).__name__}: {e}"
 
+    statuses, status_lookup_error = _load_dispatch_statuses(names)
     spawned = []
+    skipped = []
     errors = []
     for name in names:
+        status = statuses.get(name)
+        if status is not None and status != "operational":
+            skipped.append({
+                "scanner": name,
+                "status": status,
+                "reason": f"registry status={status}",
+            })
+            continue
         fn = getattr(me, f"{name}_once", None)
         if fn is None:
             errors.append({"scanner": name, "error": "function not found"})
@@ -337,12 +358,14 @@ def _dispatch(names: List[str]) -> dict:
             spawned.append({"scanner": name, "call_id": getattr(call, "object_id", None)})
         except Exception as e:
             errors.append({"scanner": name, "error": str(e)})
-    envelope = {"spawned": spawned, "errors": errors, "count": len(spawned),
+    envelope = {"spawned": spawned, "skipped": skipped, "errors": errors, "count": len(spawned),
                 "reaped_orphan_runs": len(reaped)}
     if reaped:
         envelope["reaped_sample"] = reaped[:5]
     if reaper_error:
         envelope["reaper_error"] = reaper_error
+    if status_lookup_error:
+        envelope["status_lookup_error"] = status_lookup_error
     return envelope
 
 
@@ -389,7 +412,7 @@ def dispatch_observability() -> dict:
     from datetime import datetime, timezone
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     from modal_workers.observability import (
-        convergence_qa, litigation_baselines_refresh, orphan_convergence_sweeper,
+        convergence_qa, edgar_runtime_health, litigation_baselines_refresh, orphan_convergence_sweeper,
         precision_auditor, scanner_probe, timing_auditor, translation_health,
     )
     from modal_workers.legal_enricher import legal_enrichment_sweep
@@ -403,6 +426,14 @@ def dispatch_observability() -> dict:
         results["ran"].append("scanner_probe")
     except Exception as e:
         results["scanner_probe_error"] = str(e)
+
+    # Always: EDGAR-specific degradation rule for repeated budget-bound or
+    # zero-coverage runs on the highest-priority source.
+    try:
+        results["edgar_runtime_health"] = edgar_runtime_health()
+        results["ran"].append("edgar_runtime_health")
+    except Exception as e:
+        results["edgar_runtime_health_error"] = str(e)
 
     # Always: heal signals dropped by webhook burst (idempotent reactor replay).
     try:
@@ -475,6 +506,12 @@ def translation_health_once() -> dict:
 def scanner_probe_once() -> dict:
     from modal_workers.observability import scanner_probe
     return scanner_probe()
+
+
+@app.function(image=image, timeout=180, secrets=[supabase_secrets])
+def edgar_runtime_health_once() -> dict:
+    from modal_workers.observability import edgar_runtime_health
+    return edgar_runtime_health()
 
 
 @app.function(image=image, timeout=240, secrets=[supabase_secrets])

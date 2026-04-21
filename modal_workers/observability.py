@@ -853,6 +853,121 @@ def summarize_open_flags(client: Optional[SupabaseClient] = None) -> Dict[str, A
 
 
 # ===========================================================================
+# EDGAR runtime health
+# ===========================================================================
+
+_EDGAR_RUNTIME_WINDOW_RUNS = 4
+_EDGAR_DEGRADED_RUNS_WARN = 2
+
+
+def _extract_run_metrics(errors: Any) -> Dict[str, Any]:
+    if not isinstance(errors, list):
+        return {}
+    for entry in errors:
+        if isinstance(entry, dict) and isinstance(entry.get("metrics"), dict):
+            return entry["metrics"]
+    return {}
+
+
+def edgar_runtime_health(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Flag repeated degraded EDGAR runs so operators can distinguish
+    upstream quietness from a scanner that is alive but under-covering."""
+    client = client or SupabaseClient()
+    summary: Dict[str, Any] = {
+        "function": "edgar_runtime_health",
+        "window_runs": _EDGAR_RUNTIME_WINDOW_RUNS,
+        "runs_considered": 0,
+        "budget_exhausted_runs": 0,
+        "zero_signal_degraded_runs": 0,
+        "flagged": False,
+    }
+
+    scanner_rows = client._rest(
+        "GET", "scanners",
+        params={"select": "id,name", "name": "eq.edgar_filing_monitor", "limit": 1},
+    ) or []
+    if not scanner_rows:
+        summary["status"] = "missing_scanner"
+        return summary
+
+    scanner_id = scanner_rows[0]["id"]
+    runs = client._rest(
+        "GET", "scanner_runs",
+        params={
+            "select": "status,signals_emitted,started_at,completed_at,errors",
+            "scanner_id": f"eq.{scanner_id}",
+            "order": "started_at.desc",
+            "limit": str(_EDGAR_RUNTIME_WINDOW_RUNS),
+        },
+    ) or []
+    summary["runs_considered"] = len(runs)
+    if not runs:
+        return summary
+
+    degraded_samples: List[Dict[str, Any]] = []
+    budget_exhausted_runs = 0
+    zero_signal_degraded_runs = 0
+
+    for run in runs:
+        metrics = _extract_run_metrics(run.get("errors"))
+        partial_reasons = metrics.get("partial_reasons") or []
+        budget_exhausted = bool(metrics.get("budget_exhausted")) or any(
+            isinstance(reason, str) and reason.startswith("budget_exhausted")
+            for reason in partial_reasons
+        )
+        degraded = run.get("status") in ("partial", "error", "timeout") or bool(metrics.get("degraded"))
+        if budget_exhausted:
+            budget_exhausted_runs += 1
+        if degraded and int(run.get("signals_emitted") or 0) == 0:
+            zero_signal_degraded_runs += 1
+        if degraded:
+            degraded_samples.append({
+                "status": run.get("status"),
+                "signals_emitted": run.get("signals_emitted"),
+                "started_at": run.get("started_at"),
+                "completed_at": run.get("completed_at"),
+                "partial_reasons": partial_reasons,
+                "budget_exhausted": budget_exhausted,
+            })
+
+    summary["budget_exhausted_runs"] = budget_exhausted_runs
+    summary["zero_signal_degraded_runs"] = zero_signal_degraded_runs
+    summary["degraded_samples"] = degraded_samples
+
+    if (
+        budget_exhausted_runs >= _EDGAR_DEGRADED_RUNS_WARN
+        or zero_signal_degraded_runs >= _EDGAR_DEGRADED_RUNS_WARN
+    ):
+        _upsert_flag(
+            client,
+            severity="warn",
+            source="edgar_runtime_health",
+            kind="degraded_run_streak",
+            scanner_id=scanner_id,
+            title=(
+                f"edgar_filing_monitor degraded in {len(degraded_samples)}/{len(runs)} recent runs"
+            ),
+            evidence={
+                "window_runs": len(runs),
+                "budget_exhausted_runs": budget_exhausted_runs,
+                "zero_signal_degraded_runs": zero_signal_degraded_runs,
+                "samples": degraded_samples[:3],
+            },
+        )
+        summary["flagged"] = True
+    else:
+        _resolve_flag(
+            client,
+            source="edgar_runtime_health",
+            kind="degraded_run_streak",
+            scanner_id=scanner_id,
+            note="auto-resolved: recent EDGAR runs are no longer repeatedly degraded",
+        )
+
+    return summary
+
+
+# ===========================================================================
 # 7.6.5 precision_auditor (Phase 1d) — v2 (bulk-insert normalization)
 # ===========================================================================
 #

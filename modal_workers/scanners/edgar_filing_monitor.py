@@ -1,45 +1,37 @@
 """
-EDGAR filing monitor — Modal port of tools/edgar_filing_monitor.py.
+EDGAR filing monitor — flagship Modal implementation.
 
-Preservation (PRD §6 + spec.md §2):
-  - SIGNAL_KEYWORDS, SIGNAL_FILING_TYPES, KEYWORD_SKIP_FORMS, CATEGORY_FORM_WHITELIST,
-    SPAC_IPO_FORM_BLACKLIST, ROTATION_ORDER — byte-equivalent to v1.
-  - Rate limiter (8 req/sec) — preserved.
-  - EFTS search + data.sec.gov submissions lookup — preserved.
-  - Strength heuristics in _compute_strength — ported from v1 _build_signal.
-  - 45-day dedup on (cik, keyword, category) — preserved; log lives in
-    scanner-caches/edgar/dedup.json instead of signals/edgar_dedup.json.
-  - Rotation state (one category per 3h run) — preserved; state in
-    scanner-caches/edgar/rotation.json.
-
-Deferred vs v1:
-  - Market cap filter (D-003 $215M floor) — not wired here; requires porting
-    tools/mcap_cache.py. The Modal scanner emits all signals regardless of
-    market cap; downstream auto-caps and the dashboard can gate visually until
-    mcap_cache lands. Flagged for Phase 3 completion.
-  - Filing type scan (scan_filing_types) — ported below; runs after keyword scan
-    if wall-clock budget allows.
+Core goals:
+  - Budgeted full keyword coverage by default, with optional rotation fallback.
+  - Legacy-grade quality controls: issuer/SPAC filtering + market-cap triage.
+  - Honest runtime telemetry: retries, budget exhaustion, filter counts, degraded
+    reasons, and explicit after-insert persistence for dedup / rotation state.
+  - Modal is the canonical EDGAR implementation; the unified_system tool remains
+    a donor for logic and offline comparisons, not a competing runtime path.
 
 IO contract:
   scan(cfg: ScannerConfig) -> ScannerResult
     - raises MissingAuthError if SEC_USER_AGENT env unset.
-    - Uses cfg.timeout_soft_s (default 35s) as wall-clock budget for EFTS calls.
-    - Returns up to ~60 signals per run (one rotation category + filing types).
+    - Uses cfg.timeout_soft_s as a wall-clock budget.
+    - Returns structured `run_metrics` for scanner_runs / health surfaces.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
 from modal_workers.shared.scanner_base import MissingAuthError, Signal, ScannerResult
 from modal_workers.shared.supabase_client import EntityHints, ScannerConfig, SupabaseClient
+from modal_workers.scanners.edgar_issuer_filter_defaults import DEFAULT_EDGAR_ISSUER_FILTER
 
 # ---------------------------------------------------------------------------
 # Constants (verbatim from v1)
@@ -51,6 +43,22 @@ SEC_RATE_LIMIT = 8              # req/sec (conservative vs SEC's 10)
 REQUEST_TIMEOUT = 10            # per-request seconds
 DEDUP_WINDOW_DAYS = 45          # signal novelty window
 ROTATION_ORDER = ["activist", "mna", "distress", "governance"]
+DEFAULT_COVERAGE_MODE = "full"
+
+MIN_QUERY_BUDGET_S = 2.0
+FILING_PHASE_RESERVE_S = 8.0
+MAX_EFTS_RETRIES = 2
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_EFTS_FAILURE_DETAILS = 10
+
+MARKET_CAP_CACHE_TTL_S = 24 * 3600
+DEFAULT_MARKET_CAP_FLOOR_USD_MM = 215.0
+MARKET_CAP_CACHE_PREFIX = "market-snapshots"
+ISSUER_FILTER_FILE = Path(__file__).with_name("edgar_issuer_filter.json")
+MAX_ISSUER_FILTER_SAMPLES = 10
+
+_MARKET_CAP_MEMO: Dict[str, Optional[float]] = {}
+_DEFAULT_ISSUER_FILTER_CACHE: Optional[Dict[str, Any]] = None
 
 SIGNAL_KEYWORDS: Dict[str, List[str]] = {
     "activist": [
@@ -134,6 +142,22 @@ _CATEGORY_DIRECTION: Dict[str, str] = {
     "governance": "neutral", # poison pill etc. ambiguous until actor known
 }
 
+_FILING_TYPE_DIRECTION: Dict[str, str] = {
+    "activist_ownership": "long",
+    "late_filings": "short",
+}
+
+_EXCHANGE_TO_MIC: Dict[str, str] = {
+    "NASDAQ": "XNAS",
+    "NYSE": "XNYS",
+    "NYSE AMERICAN": "XASE",
+    "AMERICAN STOCK EXCHANGE": "XASE",
+    "AMEX": "XASE",
+    "ARCA": "ARCX",
+    "BATS": "BATS",
+    "IEX": "IEXG",
+}
+
 # Category → signal_type name. Preserved from v1 (`{category}_keyword`).
 _CATEGORY_SIGNAL_TYPE: Dict[str, str] = {
     "activist":   "activist_keyword",
@@ -165,12 +189,158 @@ _rate_limiter = _SECRateLimiter()
 
 
 # ---------------------------------------------------------------------------
+# Budget + metrics
+# ---------------------------------------------------------------------------
+
+def _remaining_budget_s(started_at: float, budget_s: float) -> float:
+    if budget_s <= 0:
+        return float("inf")
+    return max(0.0, budget_s - (time.time() - started_at))
+
+
+def _has_budget_for_query(started_at: float, budget_s: float, reserve_s: float = 0.0) -> bool:
+    if budget_s <= 0:
+        return True
+    return _remaining_budget_s(started_at, budget_s) > (reserve_s + MIN_QUERY_BUDGET_S)
+
+
+def _filing_phase_reserve_s(budget_s: float) -> float:
+    if budget_s <= 0:
+        return 0.0
+    return min(FILING_PHASE_RESERVE_S, max(0.0, budget_s * 0.25))
+
+
+def _new_run_metrics(
+    *,
+    budget_s: float,
+    coverage_mode: str,
+    categories_requested: List[str],
+    filing_types_requested: List[str],
+) -> Dict[str, Any]:
+    return {
+        "coverage_mode": coverage_mode,
+        "budget_seconds": budget_s,
+        "budget_remaining_seconds": None,
+        "budget_exhausted": False,
+        "degraded": False,
+        "partial_reasons": [],
+        "categories_requested": categories_requested,
+        "categories_completed": [],
+        "filing_types_requested": filing_types_requested,
+        "filing_types_completed": [],
+        "keyword_queries_attempted": 0,
+        "filing_queries_attempted": 0,
+        "retries_attempted": 0,
+        "efts_failures": 0,
+        "efts_failure_details": [],
+        "dedup_skipped": 0,
+        "issuer_filtered_total": 0,
+        "issuer_filtered_by_reason": {},
+        "issuer_filter_samples": [],
+        "market_cap_filtered_total": 0,
+        "market_cap_unknown_total": 0,
+        "market_cap_filter_enabled": True,
+        "market_cap_floor_usd_mm": DEFAULT_MARKET_CAP_FLOOR_USD_MM,
+        "merger_suppressed_total": 0,
+        "signals_detected": 0,
+        "fetched_records": 0,
+        "skipped_due_to_budget": 0,
+    }
+
+
+def _mark_partial(metrics: Dict[str, Any], reason: str) -> None:
+    metrics["degraded"] = True
+    reasons = metrics.setdefault("partial_reasons", [])
+    if reason not in reasons:
+        reasons.append(reason)
+
+
+def _status_code_from_exc(exc: Exception) -> Optional[int]:
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) if resp is not None else None
+
+
+def _is_retriable_efts_failure(exc: Exception) -> bool:
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    status_code = _status_code_from_exc(exc)
+    return status_code in RETRYABLE_STATUS_CODES
+
+
+def _retry_backoff_s(attempt: int) -> float:
+    return min(4.0, 0.6 * (2 ** max(0, attempt - 1))) + 0.05
+
+
+def _record_efts_failure(
+    metrics: Dict[str, Any],
+    *,
+    query: str,
+    form_type: str,
+    status_code: Optional[int],
+    retries_attempted: int,
+    error: str,
+    retriable: bool,
+) -> None:
+    metrics["efts_failures"] = metrics.get("efts_failures", 0) + 1
+    _mark_partial(metrics, "transient_efts_failure" if retriable else "efts_failure")
+    details = metrics.setdefault("efts_failure_details", [])
+    if len(details) < MAX_EFTS_FAILURE_DETAILS:
+        details.append({
+            "query": query,
+            "form_type": form_type or "",
+            "status_code": status_code,
+            "retries_attempted": retries_attempted,
+            "retriable": retriable,
+            "error": error[:240],
+        })
+
+
+def _record_issuer_filtered(
+    metrics: Dict[str, Any],
+    hit: Dict[str, Any],
+    reason: str,
+    *,
+    ticker: Optional[str] = None,
+    cik: Optional[str] = None,
+) -> None:
+    metrics["issuer_filtered_total"] = metrics.get("issuer_filtered_total", 0) + 1
+    by_reason = metrics.setdefault("issuer_filtered_by_reason", {})
+    by_reason[reason] = by_reason.get(reason, 0) + 1
+    samples = metrics.setdefault("issuer_filter_samples", [])
+    if len(samples) < MAX_ISSUER_FILTER_SAMPLES:
+        samples.append({
+            "company_name": hit.get("company_name", ""),
+            "cik": cik or hit.get("cik") or "",
+            "ticker": ticker or "",
+            "form": hit.get("form", ""),
+            "reason": reason,
+            "file_description": (hit.get("file_description") or "")[:160],
+        })
+
+
+def _record_market_cap_filtered(
+    metrics: Dict[str, Any],
+    *,
+    ticker: str,
+    market_cap_usd_mm: float,
+) -> None:
+    metrics["market_cap_filtered_total"] = metrics.get("market_cap_filtered_total", 0) + 1
+    samples = metrics.setdefault("market_cap_filtered_samples", [])
+    if len(samples) < 10:
+        samples.append({
+            "ticker": ticker,
+            "market_cap_usd_mm": round(market_cap_usd_mm, 2),
+        })
+
+
+# ---------------------------------------------------------------------------
 # EFTS + submissions
 # ---------------------------------------------------------------------------
 
 def _efts_search(query: str, date_from: str, date_to: str,
                  form_type: str = "", max_results: int = 50,
-                 *, user_agent: str) -> List[Dict[str, Any]]:
+                 *, user_agent: str,
+                 metrics: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {
         "q": query, "dateRange": "custom",
         "startdt": date_from, "enddt": date_to,
@@ -178,15 +348,36 @@ def _efts_search(query: str, date_from: str, date_to: str,
     if form_type:
         params["forms"] = form_type
 
-    _rate_limiter.wait()
-    try:
-        resp = requests.get(EFTS_URL, params=params,
-                            headers={"User-Agent": user_agent},
-                            timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.exceptions.RequestException:
-        return []
+    attempt = 0
+    while True:
+        _rate_limiter.wait()
+        try:
+            resp = requests.get(EFTS_URL, params=params,
+                                headers={"User-Agent": user_agent},
+                                timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except requests.exceptions.RequestException as exc:
+            retriable = _is_retriable_efts_failure(exc)
+            status_code = _status_code_from_exc(exc)
+            if retriable and attempt < MAX_EFTS_RETRIES:
+                attempt += 1
+                if metrics is not None:
+                    metrics["retries_attempted"] = metrics.get("retries_attempted", 0) + 1
+                time.sleep(_retry_backoff_s(attempt))
+                continue
+            if metrics is not None:
+                _record_efts_failure(
+                    metrics,
+                    query=query,
+                    form_type=form_type,
+                    status_code=status_code,
+                    retries_attempted=attempt,
+                    error=str(exc),
+                    retriable=retriable,
+                )
+            return []
 
     results: List[Dict[str, Any]] = []
     for hit in data.get("hits", {}).get("hits", [])[:max_results]:
@@ -233,6 +424,28 @@ def _get_company_tickers(cik: str, *, user_agent: str) -> Tuple[List[str], Optio
     except Exception:
         pass
     return [], None
+
+
+def _load_company_context(
+    cik: str,
+    *,
+    user_agent: str,
+    cache: Dict[str, Tuple[List[str], Optional[str]]],
+) -> Tuple[List[str], Optional[str]]:
+    if not cik:
+        return [], None
+    if cik in cache:
+        return cache[cik]
+    context = _get_company_tickers(cik, user_agent=user_agent)
+    cache[cik] = context
+    return context
+
+
+def _mic_for_exchange(exchange: Optional[str]) -> Optional[str]:
+    if not exchange:
+        return None
+    key = re.sub(r"\s+", " ", exchange.strip().upper())
+    return _EXCHANGE_TO_MIC.get(key)
 
 
 def _has_merger_sibling(cik: str, file_date_str: str, *, user_agent: str,
@@ -284,21 +497,175 @@ def _has_merger_sibling(cik: str, file_date_str: str, *, user_agent: str,
 
 
 # ---------------------------------------------------------------------------
+# Issuer filters
+# ---------------------------------------------------------------------------
+
+def _empty_issuer_filter() -> Dict[str, Any]:
+    return {
+        "blocked_ciks": set(),
+        "allowlist_ciks": set(),
+        "allowlist_tickers": set(),
+        "name_patterns_ci": [],
+        "description_patterns_ci": [],
+        "_name_regexes": [],
+        "_description_regexes": [],
+    }
+
+
+def _build_issuer_filter(raw: Dict[str, Any]) -> Dict[str, Any]:
+    loaded = _empty_issuer_filter()
+    loaded["blocked_ciks"] = {
+        str(cik).zfill(10)
+        for cik in (raw.get("blocked_ciks") or [])
+        if str(cik).strip()
+    }
+    loaded["allowlist_ciks"] = {
+        str(cik).zfill(10)
+        for cik in (raw.get("allowlist_ciks") or [])
+        if str(cik).strip()
+    }
+    loaded["allowlist_tickers"] = {
+        str(ticker).upper()
+        for ticker in (raw.get("allowlist_tickers") or [])
+        if str(ticker).strip()
+    }
+    loaded["name_patterns_ci"] = [
+        str(pattern)
+        for pattern in (raw.get("name_patterns_ci") or [])
+        if str(pattern).strip()
+    ]
+    loaded["description_patterns_ci"] = [
+        str(pattern)
+        for pattern in (raw.get("description_patterns_ci") or [])
+        if str(pattern).strip()
+    ]
+
+    for pattern in loaded["name_patterns_ci"]:
+        try:
+            loaded["_name_regexes"].append((pattern, re.compile(pattern, re.IGNORECASE)))
+        except re.error:
+            continue
+    for pattern in loaded["description_patterns_ci"]:
+        try:
+            loaded["_description_regexes"].append((pattern, re.compile(pattern, re.IGNORECASE)))
+        except re.error:
+            continue
+    return loaded
+
+
+def _load_default_issuer_filter() -> Dict[str, Any]:
+    global _DEFAULT_ISSUER_FILTER_CACHE
+    if _DEFAULT_ISSUER_FILTER_CACHE is not None:
+        return _DEFAULT_ISSUER_FILTER_CACHE
+    raw: Dict[str, Any] = dict(DEFAULT_EDGAR_ISSUER_FILTER)
+    if not ISSUER_FILTER_FILE.exists():
+        _DEFAULT_ISSUER_FILTER_CACHE = _build_issuer_filter(raw)
+        return _DEFAULT_ISSUER_FILTER_CACHE
+    try:
+        loaded = json.loads(ISSUER_FILTER_FILE.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            raw = loaded
+    except Exception:
+        pass
+    _DEFAULT_ISSUER_FILTER_CACHE = _build_issuer_filter(raw)
+    return _DEFAULT_ISSUER_FILTER_CACHE
+
+
+def _resolve_issuer_filter(cfg: ScannerConfig) -> Dict[str, Any]:
+    base = _load_default_issuer_filter()
+    overrides = cfg.config.get("issuer_filter_overrides")
+    if not isinstance(overrides, dict):
+        return base
+    merged_raw = {
+        "blocked_ciks": sorted(base["blocked_ciks"] | {
+            str(cik).zfill(10)
+            for cik in (overrides.get("blocked_ciks") or [])
+            if str(cik).strip()
+        }),
+        "allowlist_ciks": sorted(base["allowlist_ciks"] | {
+            str(cik).zfill(10)
+            for cik in (overrides.get("allowlist_ciks") or [])
+            if str(cik).strip()
+        }),
+        "allowlist_tickers": sorted(base["allowlist_tickers"] | {
+            str(ticker).upper()
+            for ticker in (overrides.get("allowlist_tickers") or [])
+            if str(ticker).strip()
+        }),
+        "name_patterns_ci": base["name_patterns_ci"] + [
+            str(pattern)
+            for pattern in (overrides.get("name_patterns_ci") or [])
+            if str(pattern).strip()
+        ],
+        "description_patterns_ci": base["description_patterns_ci"] + [
+            str(pattern)
+            for pattern in (overrides.get("description_patterns_ci") or [])
+            if str(pattern).strip()
+        ],
+    }
+    return _build_issuer_filter(merged_raw)
+
+
+def _match_pattern(texts: List[str], regexes: List[Tuple[str, Any]]) -> Optional[str]:
+    for label, regex in regexes:
+        for text in texts:
+            if text and regex.search(text):
+                return label
+    return None
+
+
+def _is_spac_or_shell_issuer(
+    hit: Dict[str, Any],
+    *,
+    cik: Optional[str],
+    issuer_filter: Dict[str, Any],
+    ticker_resolver: Optional[Callable[[], Optional[str]]] = None,
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    normalized_cik = str(cik or hit.get("cik") or "").zfill(10) if (cik or hit.get("cik")) else None
+
+    if normalized_cik and normalized_cik in issuer_filter.get("allowlist_ciks", set()):
+        return False, None, None
+    if normalized_cik and normalized_cik in issuer_filter.get("blocked_ciks", set()):
+        return True, "blocked_cik", None
+
+    company_name = str(hit.get("company_name") or "")
+    company_raw = str(hit.get("company_raw") or "")
+    file_description = str(hit.get("file_description") or "")
+
+    name_reason = _match_pattern([company_name, company_raw], issuer_filter.get("_name_regexes", []))
+    desc_reason = _match_pattern([file_description], issuer_filter.get("_description_regexes", []))
+    if not name_reason and not desc_reason:
+        return False, None, None
+
+    ticker: Optional[str] = None
+    if ticker_resolver is not None and issuer_filter.get("allowlist_tickers"):
+        ticker = ticker_resolver()
+        if ticker and ticker.upper() in issuer_filter.get("allowlist_tickers", set()):
+            return False, None, ticker.upper()
+
+    if name_reason:
+        return True, f"name_pattern:{name_reason}", ticker
+    if desc_reason:
+        return True, f"description_pattern:{desc_reason}", ticker
+    return False, None, ticker
+
+
+# ---------------------------------------------------------------------------
 # Dedup + rotation (Storage-backed)
 # ---------------------------------------------------------------------------
 
-def _signal_hash(cik: str, keyword: str, category: str) -> str:
-    return hashlib.md5(f"{cik}|{keyword}|{category}".encode()).hexdigest()
+def _signal_hash(cik: str, keyword: str, signal_type: str) -> str:
+    return hashlib.md5(f"{cik}|{keyword}|{signal_type}".encode()).hexdigest()
 
 
-def _is_novel(cik: str, keyword: str, category: str,
+def _is_novel(cik: str, keyword: str, signal_type: str,
               dedup_log: Dict[str, str],
               window_days: int = DEDUP_WINDOW_DAYS) -> bool:
-    h = _signal_hash(cik, keyword, category)
+    h = _signal_hash(cik, keyword, signal_type)
     if h in dedup_log:
         try:
-            first_date = datetime.strptime(dedup_log[h], "%Y-%m-%d")
-            if (datetime.utcnow() - first_date).days < window_days:
+            first_date = datetime.strptime(dedup_log[h], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - first_date).days < window_days:
                 return False
         except ValueError:
             pass
@@ -339,6 +706,116 @@ def _save_rotation(client: SupabaseClient, state: Dict[str, Any]) -> None:
                        content_type="application/json")
 
 
+def _rotation_state_for_mode(client: SupabaseClient, coverage_mode: str) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+    if coverage_mode == "rotation":
+        rotation_state = _load_rotation(client)
+        next_idx = (rotation_state.get("rotation_index", -1) + 1) % len(ROTATION_ORDER)
+        category = ROTATION_ORDER[next_idx]
+        rotation_state["rotation_index"] = next_idx
+        rotation_state["last_category"] = category
+        rotation_state["last_scan_ts"] = datetime.now(timezone.utc).isoformat()
+        rotation_state.setdefault("scan_history", {})[category] = rotation_state["last_scan_ts"]
+        return [category], rotation_state
+    return list(ROTATION_ORDER), None
+
+
+def _market_cap_cache_key(ticker: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", ticker.upper())
+    return f"{safe}@US"
+
+
+def _load_market_cap_usd_mm(
+    client: SupabaseClient,
+    ticker: str,
+    memo: Dict[str, Optional[float]],
+) -> Optional[float]:
+    normalized = ticker.upper().strip()
+    if not normalized:
+        return None
+    if normalized in memo:
+        return memo[normalized]
+
+    cache_key = _market_cap_cache_key(normalized)
+    try:
+        raw = client.read_cache(MARKET_CAP_CACHE_PREFIX, f"{cache_key}.json", timeout=4.0)
+    except Exception:
+        raw = None
+
+    if raw is not None:
+        try:
+            payload = json.loads(raw)
+            cached_at = float(payload.get("cached_at") or 0)
+            snapshot = payload.get("snapshot") or {}
+            market_cap_usd = snapshot.get("market_cap_usd")
+            if cached_at and time.time() - cached_at <= MARKET_CAP_CACHE_TTL_S and market_cap_usd is not None:
+                memo[normalized] = round(float(market_cap_usd) / 1_000_000, 2)
+                return memo[normalized]
+        except Exception:
+            pass
+
+    try:
+        import yfinance as yf  # type: ignore
+    except ImportError:
+        memo[normalized] = None
+        return None
+
+    market_cap = None
+    try:
+        instrument = yf.Ticker(normalized)
+        fast_info = instrument.fast_info or {}
+        info = instrument.info or {}
+        market_cap = fast_info.get("marketCap") or info.get("marketCap")
+    except Exception:
+        memo[normalized] = None
+        return None
+
+    if market_cap is None:
+        memo[normalized] = None
+        return None
+
+    market_cap_usd = float(market_cap)
+    memo[normalized] = round(market_cap_usd / 1_000_000, 2)
+    try:
+        client.write_cache(
+            MARKET_CAP_CACHE_PREFIX,
+            f"{cache_key}.json",
+            json.dumps({
+                "cached_at": time.time(),
+                "snapshot": {
+                    "market_cap_usd": market_cap_usd,
+                    "market_snapshot_source": "yfinance",
+                    "market_snapshot_symbol": normalized,
+                    "market_snapshot_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                },
+            }).encode("utf-8"),
+            content_type="application/json",
+        )
+    except Exception:
+        pass
+    return memo[normalized]
+
+
+def _resolve_figi_for_ticker(
+    ticker: Optional[str],
+    figi_cache: Dict[str, Optional[str]],
+) -> Optional[str]:
+    if not ticker:
+        return None
+    normalized = ticker.upper().strip()
+    if not normalized:
+        return None
+    if normalized in figi_cache:
+        return figi_cache[normalized]
+    try:
+        from modal_workers.shared.openfigi_resolver import resolve_ticker
+
+        resolution = resolve_ticker(normalized, exch_code="US")
+        figi_cache[normalized] = resolution.issuer_figi if resolution.resolved else None
+    except Exception:
+        figi_cache[normalized] = None
+    return figi_cache[normalized]
+
+
 # ---------------------------------------------------------------------------
 # Strength heuristics (verbatim from v1 _build_signal)
 # ---------------------------------------------------------------------------
@@ -377,34 +854,29 @@ def _compute_strength(category: str, keyword: str, form: str) -> int:
 # Signal builder
 # ---------------------------------------------------------------------------
 
-def _build_signal(hit: Dict[str, Any], keyword: str, category: str,
-                  scan_date: datetime, *, user_agent: str) -> Optional[Signal]:
+def _build_signal(
+    hit: Dict[str, Any],
+    *,
+    matched_keyword: str,
+    signal_type: str,
+    thesis_direction: Optional[str],
+    strength_estimate: int,
+    scan_date: datetime,
+    tickers: List[str],
+    exchange: Optional[str],
+    market_cap_usd_mm: Optional[float],
+    issuer_figi: Optional[str],
+) -> Optional[Signal]:
     cik = hit.get("cik", "")
     adsh = hit.get("adsh", "")
     if not adsh:
         return None
 
-    tickers, exchange = _get_company_tickers(cik, user_agent=user_agent)
     ticker = tickers[0] if tickers else None
-
-    # Resolve FIGI (best-effort; no failure path — scanner emits signal either way
-    # and the reactor/entity-resolver cascade handles the miss).
-    issuer_figi: Optional[str] = None
-    if ticker:
-        try:
-            from modal_workers.shared.openfigi_resolver import resolve_ticker
-            res = resolve_ticker(ticker, exch_code="US")
-            if res.resolved:
-                issuer_figi = res.issuer_figi
-        except Exception:
-            pass
-
-    signal_type = _CATEGORY_SIGNAL_TYPE.get(category, f"{category}_keyword")
-    direction = _CATEGORY_DIRECTION.get(category)
     form = hit.get("form", "")
 
-    source_content_hash = f"sha256:{hashlib.sha256(f'{adsh}|{keyword}|{category}'.encode()).hexdigest()}"
-    signal_id = f"edgar_{adsh.replace('-', '')}_{category}_{hashlib.md5(keyword.encode()).hexdigest()[:8]}"
+    source_content_hash = f"sha256:{hashlib.sha256(f'{adsh}|{matched_keyword}|{signal_type}'.encode()).hexdigest()}"
+    signal_id = f"edgar_{adsh.replace('-', '')}_{signal_type}_{hashlib.md5(matched_keyword.encode()).hexdigest()[:8]}"
 
     source_date_str = hit.get("file_date", "")
     try:
@@ -413,7 +885,9 @@ def _build_signal(hit: Dict[str, Any], keyword: str, category: str,
         source_date = scan_date
 
     raw_payload: Dict[str, Any] = {
-        "keyword": keyword,
+        "matched_keyword": matched_keyword,
+        "keyword": matched_keyword,
+        "excerpt": hit.get("file_description", ""),
         "filing_type": form,
         "cik": cik,
         "adsh": adsh,
@@ -422,12 +896,13 @@ def _build_signal(hit: Dict[str, Any], keyword: str, category: str,
         "company_name": hit.get("company_name", ""),
         "tickers": tickers,
         "exchange": exchange,
+        "market_cap_usd_mm": market_cap_usd_mm,
     }
 
     entity_hints = EntityHints(
         issuer_figi=issuer_figi,
         ticker=ticker,
-        mic=None,  # US MIC not known without exchange→MIC lookup; left for entity_identifiers cascade
+        mic=_mic_for_exchange(exchange),
         cik=cik or None,
         name=hit.get("company_name") or None,
         country="US",
@@ -443,9 +918,38 @@ def _build_signal(hit: Dict[str, Any], keyword: str, category: str,
         source_url=hit.get("filing_url") or None,
         issuer_figi=issuer_figi,
         entity_hints=entity_hints,
-        thesis_direction=direction,
-        strength_estimate=_compute_strength(category, keyword, form),
+        thesis_direction=thesis_direction,
+        strength_estimate=strength_estimate,
     )
+
+
+def _metric_warnings(metrics: Dict[str, Any]) -> List[str]:
+    warnings: List[str] = []
+    partial_reasons = metrics.get("partial_reasons") or []
+    if metrics.get("budget_exhausted"):
+        warnings.append(
+            f"budget exhausted after {metrics.get('categories_completed', [])} categories and "
+            f"{metrics.get('filing_types_completed', [])} filing types"
+        )
+    if metrics.get("efts_failures"):
+        warnings.append(
+            f"efts failures={metrics.get('efts_failures')} retries={metrics.get('retries_attempted', 0)}"
+        )
+    if metrics.get("merger_suppressed_total"):
+        warnings.append(
+            f"suppressed {metrics['merger_suppressed_total']} activist 8-K hit(s) via merger-sibling defense"
+        )
+    if metrics.get("issuer_filtered_total"):
+        warnings.append(
+            f"issuer filter dropped {metrics['issuer_filtered_total']} candidate hit(s)"
+        )
+    if metrics.get("market_cap_filtered_total"):
+        warnings.append(
+            f"market cap filter dropped {metrics['market_cap_filtered_total']} candidate hit(s)"
+        )
+    if not warnings and partial_reasons:
+        warnings.extend([f"partial reason: {reason}" for reason in partial_reasons])
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -465,125 +969,295 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     from modal_workers.shared.openfigi_resolver import set_cache_backend
     set_cache_backend(*client.openfigi_cache_backend())
 
-    # Rotation: one keyword category per 3h run (v1 parity).
-    rotation_state = _load_rotation(client)
-    next_idx = (rotation_state.get("rotation_index", -1) + 1) % len(ROTATION_ORDER)
-    category = ROTATION_ORDER[next_idx]
-    rotation_state["rotation_index"] = next_idx
-    rotation_state["last_category"] = category
-    rotation_state["last_scan_ts"] = datetime.now(timezone.utc).isoformat()
-    rotation_state.setdefault("scan_history", {})[category] = rotation_state["last_scan_ts"]
-
     days_back = int(cfg.config.get("days_back", 2))
     scan_date = datetime.now(timezone.utc)
     date_from = (scan_date - timedelta(days=days_back)).strftime("%Y-%m-%d")
     date_to = scan_date.strftime("%Y-%m-%d")
+    coverage_mode = str(cfg.config.get("coverage_mode", DEFAULT_COVERAGE_MODE)).lower()
+    if coverage_mode not in {"full", "rotation"}:
+        coverage_mode = DEFAULT_COVERAGE_MODE
+    categories, rotation_state = _rotation_state_for_mode(client, coverage_mode)
 
     dedup_log = _load_dedup(client)
     budget = max(10, cfg.timeout_soft_s - 5)  # leave headroom for final ops
     scan_start = time.time()
-    warnings: List[str] = []
+    reserve_budget_s = _filing_phase_reserve_s(budget)
+    filing_types_requested = [form_type for form_types in SIGNAL_FILING_TYPES.values() for form_type in form_types]
+    run_metrics = _new_run_metrics(
+        budget_s=budget,
+        coverage_mode=coverage_mode,
+        categories_requested=categories,
+        filing_types_requested=filing_types_requested,
+    )
     signals: List[Signal] = []
     seen_adsh_keyword: set[str] = set()
+    seen_adsh_filing: set[str] = set()
     hits_processed = 0
+    dedup_updates: Dict[str, str] = {}
 
     activist_merger_suppression = bool(
         cfg.config.get("activist_merger_sibling_suppression", True))
     merger_sibling_cache: Dict[Tuple[str, str], bool] = {}
-    merger_suppressed_count = 0
+    issuer_filter_enabled = bool(cfg.config.get("issuer_filter_enabled", True))
+    issuer_filter = _resolve_issuer_filter(cfg) if issuer_filter_enabled else _empty_issuer_filter()
+    market_cap_floor_usd_mm = float(cfg.config.get("market_cap_floor_usd_mm", DEFAULT_MARKET_CAP_FLOOR_USD_MM))
+    market_cap_filter_enabled = bool(
+        cfg.config.get("market_cap_filter_enabled", market_cap_floor_usd_mm > 0)
+    )
+    run_metrics["market_cap_filter_enabled"] = market_cap_filter_enabled
+    run_metrics["market_cap_floor_usd_mm"] = market_cap_floor_usd_mm
 
-    # --- Keyword scan (current rotation category) ---
-    for keyword in SIGNAL_KEYWORDS.get(category, []):
-        if time.time() - scan_start > budget:
-            warnings.append(f"wall-clock budget ({budget}s) exceeded during keyword scan")
+    company_context_cache: Dict[str, Tuple[List[str], Optional[str]]] = {}
+    figi_cache: Dict[str, Optional[str]] = {}
+    market_cap_cache: Dict[str, Optional[float]] = {}
+
+    # --- Keyword scan ---
+    keyword_budget_exhausted = False
+    for cat_idx, category in enumerate(categories):
+        category_complete = True
+        for kw_idx, keyword in enumerate(SIGNAL_KEYWORDS.get(category, [])):
+            if not _has_budget_for_query(scan_start, budget, reserve_budget_s):
+                remaining_queries = (len(SIGNAL_KEYWORDS[category]) - kw_idx) + sum(
+                    len(SIGNAL_KEYWORDS.get(rest_category, []))
+                    for rest_category in categories[cat_idx + 1:]
+                )
+                run_metrics["budget_exhausted"] = True
+                run_metrics["skipped_due_to_budget"] += remaining_queries
+                _mark_partial(run_metrics, "budget_exhausted_keyword_phase")
+                keyword_budget_exhausted = True
+                category_complete = False
+                break
+
+            run_metrics["keyword_queries_attempted"] += 1
+            hits = _efts_search(
+                f'"{keyword}"',
+                date_from,
+                date_to,
+                max_results=30,
+                user_agent=user_agent,
+                metrics=run_metrics,
+            )
+            for hit in hits:
+                hits_processed += 1
+                adsh = hit.get("adsh", "")
+                cik = hit.get("cik", "")
+                dedup_key = f"{adsh}|{keyword}"
+                if dedup_key in seen_adsh_keyword:
+                    run_metrics["dedup_skipped"] += 1
+                    continue
+                seen_adsh_keyword.add(dedup_key)
+
+                form = hit.get("form", "").strip()
+                if form in KEYWORD_SKIP_FORMS:
+                    continue
+                if any(form.upper().startswith(bl) for bl in SPAC_IPO_FORM_BLACKLIST):
+                    continue
+                if category in CATEGORY_FORM_WHITELIST:
+                    whitelist = CATEGORY_FORM_WHITELIST[category]
+                    if not any(form.upper().startswith(wl) for wl in whitelist):
+                        continue
+
+                def _resolve_ticker() -> Optional[str]:
+                    tickers, _ = _load_company_context(
+                        cik,
+                        user_agent=user_agent,
+                        cache=company_context_cache,
+                    )
+                    return tickers[0].upper() if tickers else None
+
+                blocked, filter_reason, maybe_ticker = _is_spac_or_shell_issuer(
+                    hit,
+                    cik=cik,
+                    issuer_filter=issuer_filter,
+                    ticker_resolver=_resolve_ticker,
+                )
+                if blocked:
+                    _record_issuer_filtered(
+                        run_metrics,
+                        hit,
+                        filter_reason or "issuer_filter",
+                        ticker=maybe_ticker,
+                        cik=cik,
+                    )
+                    continue
+
+                signal_type = _CATEGORY_SIGNAL_TYPE.get(category, f"{category}_keyword")
+                if not _is_novel(cik, keyword, signal_type, dedup_log):
+                    run_metrics["dedup_skipped"] += 1
+                    continue
+
+                if (activist_merger_suppression
+                        and category == "activist"
+                        and form.upper().startswith("8-K")):
+                    if _has_merger_sibling(cik, hit.get("file_date", ""),
+                                           user_agent=user_agent,
+                                           cache=merger_sibling_cache):
+                        run_metrics["merger_suppressed_total"] += 1
+                        continue
+
+                tickers, exchange = _load_company_context(
+                    cik,
+                    user_agent=user_agent,
+                    cache=company_context_cache,
+                )
+                ticker = maybe_ticker or (tickers[0].upper() if tickers else None)
+                market_cap_usd_mm: Optional[float] = None
+                if ticker and market_cap_filter_enabled:
+                    market_cap_usd_mm = _load_market_cap_usd_mm(client, ticker, market_cap_cache)
+                    if market_cap_usd_mm is None:
+                        run_metrics["market_cap_unknown_total"] += 1
+                    elif 0 < market_cap_usd_mm < market_cap_floor_usd_mm:
+                        _record_market_cap_filtered(
+                            run_metrics,
+                            ticker=ticker,
+                            market_cap_usd_mm=market_cap_usd_mm,
+                        )
+                        continue
+
+                issuer_figi = _resolve_figi_for_ticker(ticker, figi_cache)
+                sig = _build_signal(
+                    hit,
+                    matched_keyword=keyword,
+                    signal_type=signal_type,
+                    thesis_direction=_CATEGORY_DIRECTION.get(category),
+                    strength_estimate=_compute_strength(category, keyword, form),
+                    scan_date=scan_date,
+                    tickers=tickers,
+                    exchange=exchange,
+                    market_cap_usd_mm=market_cap_usd_mm,
+                    issuer_figi=issuer_figi,
+                )
+                if sig is None:
+                    continue
+                signals.append(sig)
+                dedup_updates[_signal_hash(cik, keyword, signal_type)] = date_to
+
+        if category_complete:
+            run_metrics["categories_completed"].append(category)
+        if keyword_budget_exhausted:
             break
 
-        hits = _efts_search(f'"{keyword}"', date_from, date_to,
-                            max_results=30, user_agent=user_agent)
+    # --- Filing type scan (SC 13D, NT 10-K variants) ---
+    filing_plan = [
+        (signal_type_key, form_type)
+        for signal_type_key, form_types in SIGNAL_FILING_TYPES.items()
+        for form_type in form_types
+    ]
+    for plan_idx, (signal_type_key, form_type) in enumerate(filing_plan):
+        if not _has_budget_for_query(scan_start, budget):
+            remaining_queries = len(filing_plan) - plan_idx
+            run_metrics["budget_exhausted"] = True
+            run_metrics["skipped_due_to_budget"] += remaining_queries
+            _mark_partial(run_metrics, "budget_exhausted_filing_phase")
+            break
+
+        run_metrics["filing_queries_attempted"] += 1
+        hits = _efts_search(
+            "*",
+            date_from,
+            date_to,
+            form_type=form_type,
+            max_results=50,
+            user_agent=user_agent,
+            metrics=run_metrics,
+        )
         for hit in hits:
             hits_processed += 1
             adsh = hit.get("adsh", "")
+            if adsh in seen_adsh_filing:
+                run_metrics["dedup_skipped"] += 1
+                continue
+            seen_adsh_filing.add(adsh)
+
             cik = hit.get("cik", "")
-            dedup_key = f"{adsh}|{keyword}"
-            if dedup_key in seen_adsh_keyword:
-                continue
-            seen_adsh_keyword.add(dedup_key)
 
-            form = hit.get("form", "").strip()
-            if form in KEYWORD_SKIP_FORMS:
+            def _resolve_ticker() -> Optional[str]:
+                tickers, _ = _load_company_context(
+                    cik,
+                    user_agent=user_agent,
+                    cache=company_context_cache,
+                )
+                return tickers[0].upper() if tickers else None
+
+            blocked, filter_reason, maybe_ticker = _is_spac_or_shell_issuer(
+                hit,
+                cik=cik,
+                issuer_filter=issuer_filter,
+                ticker_resolver=_resolve_ticker,
+            )
+            if blocked:
+                _record_issuer_filtered(
+                    run_metrics,
+                    hit,
+                    filter_reason or "issuer_filter",
+                    ticker=maybe_ticker,
+                    cik=cik,
+                )
                 continue
-            if any(form.upper().startswith(bl) for bl in SPAC_IPO_FORM_BLACKLIST):
-                continue
-            if category in CATEGORY_FORM_WHITELIST:
-                whitelist = CATEGORY_FORM_WHITELIST[category]
-                if not any(form.upper().startswith(wl) for wl in whitelist):
+
+            tickers, exchange = _load_company_context(
+                cik,
+                user_agent=user_agent,
+                cache=company_context_cache,
+            )
+            ticker = maybe_ticker or (tickers[0].upper() if tickers else None)
+            market_cap_usd_mm: Optional[float] = None
+            if ticker and market_cap_filter_enabled:
+                market_cap_usd_mm = _load_market_cap_usd_mm(client, ticker, market_cap_cache)
+                if market_cap_usd_mm is None:
+                    run_metrics["market_cap_unknown_total"] += 1
+                elif 0 < market_cap_usd_mm < market_cap_floor_usd_mm:
+                    _record_market_cap_filtered(
+                        run_metrics,
+                        ticker=ticker,
+                        market_cap_usd_mm=market_cap_usd_mm,
+                    )
                     continue
 
-            # Merger-clause defense: activist keyword in 8-K is ambiguous. If the
-            # same CIK filed a 425 / PREM14A / SC TO-T within ±3 days, treat the
-            # activist hit as a merger-governance clause and suppress.
-            if (activist_merger_suppression
-                    and category == "activist"
-                    and form.upper().startswith("8-K")):
-                if _has_merger_sibling(cik, hit.get("file_date", ""),
-                                       user_agent=user_agent,
-                                       cache=merger_sibling_cache):
-                    merger_suppressed_count += 1
-                    continue
-
-            if not _is_novel(cik, keyword, category, dedup_log):
-                continue
-
-            sig = _build_signal(hit, keyword, category, scan_date, user_agent=user_agent)
+            issuer_figi = _resolve_figi_for_ticker(ticker, figi_cache)
+            strength_estimate = 4 if "13D" in form_type else 3 if "NT 10" in form_type else 2
+            sig = _build_signal(
+                hit,
+                matched_keyword=form_type,
+                signal_type=signal_type_key,
+                thesis_direction=_FILING_TYPE_DIRECTION.get(signal_type_key),
+                strength_estimate=strength_estimate,
+                scan_date=scan_date,
+                tickers=tickers,
+                exchange=exchange,
+                market_cap_usd_mm=market_cap_usd_mm,
+                issuer_figi=issuer_figi,
+            )
             if sig is None:
                 continue
             signals.append(sig)
-            dedup_log[_signal_hash(cik, keyword, category)] = date_to
+        run_metrics["filing_types_completed"].append(form_type)
 
-    if merger_suppressed_count:
-        warnings.append(
-            f"suppressed {merger_suppressed_count} activist 8-K hit(s) with "
-            f"merger-agreement sibling filing (425/PREM14A/SC TO-T) within "
-            f"\u00b1{MERGER_SIBLING_WINDOW_DAYS}d")
+    run_metrics["fetched_records"] = hits_processed
+    run_metrics["signals_detected"] = len(signals)
+    run_metrics["budget_remaining_seconds"] = round(_remaining_budget_s(scan_start, budget), 2)
+    run_metrics["degraded"] = bool(
+        run_metrics.get("partial_reasons")
+        or run_metrics.get("efts_failures")
+        or run_metrics.get("budget_exhausted")
+    )
 
-    # --- Filing type scan (SC 13D, NT 10-K variants) — cheap, always-on. ---
-    seen_adsh_filing: set[str] = set()
-    for signal_type_key, form_types in SIGNAL_FILING_TYPES.items():
-        if time.time() - scan_start > budget:
-            warnings.append(f"wall-clock budget ({budget}s) exceeded during filing-type scan")
-            break
-        for form_type in form_types:
-            if time.time() - scan_start > budget:
-                break
-            hits = _efts_search("*", date_from, date_to, form_type=form_type,
-                                max_results=50, user_agent=user_agent)
-            for hit in hits:
-                adsh = hit.get("adsh", "")
-                if adsh in seen_adsh_filing:
-                    continue
-                seen_adsh_filing.add(adsh)
-                hits_processed += 1
+    warnings = _metric_warnings(run_metrics)
 
-                # Filing-type scan uses signal_type_key as the category for strength calc.
-                sig = _build_signal(hit, keyword=form_type, category=signal_type_key,
-                                    scan_date=scan_date, user_agent=user_agent)
-                if sig is None:
-                    continue
-                # Strength boost for 13D and NT 10-K filings (v1 parity).
-                if "13D" in form_type:
-                    sig.strength_estimate = max(sig.strength_estimate, 4)
-                elif "NT 10" in form_type:
-                    sig.strength_estimate = max(sig.strength_estimate, 3)
-                sig.signal_type = signal_type_key   # override generic category fallback
-                signals.append(sig)
-
-    _save_dedup(client, dedup_log)
-    _save_rotation(client, rotation_state)
+    def _persist_after_insert() -> None:
+        if dedup_updates:
+            updated = dict(dedup_log)
+            updated.update(dedup_updates)
+            _save_dedup(client, updated)
+        if rotation_state is not None:
+            _save_rotation(client, rotation_state)
 
     return ScannerResult(
         scanner="edgar_filing_monitor",
-        status="partial" if warnings else "ok",
+        status="partial" if run_metrics["degraded"] else "ok",
         signals=signals,
         warnings=warnings,
         fetched_records=hits_processed,
+        run_metrics=run_metrics,
+        after_insert=_persist_after_insert,
     )

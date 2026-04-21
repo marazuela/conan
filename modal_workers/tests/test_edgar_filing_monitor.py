@@ -1,13 +1,14 @@
 """
-Tests for edgar_filing_monitor — merger-clause false-positive defense.
+Focused tests for the flagship Modal EDGAR scanner.
 
-Covers the 2026-04-20 DLQ incident (QXO-TopBuild $17B merger announcement
-on 2026-04-18 surfaced as two activist_keyword signals via "board
-representation", both DLQ'd post_edge by thesis_writer). The defense is a
-co-filing proximity check: an activist keyword in 8-K is suppressed if the
-same CIK filed 425 / PREM14A / SC TO-T within ±3 days.
-
-Run: python -m pytest modal_workers/tests/test_edgar_filing_monitor.py -v
+Covers:
+  - merger-sibling suppression (QXO/TopBuild regression)
+  - EFTS retry / failure semantics
+  - budget exhaustion signaling
+  - issuer/SPAC filter behavior
+  - market-cap triage
+  - filing-type scan behavior
+  - after_insert persistence for dedup / rotation
 """
 from __future__ import annotations
 
@@ -120,16 +121,23 @@ class TestHasMergerSibling:
 # scan() — gate integration
 # ----------------------------------------------------------------------
 
-def _hit(form="8-K", cik="0000012345", adsh="0001-25-000100",
-         file_date="2026-04-18"):
+def _hit(
+    form="8-K",
+    cik="0000012345",
+    adsh="0001-25-000100",
+    file_date="2026-04-18",
+    company_name="Example Corp",
+    company_raw="Example Corp (CIK 12345)",
+    file_description="Entry into a Material Definitive Agreement",
+):
     return {
         "cik": cik,
         "adsh": adsh,
         "form": form,
         "file_date": file_date,
-        "company_name": "Example Corp",
-        "company_raw": "Example Corp (CIK 12345)",
-        "file_description": "Entry into a Material Definitive Agreement",
+        "company_name": company_name,
+        "company_raw": company_raw,
+        "file_description": file_description,
         "filing_url": f"https://www.sec.gov/Archives/{adsh}",
         "sics": [],
     }
@@ -149,33 +157,43 @@ def _make_cfg(**overrides):
     return ScannerConfig(**base)
 
 
-def _run_scan(cfg, *, keyword_hits, sibling_patch):
+def _run_scan(
+    cfg,
+    *,
+    keyword_hits,
+    sibling_patch,
+    filing_hits=None,
+    company_tickers=None,
+    market_cap_side_effect=None,
+):
     """Run efm.scan() with external IO stubbed.
 
-    - Rotation forced to 'activist' (index 0).
+    - Coverage forced to a single activist category unless caller overrides cfg.
     - _efts_search returns `keyword_hits` for every keyword query.
     - `sibling_patch` is the `_mock._patch` object produced by
       `patch.object(efm, "_has_merger_sibling", ...)`. Caller controls the
       return value or side_effect; this helper only enters the context.
-    - Filing-type scan (SC 13D, NT 10-K) returns empty.
+    - Filing-type scan returns `filing_hits` keyed by form_type.
     """
-    rotation = {"rotation_index": -1, "scan_history": {}}  # next = 0 = activist
+    filing_hits = filing_hits or {}
+    company_tickers = company_tickers or (["EXC"], "NYSE")
 
     mock_client = MagicMock()
     mock_client.openfigi_cache_backend.return_value = (None, None, None)
 
     def efts_side_effect(query, date_from, date_to, form_type="", **kwargs):
         if form_type:
-            return []  # filing-type scan — not exercised by these tests
+            return filing_hits.get(form_type, [])
         return keyword_hits
 
     with patch.object(efm, "SupabaseClient", return_value=mock_client), \
-         patch.object(efm, "_load_rotation", return_value=rotation), \
+         patch.object(efm, "_rotation_state_for_mode", return_value=(["activist"], {"rotation_index": 0, "scan_history": {}})), \
          patch.object(efm, "_save_rotation"), \
          patch.object(efm, "_load_dedup", return_value={}), \
          patch.object(efm, "_save_dedup"), \
          patch.object(efm, "_efts_search", side_effect=efts_side_effect), \
-         patch.object(efm, "_get_company_tickers", return_value=(["EXC"], "NYSE")), \
+         patch.object(efm, "_get_company_tickers", return_value=company_tickers), \
+         patch.object(efm, "_load_market_cap_usd_mm", side_effect=market_cap_side_effect or (lambda client, ticker, memo: None)), \
          patch("modal_workers.shared.openfigi_resolver.set_cache_backend"), \
          patch("modal_workers.shared.openfigi_resolver.resolve_ticker",
                return_value=MagicMock(resolved=False, issuer_figi=None)), \
@@ -229,3 +247,187 @@ class TestScanMergerSuppression:
                 side_effect=AssertionError(
                     "sibling check must not run when suppression is disabled")))
         assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+
+
+def test_efts_search_retries_transient_failure_then_succeeds():
+    metrics = efm._new_run_metrics(
+        budget_s=50,
+        coverage_mode="full",
+        categories_requested=["activist"],
+        filing_types_requested=[],
+    )
+    timeout = requests.exceptions.Timeout("slow")
+    success = _fake_efts_response([{"_source": {
+        "ciks": ["0000012345"],
+        "adsh": "0001-25-000100",
+        "display_names": ["Example Corp (CIK 0000012345)"],
+        "form": "8-K",
+        "file_date": "2026-04-18",
+        "file_description": "Entry into a Material Definitive Agreement",
+        "sics": [],
+    }}])
+    with patch.object(efm.requests, "get", side_effect=[timeout, success]) as mock_get:
+        hits = efm._efts_search(
+            '"board representation"',
+            "2026-04-17",
+            "2026-04-21",
+            user_agent="ua@example.com",
+            metrics=metrics,
+        )
+    assert len(hits) == 1
+    assert mock_get.call_count == 2
+    assert metrics["retries_attempted"] == 1
+    assert metrics["efts_failures"] == 0
+
+
+def test_efts_search_records_failure_metrics_on_non_retriable_error():
+    metrics = efm._new_run_metrics(
+        budget_s=50,
+        coverage_mode="full",
+        categories_requested=["activist"],
+        filing_types_requested=[],
+    )
+    response = MagicMock()
+    response.status_code = 400
+    error = requests.exceptions.HTTPError("bad request", response=response)
+    with patch.object(efm.requests, "get", side_effect=error):
+        hits = efm._efts_search(
+            '"board representation"',
+            "2026-04-17",
+            "2026-04-21",
+            user_agent="ua@example.com",
+            metrics=metrics,
+        )
+    assert hits == []
+    assert metrics["efts_failures"] == 1
+    assert "efts_failure" in metrics["partial_reasons"]
+
+
+def test_keyword_phase_budget_exhaustion_marks_partial():
+    cfg = _make_cfg(config={"days_back": 2, "coverage_mode": "full"})
+    with patch.object(efm, "SupabaseClient", return_value=MagicMock(openfigi_cache_backend=lambda: (None, None, None))), \
+         patch.object(efm, "_rotation_state_for_mode", return_value=(["activist"], None)), \
+         patch.object(efm, "_load_dedup", return_value={}), \
+         patch.object(efm, "_save_dedup"), \
+         patch.object(efm, "_efts_search", return_value=[]), \
+         patch("modal_workers.shared.openfigi_resolver.set_cache_backend"), \
+         patch.dict("os.environ", {"SEC_USER_AGENT": "ua@example.com"}), \
+         patch.object(efm, "_has_budget_for_query", return_value=False):
+        result = efm.scan(cfg)
+
+    assert result.status == "partial"
+    assert result.run_metrics["budget_exhausted"] is True
+    assert "budget_exhausted_keyword_phase" in result.run_metrics["partial_reasons"]
+
+
+def test_filing_phase_budget_exhaustion_marks_partial():
+    cfg = _make_cfg(config={"days_back": 2, "coverage_mode": "full"})
+    budget_calls = {"n": 0}
+
+    def fake_budget(*args, **kwargs):
+        budget_calls["n"] += 1
+        return budget_calls["n"] <= 1
+
+    mock_client = MagicMock()
+    mock_client.openfigi_cache_backend.return_value = (None, None, None)
+    with patch.object(efm, "SupabaseClient", return_value=mock_client), \
+         patch.object(efm, "_rotation_state_for_mode", return_value=([], None)), \
+         patch.object(efm, "_load_dedup", return_value={}), \
+         patch.object(efm, "_save_dedup"), \
+         patch.object(efm, "_efts_search", return_value=[]), \
+         patch("modal_workers.shared.openfigi_resolver.set_cache_backend"), \
+         patch.dict("os.environ", {"SEC_USER_AGENT": "ua@example.com"}), \
+         patch.object(efm, "_has_budget_for_query", side_effect=fake_budget):
+        result = efm.scan(cfg)
+
+    assert result.status == "partial"
+    assert "budget_exhausted_filing_phase" in result.run_metrics["partial_reasons"]
+
+
+def test_blocked_issuer_filter_drops_spac_like_name():
+    result = _run_scan(
+        _make_cfg(config={"days_back": 2, "coverage_mode": "full"}),
+        keyword_hits=[_hit(
+            form="8-K",
+            cik="0002000775",
+            company_name="Black Hawk Acquisition Corp",
+            company_raw="Black Hawk Acquisition Corp (CIK 0002000775)",
+            file_description="Blank check business combination update",
+        )],
+        sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
+    )
+    assert len(result.signals) == 0
+    assert result.run_metrics["issuer_filtered_total"] >= 1
+
+
+def test_allowlist_ticker_escapes_name_pattern_filter():
+    result = _run_scan(
+        _make_cfg(config={"days_back": 2, "coverage_mode": "full"}),
+        keyword_hits=[_hit(
+            form="8-K",
+            cik="0001999999",
+            company_name="Special Purpose Acquisition Widget",
+            company_raw="Special Purpose Acquisition Widget (CIK 0001999999)",
+            file_description="Board representation update",
+        )],
+        sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
+        company_tickers=(["RPAY"], "NYSE"),
+    )
+    assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+    assert result.run_metrics["issuer_filtered_total"] == 0
+
+
+def test_market_cap_filter_drops_small_cap_issuer():
+    result = _run_scan(
+        _make_cfg(config={"days_back": 2, "coverage_mode": "full", "market_cap_floor_usd_mm": 215}),
+        keyword_hits=[_hit(form="8-K", cik="0000012345")],
+        sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
+        company_tickers=(["TINY"], "NYSE"),
+        market_cap_side_effect=lambda client, ticker, memo: 100.0,
+    )
+    assert len(result.signals) == 0
+    assert result.run_metrics["market_cap_filtered_total"] >= 1
+
+
+def test_filing_type_scan_emits_activist_ownership_signal():
+    filing_hit = _hit(form="SC 13D", cik="0000012345", adsh="0001-25-000200", file_description="Schedule 13D filing")
+    result = _run_scan(
+        _make_cfg(config={"days_back": 2, "coverage_mode": "full"}),
+        keyword_hits=[],
+        filing_hits={"SC 13D": [filing_hit]},
+        sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
+    )
+    activist_ownership = [signal for signal in result.signals if signal.signal_type == "activist_ownership"]
+    assert len(activist_ownership) == 1
+    assert activist_ownership[0].strength_estimate == 4
+    assert activist_ownership[0].thesis_direction == "long"
+
+
+def test_dedup_and_rotation_persist_only_after_insert():
+    cfg = _make_cfg(config={"days_back": 2, "coverage_mode": "rotation"})
+    rotation_state = {"rotation_index": 0, "scan_history": {}}
+    mock_client = MagicMock()
+    mock_client.openfigi_cache_backend.return_value = (None, None, None)
+
+    with patch.object(efm, "SupabaseClient", return_value=mock_client), \
+         patch.object(efm, "_rotation_state_for_mode", return_value=(["activist"], rotation_state)), \
+         patch.object(efm, "_load_dedup", return_value={}), \
+         patch.object(efm, "_save_dedup") as save_dedup, \
+         patch.object(efm, "_save_rotation") as save_rotation, \
+         patch.object(efm, "_efts_search", return_value=[_hit(form="PRER14A")]), \
+         patch.object(efm, "_get_company_tickers", return_value=(["EXC"], "NYSE")), \
+         patch.object(efm, "_load_market_cap_usd_mm", return_value=None), \
+         patch("modal_workers.shared.openfigi_resolver.set_cache_backend"), \
+         patch("modal_workers.shared.openfigi_resolver.resolve_ticker",
+               return_value=MagicMock(resolved=False, issuer_figi=None)), \
+         patch.dict("os.environ", {"SEC_USER_AGENT": "ua@example.com"}), \
+         patch.object(efm, "_has_merger_sibling", return_value=False):
+        result = efm.scan(cfg)
+        save_dedup.assert_not_called()
+        save_rotation.assert_not_called()
+        assert result.after_insert is not None
+        result.after_insert()
+        save_dedup.assert_called_once()
+        save_rotation.assert_called_once_with(mock_client, rotation_state)
+
+    assert result.run_metrics["coverage_mode"] == "rotation"

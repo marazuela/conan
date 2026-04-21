@@ -26,16 +26,20 @@
       },
       "endpoint_primary": "https://efts.sec.gov/LATEST/search-index",
       "endpoint_secondary": "https://data.sec.gov/submissions/",
-      "timeout_soft_s": 35,
-      "timeout_hard_s": 120,
+      "timeout_soft_s": 90,
+      "timeout_hard_s": 180,
+      "coverage_mode": "full",
+      "issuer_filter_enabled": true,
+      "market_cap_floor_usd_mm": 215,
       "last_run_utc": "2026-04-21T14:16:21.740325Z",
       "last_run_signals": 0,
-      "last_run_status": "ok"
+      "last_run_status": "ok",
+      "notes": "Flagship EDGAR path: budgeted full keyword coverage by default, merger-sibling suppression enabled for activist 8-K, issuer/SPAC filter enabled, and market-cap triage floor set to $215M."
     },
     {
       "name": "esma_short_scanner",
       "tool_path": "tools/esma_short_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "EU",
       "cadence": "daily",
       "default_scoring_profile": "short_positioning",
@@ -82,7 +86,7 @@
     {
       "name": "congressional_trading",
       "tool_path": "tools/congressional_trading.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "US",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -103,7 +107,7 @@
     {
       "name": "lse_rns_scanner",
       "tool_path": "tools/lse_rns_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "UK",
       "cadence": "3h",
       "default_scoring_profile": "activist_governance",
@@ -135,7 +139,7 @@
     {
       "name": "tdnet_scanner",
       "tool_path": "tools/tdnet_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "JP",
       "cadence": "3h",
       "default_scoring_profile": "activist_governance",
@@ -161,7 +165,7 @@
     {
       "name": "asx_scanner",
       "tool_path": "tools/asx_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "AU",
       "cadence": "3h",
       "default_scoring_profile": "activist_governance",
@@ -183,7 +187,7 @@
     {
       "name": "sedar_plus_scanner",
       "tool_path": "tools/sedar_plus_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "CA",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -204,7 +208,7 @@
     {
       "name": "hkex_scanner",
       "tool_path": "tools/hkex_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "HK",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -229,7 +233,7 @@
     {
       "name": "kind_scanner",
       "tool_path": "tools/kind_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "KR",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -262,7 +266,7 @@
     {
       "name": "bse_nse_scanner",
       "tool_path": "tools/bse_nse_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "IN",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -296,7 +300,7 @@
     {
       "name": "cvm_scanner",
       "tool_path": "tools/cvm_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "BR",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -332,7 +336,7 @@
     {
       "name": "bmv_scanner",
       "tool_path": "tools/bmv_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "MX",
       "cadence": "daily",
       "default_scoring_profile": "activist_governance",
@@ -371,7 +375,7 @@
     {
       "name": "courtlistener_scanner",
       "tool_path": "tools/courtlistener_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "US",
       "cadence": "daily",
       "default_scoring_profile": "litigation",
@@ -395,7 +399,7 @@
     {
       "name": "sec_enforcement_scanner",
       "tool_path": "tools/sec_enforcement_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "US",
       "cadence": "daily",
       "default_scoring_profile": "litigation",
@@ -439,7 +443,7 @@
     {
       "name": "pre_phase3_readout_scanner",
       "tool_path": "tools/pre_phase3_readout_scanner.py",
-      "status": "operational",
+      "status": "paused",
       "geography": "US",
       "cadence": "weekly",
       "default_scoring_profile": "binary_catalyst",

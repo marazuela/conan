@@ -320,3 +320,87 @@ def test_scanner_probe_substitutes_template_in_primary(monkeypatch):
 
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     assert captured_probe_urls == [f"https://ex.com/{today}/feed.html"]
+
+
+def test_edgar_runtime_health_raises_flag_for_repeated_degraded_runs(monkeypatch):
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({
+            "method": method,
+            "path": path,
+            "params": params,
+            "json_body": json_body,
+            "prefer": prefer,
+        })
+        if method == "GET" and path == "scanners":
+            return [{"id": "sc-edgar", "name": "edgar_filing_monitor"}]
+        if method == "GET" and path == "scanner_runs":
+            return [
+                {
+                    "status": "partial",
+                    "signals_emitted": 0,
+                    "started_at": "2026-04-21T12:00:00Z",
+                    "completed_at": "2026-04-21T12:00:20Z",
+                    "errors": [{"metrics": {"budget_exhausted": True, "partial_reasons": ["budget_exhausted_keyword_phase"], "degraded": True}}],
+                },
+                {
+                    "status": "partial",
+                    "signals_emitted": 0,
+                    "started_at": "2026-04-21T09:00:00Z",
+                    "completed_at": "2026-04-21T09:00:20Z",
+                    "errors": [{"metrics": {"budget_exhausted": True, "partial_reasons": ["budget_exhausted_filing_phase"], "degraded": True}}],
+                },
+            ]
+        if method == "GET" and path == "operator_flags":
+            return []
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    result = observability.edgar_runtime_health(client)
+
+    assert result["flagged"] is True
+    posts = [c for c in captured if c["method"] == "POST" and c["path"] == "operator_flags"]
+    assert len(posts) == 1
+    assert posts[0]["json_body"]["source"] == "edgar_runtime_health"
+    assert posts[0]["json_body"]["kind"] == "degraded_run_streak"
+    assert posts[0]["json_body"]["scanner_id"] == "sc-edgar"
+
+
+def test_edgar_runtime_health_resolves_flag_when_runs_are_healthy(monkeypatch):
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({
+            "method": method,
+            "path": path,
+            "params": params,
+            "json_body": json_body,
+            "prefer": prefer,
+        })
+        if method == "GET" and path == "scanners":
+            return [{"id": "sc-edgar", "name": "edgar_filing_monitor"}]
+        if method == "GET" and path == "scanner_runs":
+            return [
+                {
+                    "status": "ok",
+                    "signals_emitted": 7,
+                    "started_at": "2026-04-21T12:00:00Z",
+                    "completed_at": "2026-04-21T12:00:20Z",
+                    "errors": [{"metrics": {"budget_exhausted": False, "degraded": False}}],
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    result = observability.edgar_runtime_health(client)
+
+    assert result["flagged"] is False
+    patches = [c for c in captured if c["method"] == "PATCH" and c["path"] == "operator_flags"]
+    assert len(patches) == 1
+    assert patches[0]["params"]["source"] == "eq.edgar_runtime_health"
+    assert patches[0]["params"]["kind"] == "eq.degraded_run_streak"

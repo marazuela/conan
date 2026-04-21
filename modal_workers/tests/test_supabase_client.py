@@ -3,6 +3,34 @@ from __future__ import annotations
 from modal_workers.shared.supabase_client import SupabaseClient
 
 
+def test_load_scanner_statuses_bulk_fetches_unique_names(monkeypatch):
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        assert method == "GET"
+        assert path == "scanners"
+        assert params == {
+            "name": 'in.("asx_scanner","edgar_filing_monitor")',
+            "select": "name,status",
+        }
+        return [
+            {"name": "edgar_filing_monitor", "status": "operational"},
+            {"name": "asx_scanner", "status": "paused"},
+        ]
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+
+    client = SupabaseClient.__new__(SupabaseClient)
+    statuses = client.load_scanner_statuses([
+        "edgar_filing_monitor",
+        "asx_scanner",
+        "edgar_filing_monitor",
+    ])
+
+    assert statuses == {
+        "edgar_filing_monitor": "operational",
+        "asx_scanner": "paused",
+    }
+
+
 def test_reap_orphan_runs_reconciles_scanner_timeout(monkeypatch):
     rest_calls = []
     updates = []
