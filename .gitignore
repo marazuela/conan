@@ -30,3 +30,9 @@ out/
 
 # Dashboard lives in its own repo (marazuela/conan-dashboard)
 dashboard/
+
+# spec.md and CONAN_SCORING_METHOD.md now live in marazuela/conan-cowork-skills
+# and are symlinked in locally. See that repo's README for the dual-repo + CONAN_ROOT setup.
+/spec.md
+/CONAN_SCORING_METHOD.md
+*.md.bak
