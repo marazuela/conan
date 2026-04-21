@@ -1,0 +1,11 @@
+{
+  "ticker_local": "GSK",
+  "mic": "XLON",
+  "figi": "BBG000CT5GJ1",
+  "issuer_figi": "BBG000CT5G92",
+  "name": "GSK PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

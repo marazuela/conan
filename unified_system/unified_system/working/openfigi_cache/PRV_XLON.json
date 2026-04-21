@@ -1,0 +1,11 @@
+{
+  "ticker_local": "PRV",
+  "mic": "XLON",
+  "figi": "BBG000BDY4V8",
+  "issuer_figi": "BBG000BDY439",
+  "name": "PORVAIR PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

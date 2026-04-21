@@ -1,0 +1,84 @@
+# Thesis Run Log — 2026-04-15 ~10:45 UTC
+
+## Run Metadata
+- **Run timestamp**: 2026-04-15T10:45:00Z (approximate; session executed ~10:40-11:10 UTC)
+- **Run version**: thesis-v1
+- **Operator**: autonomous scheduled session (investment-tool-deep-dives)
+- **Workspace root**: /sessions/admiring-awesome-lovelace/mnt/Investment tool/
+- **Prior run**: 2026-04-15T06:45:00Z (RPAY v1→v2 patch)
+
+## Candidates Considered
+7 active/watchlist candidate files in `investment_discovery_system/candidates/` plus TVTX (delivered).
+
+## Decisions (per-ticker)
+
+| Ticker | Decision | Reason |
+|--------|----------|--------|
+| AXSM | SKIP | Thesis 2026-04-13 (2 days old) within 7-day freshness window; source md5 MATCH (16bbd135...); kill-sweep for Apr 13–15 news returned only known items (Oppenheimer conference, 600-rep push) — no new 8-K, no AdCom addition, no label news. T-10 biz days to PDUFA; SESSION_STATE S61 marks kill-sweep #23 ALL-CLEAR. |
+| VERA | SKIP | Thesis 2026-04-14 (1 day old); source md5 MATCH (d5d5fe25...); BLA under Priority Review, PDUFA 2026-07-07 on track; no material news since thesis generation. |
+| VRDN | SKIP | Thesis 2026-04-14 (1 day old); source md5 MATCH (21956cd6...); Mar 30 REVEAL-1 elegrobart disappointment (2.9mm proptosis, 54% diplopia) and Amgen SC Tepezza 76.7% PRR (Apr 6) already in thesis; thesis correctly isolates REVEAL-1 franchise damage from veligrotug IV PDUFA 2026-06-30; kill-sweep returned no post-thesis news. |
+| AVNS | SKIP | Thesis 2026-04-14 (1 day old); source md5 MATCH (914e1670...); AIP merger at $25 cash already the thesis subject; Apr 14 DEFA14A filing (employee comms + Annual Meeting postponement) is routine post-announcement comms, not thesis-material; SESSION_STATE confirms no topping bid / no MAC / no HSR second request; spread 1.48% within base case. |
+| GSAT | SKIP | Thesis 2026-04-14 (1 day old); source md5 MATCH (b13658ff...); Amazon $90 cash / 0.3210 AMZN deal terms, 2027 close, FCC spectrum risk, Starlink opposition all already in thesis (5676 words); Apr 14 8-K decoded as comprehensive merger disclosure (not new event) per SESSION_STATE; kill-sweep returned no Apr 15 material news. |
+| RPAY | SKIP (bookkeeping-only) | Thesis 2026-04-15 v2 (same day, 4 hours old); source md5 **CHANGED** (baseline 5282c696... → current 460c58f8...) but forensic diff confirms the candidate-file changes are operational monitoring log entries (S59/S60/S61) — NOT new thesis-material content. v2 thesis (produced 06:45Z via WebSearch) already contains MORE content than the current candidate file. Regenerating from the candidate file would REGRESS the thesis. See "CRITICAL FINDING" section below. |
+| TVTX | SKIP | Delivered (FSGS PDUFA approved 2026-01-13); in `candidates/delivered/`. |
+
+**Regenerated**: 0
+**Skipped**: 7 (6 active/watchlist + 1 delivered)
+**New theses this run**: 0
+**PDFs produced**: 0 (no thesis work warranted)
+
+## CRITICAL FINDING — RPAY Candidate File S60 Monitoring Entry Contains an Incorrect Conclusion
+
+The RPAY candidate markdown file (modified 2026-04-15 04:14 UTC; md5 460c58f8...) contains an S60 Update Log entry stating:
+
+> "Veradace-on-RPAY claim is UNVERIFIED against EDGAR primary source — likely web-summary confusion with SSTI campaign. Downgrading to 'secondary-source rumor, pending primary-source confirmation.' Thesis remains single-activist (Forager) validated only."
+
+This conclusion **conflicts with the RPAY v2 thesis** (produced 06:45 UTC the same day, prior run), which incorporates Veradace Partners 8.4% stake and the Apr 9 letter opposing the KUBRA acquisition.
+
+**Resolution via primary-source web research (this run)**:
+
+- **Veradace Partners 8.4% stake in RPAY — VERIFIED**. Confirmed across Business Wire, Yahoo Finance, Morningstar, StockTitan, Payments Dive, GuruFocus. Primary press release: Veradace Partners Issues Letter to Repay Independent Board Members (Business Wire, 2026-04-09).
+- **Apr 9 Veradace letter opposing KUBRA acquisition — VERIFIED**. Signed by Alex Vezendan, CIO, Veradace Capital Management LLC. Calls for KUBRA deal termination and two board seats.
+- **KUBRA acquisition — VERIFIED**. Repay announced definitive agreement to acquire KUBRA Data Transfer for $372M all-cash, debt-financed, Q2 2026 close (Repay Announces Agreement to Acquire KUBRA, Business Wire, 2026-03-29/31).
+- **Repay Apr 13 board response (reaffirms KUBRA) / poison pill — VERIFIED**. RPAY 8-K filed 2026-04-14 covering 2026-04-13 rights plan adoption at 12.5% trigger.
+- **Veradace is separately activist on SSTI (SoundThinking)** — TRUE but orthogonal. Veradace has a dual activism book (SSTI 16.5% via 13D filed 2026-03-10 AND RPAY 8.4% via 2026-04-03 13D/A). The S60 entry's inference of confusion was incorrect — Veradace is genuinely active on BOTH names.
+
+**Root cause of S60 error**: The candidate-file monitoring entry relied on an EDGAR-only search (filter: filer name "Veradace" against RPAY CIK). Veradace's RPAY stake may have been filed under a different legal entity (e.g., Veradace Capital Management LLC vs Veradace Partners LP) or the direct search parameters excluded the relevant 13D/A. The public campaign is unambiguously documented via Business Wire and multiple reputable financial news outlets, and the Repay-issued statement in response provides confirmatory corroboration.
+
+**Action taken**: NONE to the candidate file (strict read-only constraint on `investment_discovery_system/`). The v2 thesis is correct; the S60 candidate entry is a known incorrect conclusion and should be re-investigated by the monitoring pipeline in the next appropriate session. Flagging here for visibility.
+
+## Web Research Performed
+
+| Ticker | Queries | Verdict |
+|--------|---------|---------|
+| All 6 actives/watchlist (brief kill-sweep) | 1–2 queries each | No material post-thesis news |
+| RPAY (Veradace primary-source resolution) | 6+ targeted queries + 3 WebFetch attempts | v2 thesis content VERIFIED across Business Wire, Yahoo Finance, Morningstar, StockTitan, Payments Dive |
+
+Total queries executed this run: ~15.
+
+## Housekeeping
+- No LibreOffice tmp artifacts present in `reporting_layer/investment_theses/pdf/` at run start or end.
+- No new files created in `reporting_layer/investment_theses/docx/` or `/pdf/`.
+- `index.json` updated: RPAY source_md5 refreshed to 460c58f8d06a23228fa0c2f56308baea with explicit `hash_change_reason` note documenting that the diff is monitoring-log-only and does not warrant regeneration.
+- `reporting_layer/working/thesis_run_2026-04-15_1045.log` created (this file).
+
+## Blockers / Open Questions
+- The RPAY candidate file S60 entry contains an incorrect "Veradace-on-RPAY UNVERIFIED" conclusion. Cannot write to `investment_discovery_system/` (read-only constraint). This is flagged here for the monitoring pipeline to revisit; logging to OPEN_QUESTIONS.md in the discovery tree is not possible under the read-only rule.
+
+## Verification (Phase 6)
+1. No new thesis PDFs produced this run — Phase 6 does not apply to thesis production.
+2. `index.json` parses as valid JSON with updated RPAY entry: PASS (see Phase 5 update).
+3. This log file exists and records the run: PASS.
+
+## Next Run Pickup
+- Monitor for RPAY 13D/A #3, PREC14A, DEFC14A, or Schedule 14D-9.
+- Monitor for AXSM PDUFA decision (T-10 biz days; decision window 2026-04-16 to 2026-04-30).
+- Monitor for AVNS special meeting date announcement (postponed per Apr 14 DEFA14A).
+- Re-check the S60 Veradace claim: if the candidate file is updated to reflect primary-source verification, re-baseline md5.
+- Watchlist deferred names (MNKD, ARVN, HROW) remain low-priority; no regeneration warranted without new material signals.
+
+## Note on Word-Count Outliers
+AVNS (4989), GSAT (5676), RPAY v2 (5735) all exceed the 2500–4500 word target. Precedent: complex multi-axis situations (merger arb with financing-dependency, cross-border regulatory, dual-activist) structurally require deeper decomposition. Consistent with earlier run notes. No action taken.
+
+---
+END OF RUN LOG

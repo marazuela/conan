@@ -1,0 +1,142 @@
+[
+  {
+    "ticker": "LUMN",
+    "isin": null,
+    "company_name": "Lumen Technologies, Inc.  (LUMN)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/18926/000119312526157915",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0000018926",
+      "adsh": "0001193125-26-157915",
+      "file_description": "EX-10.1",
+      "company_raw": "Lumen Technologies, Inc.  (LUMN)  (CIK 0000018926)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "John Hancock Comvest Private Income Fund",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1987221/000119312526158521",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001987221",
+      "adsh": "0001193125-26-158521",
+      "file_description": "EX-10.1",
+      "company_raw": "John Hancock Comvest Private Income Fund  (CIK 0001987221)"
+    }
+  },
+  {
+    "ticker": "FONR",
+    "isin": null,
+    "company_name": "FONAR CORP  (FONR)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/355019/000119312526159066",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "SC 13E3/A",
+      "cik": "0000355019",
+      "adsh": "0001193125-26-159066",
+      "file_description": "SC 13E3/A",
+      "company_raw": "FONAR CORP  (FONR)  (CIK 0000355019)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Ionetix Corp / DE /",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2108121/000121390026044239",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0002108121",
+      "adsh": "0001213900-26-044239",
+      "file_description": "TERMINATION AGREEMENT, BY AND AMONG THE COMPANY, IONETIX CORPORATION, IONETIX ALPHA CORPORATION, ELI LILLY AND COMPANY, AND POINT BIOPHARMA INC",
+      "company_raw": "Ionetix Corp / DE /  (CIK 0002108121)"
+    }
+  },
+  {
+    "ticker": "JHG",
+    "isin": null,
+    "company_name": "JANUS HENDERSON GROUP PLC  (JHG)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1274173/000110465926044632",
+    "source_date": "2026-04-17",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001274173",
+      "adsh": "0001104659-26-044632",
+      "file_description": "FORM 8-K",
+      "company_raw": "JANUS HENDERSON GROUP PLC  (JHG)  (CIK 0001274173)"
+    }
+  },
+  {
+    "ticker": "EHAB",
+    "isin": null,
+    "company_name": "Enhabit, Inc.  (EHAB)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1803737/000119312526159105",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001803737",
+      "adsh": "0001193125-26-159105",
+      "file_description": "8-K",
+      "company_raw": "Enhabit, Inc.  (EHAB)  (CIK 0001803737)"
+    }
+  },
+  {
+    "ticker": "TPH",
+    "isin": null,
+    "company_name": "Tri Pointe Homes, Inc.  (TPH)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1561680/000119312526159169",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001561680",
+      "adsh": "0001193125-26-159169",
+      "file_description": "8-K",
+      "company_raw": "Tri Pointe Homes, Inc.  (TPH)  (CIK 0001561680)"
+    }
+  }
+]

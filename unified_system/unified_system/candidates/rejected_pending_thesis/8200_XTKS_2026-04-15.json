@@ -1,0 +1,21 @@
+{
+  "ticker_local": "8200",
+  "mic": "XTKS",
+  "ticker_plus_mic": "8200.XTKS",
+  "company_name_en": "Ringer Hut Co.,Ltd.",
+  "company_name_local": "\u30ea\u30f3\u30ac\u30fc\u30cf\u30c3\u30c8",
+  "figi": "BBG000BRBL44",
+  "issuer_figi": "BBG000BRBK46",
+  "signal_id": "6030eaa0d86b2d11ac9b49958404e112",
+  "signal_type": "forecast_variance",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "score_total": 25.0,
+  "translation_confidence": 0.7,
+  "market_cap_usd_mm": 364.01,
+  "source_url": "https://www.release.tdnet.info/inbs/140120260410501370.pdf",
+  "source_date": "2026-04-10T06:30:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "tdnet",
+  "routing": "watchlist"
+}

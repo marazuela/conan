@@ -1,0 +1,11 @@
+{
+  "ticker_local": "IGO",
+  "mic": "XASX",
+  "figi": "BBG000BB1C77",
+  "issuer_figi": "BBG000BB1BP9",
+  "name": "IGO LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

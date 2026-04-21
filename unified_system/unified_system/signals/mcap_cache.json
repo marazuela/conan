@@ -1,0 +1,2098 @@
+{
+  "SDOT": {
+    "mcap_mm": 2.991486,
+    "timestamp": 1776450620.3847556
+  },
+  "RVPH": {
+    "mcap_mm": 11.342307760370911,
+    "timestamp": 1776450621.0479376
+  },
+  "FORA": {
+    "mcap_mm": 67.32599190616608,
+    "timestamp": 1776450621.7087963
+  },
+  "HYFM": {
+    "mcap_mm": 4.437283081534624,
+    "timestamp": 1776361806.063903
+  },
+  "ALOT": {
+    "mcap_mm": 97.42809899414826,
+    "timestamp": 1776361807.9155467
+  },
+  "KZR": {
+    "mcap_mm": 54.29129466779137,
+    "timestamp": 1776361808.6475868
+  },
+  "RGR": {
+    "mcap_mm": 664.7975836341858,
+    "timestamp": 1776361809.3355625
+  },
+  "APLS": {
+    "mcap_mm": 5224.248506257934,
+    "timestamp": 1776361809.9208574
+  },
+  "CRWV": {
+    "mcap_mm": 62039.084695140424,
+    "timestamp": 1776361810.77049
+  },
+  "PAR": {
+    "mcap_mm": 550.1486298591757,
+    "timestamp": 1776361811.8819559
+  },
+  "ONFO": {
+    "mcap_mm": 7.094491583663941,
+    "timestamp": 1776450634.887033
+  },
+  "WKSP": {
+    "mcap_mm": 11.956969846881867,
+    "timestamp": 1776361818.2000082
+  },
+  "SPSC": {
+    "mcap_mm": 2116.790825798027,
+    "timestamp": 1776361819.5858984
+  },
+  "HNRG": {
+    "mcap_mm": 757.0782874380398,
+    "timestamp": 1776361820.6662843
+  },
+  "PRME": {
+    "mcap_mm": 666.2375508412786,
+    "timestamp": 1776361821.8154664
+  },
+  "HRZN": {
+    "mcap_mm": 300.9944104743147,
+    "timestamp": 1776361826.8533466
+  },
+  "GSAT": {
+    "mcap_mm": 10279.574926383179,
+    "timestamp": 1776361827.5899463
+  },
+  "SAFX": {
+    "mcap_mm": 128.4501524285388,
+    "timestamp": 1776361828.2877383
+  },
+  "DEVS": {
+    "mcap_mm": 9.464867312648297,
+    "timestamp": 1776361829.0070863
+  },
+  "IMKTA": {
+    "mcap_mm": 1682.4268848087615,
+    "timestamp": 1776361835.045994
+  },
+  "MYX": {
+    "mcap_mm": null,
+    "timestamp": 1776361836.3384442
+  },
+  "NRG": {
+    "mcap_mm": null,
+    "timestamp": 1776362873.0213497
+  },
+  "GRTX": {
+    "mcap_mm": null,
+    "timestamp": 1776362873.239726
+  },
+  "RMIX": {
+    "mcap_mm": null,
+    "timestamp": 1776362873.4719734
+  },
+  "HYAC": {
+    "mcap_mm": null,
+    "timestamp": 1776362873.7354765
+  },
+  "CMRC": {
+    "mcap_mm": null,
+    "timestamp": 1776362873.9760787
+  },
+  "MRVL": {
+    "mcap_mm": null,
+    "timestamp": 1776362874.2016387
+  },
+  "RPAY": {
+    "mcap_mm": null,
+    "timestamp": 1776362874.4305959
+  },
+  "GLVT": {
+    "mcap_mm": null,
+    "timestamp": 1776362878.461947
+  },
+  "CNBX": {
+    "mcap_mm": null,
+    "timestamp": 1776362878.9111605
+  },
+  "CSDX": {
+    "mcap_mm": null,
+    "timestamp": 1776362879.1696687
+  },
+  "BFNH": {
+    "mcap_mm": null,
+    "timestamp": 1776362879.428882
+  },
+  "CLOW": {
+    "mcap_mm": null,
+    "timestamp": 1776362879.7155316
+  },
+  "TAAG": {
+    "mcap_mm": null,
+    "timestamp": 1776362879.9883757
+  },
+  "SPST": {
+    "mcap_mm": null,
+    "timestamp": 1776362880.3917708
+  },
+  "GTIC": {
+    "mcap_mm": null,
+    "timestamp": 1776362880.6250086
+  },
+  "ENRT": {
+    "mcap_mm": null,
+    "timestamp": 1776362881.5366075
+  },
+  "SMXT": {
+    "mcap_mm": null,
+    "timestamp": 1776362881.8046777
+  },
+  "BRVO": {
+    "mcap_mm": null,
+    "timestamp": 1776362882.0927808
+  },
+  "PUBC": {
+    "mcap_mm": null,
+    "timestamp": 1776362882.322355
+  },
+  "QTZM": {
+    "mcap_mm": null,
+    "timestamp": 1776362882.9258425
+  },
+  "LCID": {
+    "mcap_mm": null,
+    "timestamp": 1776362884.3682246
+  },
+  "KPLT": {
+    "mcap_mm": null,
+    "timestamp": 1776362885.4743533
+  },
+  "BOXL": {
+    "mcap_mm": null,
+    "timestamp": 1776362885.9553266
+  },
+  "NWBO": {
+    "mcap_mm": null,
+    "timestamp": 1776362888.2624853
+  },
+  "TMGI": {
+    "mcap_mm": null,
+    "timestamp": 1776362888.7255769
+  },
+  "HRGN": {
+    "mcap_mm": null,
+    "timestamp": 1776362889.1663225
+  },
+  "AESP": {
+    "mcap_mm": null,
+    "timestamp": 1776362889.8598826
+  },
+  "CCLD": {
+    "mcap_mm": null,
+    "timestamp": 1776362890.278131
+  },
+  "ACOG": {
+    "mcap_mm": null,
+    "timestamp": 1776362891.0902748
+  },
+  "BRFH": {
+    "mcap_mm": null,
+    "timestamp": 1776362893.9403758
+  },
+  "NFE": {
+    "mcap_mm": null,
+    "timestamp": 1776362894.6036465
+  },
+  "POLA": {
+    "mcap_mm": null,
+    "timestamp": 1776362895.276355
+  },
+  "VIVK": {
+    "mcap_mm": null,
+    "timestamp": 1776362895.619363
+  },
+  "STCB": {
+    "mcap_mm": null,
+    "timestamp": 1776362895.8773353
+  },
+  "RVYL": {
+    "mcap_mm": null,
+    "timestamp": 1776362896.104177
+  },
+  "UGRO": {
+    "mcap_mm": null,
+    "timestamp": 1776362896.5740519
+  },
+  "SOHOO": {
+    "mcap_mm": null,
+    "timestamp": 1776362896.8413255
+  },
+  "ATLN": {
+    "mcap_mm": null,
+    "timestamp": 1776362897.132694
+  },
+  "MDEX": {
+    "mcap_mm": null,
+    "timestamp": 1776474165.1666644
+  },
+  "GPUS": {
+    "mcap_mm": null,
+    "timestamp": 1776463343.6966374
+  },
+  "ABDN.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362902.6519253
+  },
+  "ADM.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362903.0596392
+  },
+  "AMS.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362903.4441872
+  },
+  "AFC.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362903.8353534
+  },
+  "AWE.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362907.2431495
+  },
+  "AAM.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362907.8197727
+  },
+  "ANTO.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362908.328371
+  },
+  "APTD.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362908.9526672
+  },
+  "ASHM.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362909.4118311
+  },
+  "AT/.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362912.9666872
+  },
+  "ASC.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362913.5493386
+  },
+  "ABF.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362913.9299936
+  },
+  "AML.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362914.3383126
+  },
+  "ATG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362914.7535555
+  },
+  "AUTO.L": {
+    "mcap_mm": 430246.4034342997,
+    "timestamp": 1776450691.9411576
+  },
+  "AVON.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362918.727596
+  },
+  "BME": {
+    "mcap_mm": null,
+    "timestamp": 1776362919.261992
+  },
+  "BAB.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362919.7789989
+  },
+  "BCG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362920.2995899
+  },
+  "BTRW.L": {
+    "mcap_mm": 392400.2539100291,
+    "timestamp": 1776450692.496523
+  },
+  "BWY.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362924.3294814
+  },
+  "BKG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362931.1204762
+  },
+  "BYG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362931.634978
+  },
+  "BMY.L": {
+    "mcap_mm": null,
+    "timestamp": 1776362932.172198
+  },
+  "DEBS": {
+    "mcap_mm": null,
+    "timestamp": 1776362935.7144954
+  },
+  "UHAL": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.927294
+  },
+  "B": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9316578
+  },
+  "PDMLP": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9364276
+  },
+  "LPEPD": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9408555
+  },
+  "AXP": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9457717
+  },
+  "AWK": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9500613
+  },
+  "BR": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.954345
+  },
+  "CARR": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.959043
+  },
+  "CASY": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9630258
+  },
+  "NEE": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.96711
+  },
+  "PAYX": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.972199
+  },
+  "WAB": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9766188
+  },
+  "CIONQ": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9804335
+  },
+  "MAR": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9849615
+  },
+  "TPYP": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.989008
+  },
+  "JNJ": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9930706
+  },
+  "FBBEU": {
+    "mcap_mm": null,
+    "timestamp": 1776363002.9969625
+  },
+  "TFVEA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0013583
+  },
+  "FSPYM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0061207
+  },
+  "NVDA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0108404
+  },
+  "MSFT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0147567
+  },
+  "DFTGC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0197577
+  },
+  "ARES": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0243356
+  },
+  "CAMCR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0289798
+  },
+  "CB": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0340388
+  },
+  "FCNCA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.040159
+  },
+  "LCLIN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0454497
+  },
+  "PEP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0506206
+  },
+  "SPGI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0559547
+  },
+  "WAT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.061398
+  },
+  "MA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0671232
+  },
+  "NSIT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0734684
+  },
+  "EQT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0792696
+  },
+  "AJG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0847485
+  },
+  "BSX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0897927
+  },
+  "INTU": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.094627
+  },
+  "MELI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.0995715
+  },
+  "NOW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1066844
+  },
+  "SESAP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.112491
+  },
+  "DHR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1175725
+  },
+  "ADSK": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1228926
+  },
+  "AMZN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.127959
+  },
+  "CMCSA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.132871
+  },
+  "NCGEV": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.13794
+  },
+  "PTC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1429965
+  },
+  "BAYRY": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1472461
+  },
+  "VASML": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.152801
+  },
+  "WWD": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1577818
+  },
+  "NVAER": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1624148
+  },
+  "HLT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.167124
+  },
+  "ABT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1724246
+  },
+  "LCAON": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1773922
+  },
+  "CSHEL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1820815
+  },
+  "PLXS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1879237
+  },
+  "ARE": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1932735
+  },
+  "EQH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.1977437
+  },
+  "GPN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2029414
+  },
+  "SWK": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2085874
+  },
+  "BAX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2136397
+  },
+  "GPC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2190814
+  },
+  "IBM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2242262
+  },
+  "CVX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2292938
+  },
+  "LPLA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2347524
+  },
+  "PEAK": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2403307
+  },
+  "TFVTI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2458358
+  },
+  "TFIVV": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2525132
+  },
+  "FDFIC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.257802
+  },
+  "TFVOO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2641542
+  },
+  "DFCEX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2707367
+  },
+  "FDFAI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.277846
+  },
+  "BMO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2838414
+  },
+  "NTIOF": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2900367
+  },
+  "GOOGL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.2953746
+  },
+  "WFC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3001928
+  },
+  "ROK": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3064792
+  },
+  "TMO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3114183
+  },
+  "AVGO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3167882
+  },
+  "RCI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3236294
+  },
+  "KEY": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.329259
+  },
+  "FHN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3359463
+  },
+  "SBUX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.341952
+  },
+  "LCETN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3478174
+  },
+  "META": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3543522
+  },
+  "AAPL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3603396
+  },
+  "NDAQ": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3661187
+  },
+  "MCD": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3733811
+  },
+  "CSCO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3790975
+  },
+  "KO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3853621
+  },
+  "UNH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3913443
+  },
+  "PGR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.3971257
+  },
+  "CRM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4041839
+  },
+  "ORCL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4104273
+  },
+  "TFC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4161553
+  },
+  "DIS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4224737
+  },
+  "MCO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.428291
+  },
+  "COF": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4345844
+  },
+  "PANW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4403021
+  },
+  "JPM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4463575
+  },
+  "PG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.452511
+  },
+  "ADP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4583135
+  },
+  "PRU": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4639056
+  },
+  "KKR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4702404
+  },
+  "LOW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4760814
+  },
+  "BX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4827888
+  },
+  "IDXX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.488882
+  },
+  "TSLA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.4947824
+  },
+  "LCACN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5008729
+  },
+  "MDLZ": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5070171
+  },
+  "PPG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5127938
+  },
+  "INCY": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5196407
+  },
+  "MLM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.525861
+  },
+  "VRT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5316837
+  },
+  "LULU": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5382657
+  },
+  "WM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5434532
+  },
+  "FTV": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5490808
+  },
+  "KEYS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5554976
+  },
+  "HSIC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5614157
+  },
+  "HOOD": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5672967
+  },
+  "DDOG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5728168
+  },
+  "SQ": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5786026
+  },
+  "LRCX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5847409
+  },
+  "TECH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5905938
+  },
+  "CRL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.5967462
+  },
+  "MCHP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6027312
+  },
+  "BAC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.608463
+  },
+  "V": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6138353
+  },
+  "ABBV": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6201637
+  },
+  "SCHW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6262677
+  },
+  "MRSH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6325881
+  },
+  "ADBE": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.638861
+  },
+  "SYK": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6446376
+  },
+  "HUBB": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.650965
+  },
+  "AMP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6580029
+  },
+  "CDNS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6647959
+  },
+  "AMGN": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.672
+  },
+  "ICE": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6786053
+  },
+  "SNPS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6863647
+  },
+  "HCA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.6927202
+  },
+  "AMT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.700122
+  },
+  "CTAS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7071357
+  },
+  "APO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.713174
+  },
+  "ECL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7198603
+  },
+  "BKNG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7267256
+  },
+  "CTSH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7338066
+  },
+  "MMM": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7414277
+  },
+  "CSX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7471004
+  },
+  "PLTR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.753731
+  },
+  "TTWO": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.76024
+  },
+  "NKE": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.766353
+  },
+  "MET": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.77338
+  },
+  "CMG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7796607
+  },
+  "COR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7875602
+  },
+  "RJF": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.7944856
+  },
+  "PH": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8016117
+  },
+  "PLCTT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.80908
+  },
+  "VMC": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8156538
+  },
+  "STT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8233767
+  },
+  "F": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8309364
+  },
+  "ZTS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8381379
+  },
+  "LCMDT": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.844452
+  },
+  "EW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8521738
+  },
+  "IP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8597794
+  },
+  "EMR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8673012
+  },
+  "VNXPI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8744965
+  },
+  "EL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8810134
+  },
+  "TROW": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8892496
+  },
+  "MSCI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.8962138
+  },
+  "DG": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.904824
+  },
+  "VRTX": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9120846
+  },
+  "PSA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9193742
+  },
+  "HAS": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9273896
+  },
+  "RCL": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.93512
+  },
+  "DRI": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9418547
+  },
+  "J": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9485016
+  },
+  "RPAPP": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.955286
+  },
+  "ABNB": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9626067
+  },
+  "FSLR": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9707983
+  },
+  "GDDY": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.978324
+  },
+  "WBD": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.9857278
+  },
+  "MAA": {
+    "mcap_mm": null,
+    "timestamp": 1776363003.993004
+  },
+  "SYF": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0002403
+  },
+  "KDP": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0074315
+  },
+  "WSM": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.018484
+  },
+  "DPZ": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0270271
+  },
+  "OTIS": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0351322
+  },
+  "PHM": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0426457
+  },
+  "TTD": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0514333
+  },
+  "DXCM": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0600164
+  },
+  "NCLH": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0689595
+  },
+  "BXP": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0770967
+  },
+  "A": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.0862222
+  },
+  "LKQ": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.094008
+  },
+  "DHI": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1025913
+  },
+  "AZO": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1110246
+  },
+  "CAG": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1188738
+  },
+  "RMD": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1261258
+  },
+  "MOH": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1332572
+  },
+  "LCSTE": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1406853
+  },
+  "CSGP": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.148795
+  },
+  "LCCCL": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1566863
+  },
+  "HSY": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1646676
+  },
+  "LCCRH": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1732068
+  },
+  "ZBRA": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1803737
+  },
+  "UAL": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1884828
+  },
+  "GIS": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.1964827
+  },
+  "MKC": {
+    "mcap_mm": null,
+    "timestamp": 1776363004.2042463
+  },
+  "ESE": {
+    "mcap_mm": null,
+    "timestamp": 1776474161.2126143
+  },
+  "NTHI": {
+    "mcap_mm": null,
+    "timestamp": 1776376925.5119874
+  },
+  "PWR": {
+    "mcap_mm": null,
+    "timestamp": 1776376928.6751277
+  },
+  "AGPU": {
+    "mcap_mm": null,
+    "timestamp": 1776376929.1049984
+  },
+  "FMNB": {
+    "mcap_mm": null,
+    "timestamp": 1776376929.4760118
+  },
+  "CRBP": {
+    "mcap_mm": null,
+    "timestamp": 1776376929.7702317
+  },
+  "WSBC": {
+    "mcap_mm": null,
+    "timestamp": 1776376930.0583477
+  },
+  "ACHV": {
+    "mcap_mm": null,
+    "timestamp": 1776376935.7635186
+  },
+  "CBIH": {
+    "mcap_mm": null,
+    "timestamp": 1776376938.4436507
+  },
+  "IPST": {
+    "mcap_mm": null,
+    "timestamp": 1776376945.9012403
+  },
+  "BBW": {
+    "mcap_mm": null,
+    "timestamp": 1776376946.1594594
+  },
+  "ARAI": {
+    "mcap_mm": null,
+    "timestamp": 1776376946.4649
+  },
+  "FJET": {
+    "mcap_mm": null,
+    "timestamp": 1776376946.6875067
+  },
+  "VNCE": {
+    "mcap_mm": null,
+    "timestamp": 1776376946.9127982
+  },
+  "GLOO": {
+    "mcap_mm": null,
+    "timestamp": 1776376947.6013484
+  },
+  "BLUW": {
+    "mcap_mm": null,
+    "timestamp": 1776376947.9663086
+  },
+  "DMII": {
+    "mcap_mm": null,
+    "timestamp": 1776376948.1912537
+  },
+  "PFSA": {
+    "mcap_mm": null,
+    "timestamp": 1776376948.420141
+  },
+  "TVA": {
+    "mcap_mm": null,
+    "timestamp": 1776376948.658314
+  },
+  "HCAC": {
+    "mcap_mm": null,
+    "timestamp": 1776376948.879326
+  },
+  "BGLC": {
+    "mcap_mm": null,
+    "timestamp": 1776376949.4107347
+  },
+  "OPFI": {
+    "mcap_mm": null,
+    "timestamp": 1776463374.361332
+  },
+  "RAIN": {
+    "mcap_mm": null,
+    "timestamp": 1776376949.9662964
+  },
+  "OTTR": {
+    "mcap_mm": null,
+    "timestamp": 1776376950.2391484
+  },
+  "NMHI": {
+    "mcap_mm": null,
+    "timestamp": 1776377277.7994707
+  },
+  "BNAI": {
+    "mcap_mm": null,
+    "timestamp": 1776474170.7513945
+  },
+  "COSM": {
+    "mcap_mm": null,
+    "timestamp": 1776377281.7496083
+  },
+  "DPLS": {
+    "mcap_mm": null,
+    "timestamp": 1776377283.1380327
+  },
+  "FOXO": {
+    "mcap_mm": null,
+    "timestamp": 1776377283.548548
+  },
+  "YHC": {
+    "mcap_mm": null,
+    "timestamp": 1776377283.8875988
+  },
+  "DBGI": {
+    "mcap_mm": null,
+    "timestamp": 1776776992.352138
+  },
+  "NCL": {
+    "mcap_mm": null,
+    "timestamp": 1776377285.0264418
+  },
+  "SERV": {
+    "mcap_mm": null,
+    "timestamp": 1776377285.3288813
+  },
+  "HNOI": {
+    "mcap_mm": null,
+    "timestamp": 1776377286.0501947
+  },
+  "SNSE": {
+    "mcap_mm": null,
+    "timestamp": 1776377286.2768085
+  },
+  "WERN": {
+    "mcap_mm": null,
+    "timestamp": 1776377337.5087876
+  },
+  "LINC": {
+    "mcap_mm": null,
+    "timestamp": 1776377647.0275912
+  },
+  "QVCD": {
+    "mcap_mm": null,
+    "timestamp": 1776377647.2553542
+  },
+  "QVCGA": {
+    "mcap_mm": null,
+    "timestamp": 1776474160.6559515
+  },
+  "FRT": {
+    "mcap_mm": null,
+    "timestamp": 1776377648.914952
+  },
+  "NYC": {
+    "mcap_mm": null,
+    "timestamp": 1776377649.1590044
+  },
+  "FLS": {
+    "mcap_mm": null,
+    "timestamp": 1776377649.6279387
+  },
+  "PENN": {
+    "mcap_mm": null,
+    "timestamp": 1776377649.8819115
+  },
+  "USPH": {
+    "mcap_mm": null,
+    "timestamp": 1776377650.5510516
+  },
+  "KORE": {
+    "mcap_mm": null,
+    "timestamp": 1776377651.2051282
+  },
+  "AVNS": {
+    "mcap_mm": null,
+    "timestamp": 1776377651.9027476
+  },
+  "SEM": {
+    "mcap_mm": null,
+    "timestamp": 1776377652.9442098
+  },
+  "MRCC": {
+    "mcap_mm": null,
+    "timestamp": 1776377655.431547
+  },
+  "BT/A.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387722.3045273
+  },
+  "BB2.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387722.7107396
+  },
+  "BYIT.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387723.0911307
+  },
+  "CBG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387723.4920065
+  },
+  "CHRT.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387726.9099424
+  },
+  "CVSG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387727.300673
+  },
+  "GMVHF": {
+    "mcap_mm": null,
+    "timestamp": 1776387727.7059512
+  },
+  "ESNT.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387728.1014092
+  },
+  "EIHDF": {
+    "mcap_mm": null,
+    "timestamp": 1776387728.4969118
+  },
+  "DATA.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387731.9117193
+  },
+  "HMSO.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387732.3827796
+  },
+  "HAS.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387732.7702067
+  },
+  "HGT.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387733.1847882
+  },
+  "IAG.MC": {
+    "mcap_mm": null,
+    "timestamp": 1776387733.578893
+  },
+  "IQX.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387736.9861422
+  },
+  "ITM.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387737.3856883
+  },
+  "IJ7.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387737.7693987
+  },
+  "JDG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387738.177926
+  },
+  "LGEN.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387738.584208
+  },
+  "MSLH.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387741.9845831
+  },
+  "MNDIZAR.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387742.3968596
+  },
+  "MOON.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387742.7875252
+  },
+  "MGAM.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387743.1907568
+  },
+  "NFG.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387743.6001024
+  },
+  "MPGPF.L": {
+    "mcap_mm": null,
+    "timestamp": 1776387747.001588
+  },
+  "CNFN": {
+    "mcap_mm": null,
+    "timestamp": 1776420158.2622812
+  },
+  "RHNO": {
+    "mcap_mm": null,
+    "timestamp": 1776420158.6577313
+  },
+  "GWTI": {
+    "mcap_mm": null,
+    "timestamp": 1776420158.9331515
+  },
+  "EEGI": {
+    "mcap_mm": null,
+    "timestamp": 1776420159.541955
+  },
+  "AIBT": {
+    "mcap_mm": null,
+    "timestamp": 1776420159.8888497
+  },
+  "FOFA": {
+    "mcap_mm": null,
+    "timestamp": 1776420160.2873933
+  },
+  "SATT": {
+    "mcap_mm": null,
+    "timestamp": 1776420160.6071377
+  },
+  "SEAV": {
+    "mcap_mm": null,
+    "timestamp": 1776420160.9078429
+  },
+  "NBND": {
+    "mcap_mm": null,
+    "timestamp": 1776420161.3150036
+  },
+  "SNBH": {
+    "mcap_mm": null,
+    "timestamp": 1776420161.7214856
+  },
+  "IGTA": {
+    "mcap_mm": null,
+    "timestamp": 1776430941.6952257
+  },
+  "FRMM": {
+    "mcap_mm": null,
+    "timestamp": 1776430941.9847589
+  },
+  "TPH": {
+    "mcap_mm": null,
+    "timestamp": 1776430950.5525026
+  },
+  "PCT": {
+    "mcap_mm": null,
+    "timestamp": 1776430953.9797623
+  },
+  "OSUR": {
+    "mcap_mm": null,
+    "timestamp": 1776430954.3660743
+  },
+  "EQS": {
+    "mcap_mm": null,
+    "timestamp": 1776430956.4064155
+  },
+  "VERI": {
+    "mcap_mm": null,
+    "timestamp": 1776430970.2028732
+  },
+  "BZFD": {
+    "mcap_mm": null,
+    "timestamp": 1776430970.532823
+  },
+  "LAKE": {
+    "mcap_mm": null,
+    "timestamp": 1776430970.9296536
+  },
+  "DAIO": {
+    "mcap_mm": null,
+    "timestamp": 1776430972.4189973
+  },
+  "TRWD": {
+    "mcap_mm": null,
+    "timestamp": 1776431027.8163152
+  },
+  "LNZA": {
+    "mcap_mm": null,
+    "timestamp": 1776431028.1540837
+  },
+  "LSTA": {
+    "mcap_mm": null,
+    "timestamp": 1776441752.7286105
+  },
+  "ACLX": {
+    "mcap_mm": null,
+    "timestamp": 1776775312.382092
+  },
+  "CETI": {
+    "mcap_mm": null,
+    "timestamp": 1776441755.0302052
+  },
+  "BIRD": {
+    "mcap_mm": null,
+    "timestamp": 1776775311.754116
+  },
+  "OBDC": {
+    "mcap_mm": null,
+    "timestamp": 1776441761.2206511
+  },
+  "LION": {
+    "mcap_mm": null,
+    "timestamp": 1776441761.5049913
+  },
+  "TSNDF": {
+    "mcap_mm": null,
+    "timestamp": 1776441762.6323307
+  },
+  "COMP": {
+    "mcap_mm": null,
+    "timestamp": 1776441762.855686
+  },
+  "LUMN": {
+    "mcap_mm": null,
+    "timestamp": 1776775325.9911911
+  },
+  "FONR": {
+    "mcap_mm": null,
+    "timestamp": 1776441819.8427863
+  },
+  "JHG": {
+    "mcap_mm": null,
+    "timestamp": 1776441820.70386
+  },
+  "EHAB": {
+    "mcap_mm": null,
+    "timestamp": 1776441820.9524045
+  },
+  "FMHS": {
+    "mcap_mm": 2.271114,
+    "timestamp": 1776450649.4959302
+  },
+  "EZJ.L": {
+    "mcap_mm": 295885.96524645266,
+    "timestamp": 1776450693.9450836
+  },
+  "JUP.L": {
+    "mcap_mm": 77405.2390642801,
+    "timestamp": 1776450695.09838
+  },
+  "GLE.L": {
+    "mcap_mm": 15965.32729,
+    "timestamp": 1776450696.317262
+  },
+  "NCC.L": {
+    "mcap_mm": 34029.298941,
+    "timestamp": 1776450697.5830712
+  },
+  "SN/.L": {
+    "mcap_mm": null,
+    "timestamp": 1776450702.8037288
+  },
+  "SUPR.L": {
+    "mcap_mm": 107114.25423347983,
+    "timestamp": 1776450704.0185497
+  },
+  "MICC.AS": {
+    "mcap_mm": 7558.958577206668,
+    "timestamp": 1776450704.9637861
+  },
+  "SMWHUSD.L": {
+    "mcap_mm": null,
+    "timestamp": 1776450706.8942823
+  },
+  "WIZZ": {
+    "mcap_mm": null,
+    "timestamp": 1776450708.6544085
+  },
+  "UMG.AS": {
+    "mcap_mm": 37798.07205693495,
+    "timestamp": 1776450712.5685534
+  },
+  "IMCD.AS": {
+    "mcap_mm": 5631.732358276955,
+    "timestamp": 1776450713.3994975
+  },
+  "AIXA.DE": {
+    "mcap_mm": 4993.029985289269,
+    "timestamp": 1776450714.3066032
+  },
+  "MUX.DE": {
+    "mcap_mm": 552.0511151900711,
+    "timestamp": 1776450715.195443
+  },
+  "EVK.DE": {
+    "mcap_mm": 7917.339893341064,
+    "timestamp": 1776450716.0550592
+  },
+  "4216": {
+    "mcap_mm": null,
+    "timestamp": 1776450720.7877636
+  },
+  "1965": {
+    "mcap_mm": null,
+    "timestamp": 1776450722.2280676
+  },
+  "2908": {
+    "mcap_mm": null,
+    "timestamp": 1776450723.8606753
+  },
+  "HBIO": {
+    "mcap_mm": 27.502291120171545,
+    "timestamp": 1776450724.6437125
+  },
+  "VZ": {
+    "mcap_mm": 197029.11655168753,
+    "timestamp": 1776450795.8380785
+  },
+  "FIBIT": {
+    "mcap_mm": null,
+    "timestamp": 1776450796.986342
+  },
+  "ULYX": {
+    "mcap_mm": null,
+    "timestamp": 1776463339.4782846
+  },
+  "SOWG": {
+    "mcap_mm": null,
+    "timestamp": 1776463340.6218083
+  },
+  "MAIR": {
+    "mcap_mm": null,
+    "timestamp": 1776463347.5728693
+  },
+  "TE": {
+    "mcap_mm": null,
+    "timestamp": 1776463347.9677496
+  },
+  "SOAR": {
+    "mcap_mm": null,
+    "timestamp": 1776463348.7983387
+  },
+  "BRLS": {
+    "mcap_mm": null,
+    "timestamp": 1776463359.2394698
+  },
+  "TDG": {
+    "mcap_mm": null,
+    "timestamp": 1776463361.4978004
+  },
+  "ARXS": {
+    "mcap_mm": null,
+    "timestamp": 1776463361.9057047
+  },
+  "HGTXU": {
+    "mcap_mm": null,
+    "timestamp": 1776775330.2227
+  },
+  "BAM": {
+    "mcap_mm": null,
+    "timestamp": 1776463370.2973115
+  },
+  "TGNT": {
+    "mcap_mm": null,
+    "timestamp": 1776463372.9236987
+  },
+  "ARQ": {
+    "mcap_mm": null,
+    "timestamp": 1776463373.2868862
+  },
+  "FMBH": {
+    "mcap_mm": null,
+    "timestamp": 1776463373.6796834
+  },
+  "BMI": {
+    "mcap_mm": null,
+    "timestamp": 1776463374.851838
+  },
+  "ASBP": {
+    "mcap_mm": null,
+    "timestamp": 1776463375.2176843
+  },
+  "EBS": {
+    "mcap_mm": null,
+    "timestamp": 1776463375.9389825
+  },
+  "MGTX": {
+    "mcap_mm": null,
+    "timestamp": 1776463376.350298
+  },
+  "EVFM": {
+    "mcap_mm": null,
+    "timestamp": 1776463376.7600281
+  },
+  "LYRA": {
+    "mcap_mm": null,
+    "timestamp": 1776463377.4742541
+  },
+  "VS": {
+    "mcap_mm": null,
+    "timestamp": 1776463377.869897
+  },
+  "ETHB": {
+    "mcap_mm": null,
+    "timestamp": 1776463378.288228
+  },
+  "ETON": {
+    "mcap_mm": null,
+    "timestamp": 1776463378.7085695
+  },
+  "CRC": {
+    "mcap_mm": null,
+    "timestamp": 1776463379.0482125
+  },
+  "CBDW": {
+    "mcap_mm": null,
+    "timestamp": 1776463379.317761
+  },
+  "OPRT": {
+    "mcap_mm": null,
+    "timestamp": 1776463379.6199138
+  },
+  "NGVT": {
+    "mcap_mm": null,
+    "timestamp": 1776463380.013405
+  },
+  "MCHX": {
+    "mcap_mm": null,
+    "timestamp": 1776463380.4323242
+  },
+  "XWIN": {
+    "mcap_mm": null,
+    "timestamp": 1776463380.88783
+  },
+  "KVAC": {
+    "mcap_mm": null,
+    "timestamp": 1776463381.2620916
+  },
+  "TETEF": {
+    "mcap_mm": null,
+    "timestamp": 1776474163.5734916
+  },
+  "CCTC": {
+    "mcap_mm": null,
+    "timestamp": 1776474164.204686
+  },
+  "RBTK": {
+    "mcap_mm": null,
+    "timestamp": 1776474164.844658
+  },
+  "DCH": {
+    "mcap_mm": null,
+    "timestamp": 1776474165.5273523
+  },
+  "CREG": {
+    "mcap_mm": null,
+    "timestamp": 1776474168.0231743
+  },
+  "SRRE": {
+    "mcap_mm": null,
+    "timestamp": 1776474169.9700117
+  },
+  "RF": {
+    "mcap_mm": null,
+    "timestamp": 1776474171.0357838
+  },
+  "PPIH": {
+    "mcap_mm": null,
+    "timestamp": 1776474172.2312033
+  },
+  "ATDS": {
+    "mcap_mm": null,
+    "timestamp": 1776474173.4559588
+  },
+  "UBI.PA": {
+    "mcap_mm": null,
+    "timestamp": 1776474184.4119277
+  },
+  "EDEN.PA": {
+    "mcap_mm": null,
+    "timestamp": 1776474185.0956466
+  },
+  "VU.PA": {
+    "mcap_mm": null,
+    "timestamp": 1776474185.6452324
+  },
+  "SW.PA": {
+    "mcap_mm": null,
+    "timestamp": 1776474186.256513
+  },
+  "ALFEN.AS": {
+    "mcap_mm": null,
+    "timestamp": 1776474189.6954536
+  },
+  "DOU.DE": {
+    "mcap_mm": null,
+    "timestamp": 1776675743.9104242
+  },
+  "TUIFF.DE": {
+    "mcap_mm": null,
+    "timestamp": 1776675744.3110385
+  },
+  "PASG": {
+    "mcap_mm": null,
+    "timestamp": 1776690154.3474317
+  },
+  "SLNO": {
+    "mcap_mm": null,
+    "timestamp": 1776776990.403871
+  },
+  "EU": {
+    "mcap_mm": null,
+    "timestamp": 1776776896.67092
+  },
+  "VWAV": {
+    "mcap_mm": null,
+    "timestamp": 1776690158.5619974
+  },
+  "SPCE": {
+    "mcap_mm": null,
+    "timestamp": 1776690163.5797982
+  },
+  "BLD": {
+    "mcap_mm": null,
+    "timestamp": 1776776993.6646788
+  },
+  "QXO": {
+    "mcap_mm": null,
+    "timestamp": 1776690164.2633955
+  },
+  "BKYI": {
+    "mcap_mm": null,
+    "timestamp": 1776690165.6531367
+  },
+  "ENVB": {
+    "mcap_mm": null,
+    "timestamp": 1776690166.0435212
+  },
+  "GTII": {
+    "mcap_mm": null,
+    "timestamp": 1776690166.4454448
+  },
+  "CEG": {
+    "mcap_mm": null,
+    "timestamp": 1776690166.8534918
+  },
+  "CABA": {
+    "mcap_mm": null,
+    "timestamp": 1776690167.2651994
+  },
+  "AKR": {
+    "mcap_mm": null,
+    "timestamp": 1776690167.7871313
+  },
+  "GIG": {
+    "mcap_mm": null,
+    "timestamp": 1776690173.523748
+  },
+  "SLNG": {
+    "mcap_mm": null,
+    "timestamp": 1776690173.9253747
+  },
+  "CMCAF": {
+    "mcap_mm": null,
+    "timestamp": 1776690178.0208917
+  },
+  "SILA": {
+    "mcap_mm": null,
+    "timestamp": 1776776898.607258
+  },
+  "ICMB": {
+    "mcap_mm": null,
+    "timestamp": 1776775310.888679
+  },
+  "GNPX": {
+    "mcap_mm": null,
+    "timestamp": 1776775312.073057
+  },
+  "MEHA": {
+    "mcap_mm": null,
+    "timestamp": 1776775316.534909
+  },
+  "CRWD": {
+    "mcap_mm": null,
+    "timestamp": 1776775318.6493282
+  },
+  "SMCI": {
+    "mcap_mm": null,
+    "timestamp": 1776775318.982441
+  },
+  "AVEX": {
+    "mcap_mm": null,
+    "timestamp": 1776775319.528654
+  },
+  "NRC": {
+    "mcap_mm": null,
+    "timestamp": 1776775321.856887
+  },
+  "MNOV": {
+    "mcap_mm": null,
+    "timestamp": 1776775325.284619
+  },
+  "SDST": {
+    "mcap_mm": null,
+    "timestamp": 1776775330.552903
+  },
+  "BKHA": {
+    "mcap_mm": null,
+    "timestamp": 1776775330.853894
+  },
+  "CSUI": {
+    "mcap_mm": null,
+    "timestamp": 1776775331.159144
+  },
+  "LASE": {
+    "mcap_mm": null,
+    "timestamp": 1776775331.6076338
+  },
+  "RDI": {
+    "mcap_mm": null,
+    "timestamp": 1776775334.134017
+  },
+  "FFAI": {
+    "mcap_mm": null,
+    "timestamp": 1776775334.5006778
+  },
+  "MIND": {
+    "mcap_mm": null,
+    "timestamp": 1776775337.911962
+  },
+  "PRLD": {
+    "mcap_mm": null,
+    "timestamp": 1776775338.9069781
+  },
+  "ALMR": {
+    "mcap_mm": null,
+    "timestamp": 1776775340.191138
+  },
+  "IGC": {
+    "mcap_mm": null,
+    "timestamp": 1776775340.877107
+  },
+  "DAIC": {
+    "mcap_mm": null,
+    "timestamp": 1776775341.481833
+  },
+  "AERA": {
+    "mcap_mm": null,
+    "timestamp": 1776775344.834074
+  },
+  "MSPR": {
+    "mcap_mm": null,
+    "timestamp": 1776775383.3091059
+  },
+  "FMC": {
+    "mcap_mm": null,
+    "timestamp": 1776775384.26972
+  },
+  "USAR": {
+    "mcap_mm": null,
+    "timestamp": 1776775386.375317
+  },
+  "MCW": {
+    "mcap_mm": null,
+    "timestamp": 1776775387.079581
+  },
+  "ATII": {
+    "mcap_mm": null,
+    "timestamp": 1776775387.379338
+  },
+  "LEEEF": {
+    "mcap_mm": null,
+    "timestamp": 1776775388.719279
+  },
+  "AXTI": {
+    "mcap_mm": null,
+    "timestamp": 1776775391.563326
+  },
+  "CSCIF": {
+    "mcap_mm": null,
+    "timestamp": 1776775393.072971
+  },
+  "PEBO": {
+    "mcap_mm": null,
+    "timestamp": 1776775393.573945
+  },
+  "KINS": {
+    "mcap_mm": null,
+    "timestamp": 1776776895.7228959
+  },
+  "CELU": {
+    "mcap_mm": null,
+    "timestamp": 1776776896.1614609
+  },
+  "ROLR": {
+    "mcap_mm": null,
+    "timestamp": 1776776986.3732
+  },
+  "AGSS": {
+    "mcap_mm": null,
+    "timestamp": 1776776987.7805529
+  },
+  "MNTS": {
+    "mcap_mm": null,
+    "timestamp": 1776776988.397661
+  },
+  "CCIX": {
+    "mcap_mm": null,
+    "timestamp": 1776776988.707139
+  },
+  "LWLG": {
+    "mcap_mm": null,
+    "timestamp": 1776776989.3426418
+  },
+  "LEU": {
+    "mcap_mm": null,
+    "timestamp": 1776776990.890196
+  },
+  "LMNR": {
+    "mcap_mm": null,
+    "timestamp": 1776776991.827189
+  },
+  "ALK": {
+    "mcap_mm": null,
+    "timestamp": 1776776993.24778
+  },
+  "RANG": {
+    "mcap_mm": null,
+    "timestamp": 1776776994.012028
+  },
+  "MLSS": {
+    "mcap_mm": null,
+    "timestamp": 1776778920.386733
+  },
+  "NMRK": {
+    "mcap_mm": null,
+    "timestamp": 1776778985.261448
+  }
+}

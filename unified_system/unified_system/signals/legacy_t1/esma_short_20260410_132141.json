@@ -1,0 +1,67 @@
+[
+  {
+    "ticker": "EVK.DE",
+    "isin": "DE000EVNK013",
+    "company_name": "Evonik Industries AG",
+    "market_cap_mm": 8094.4,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "BlackRock Financial Management, Inc.",
+      "position_pct": 0.49,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "DE000EVNK013",
+      "crowded_info": "[{\"holder\": \"BlackRock Financial Management, Inc.\", \"position_pct\": 0.49, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Davidson Kempner European Partners, LLP\", \"position_pct\": 0.51, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 1.04, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}]"
+    }
+  },
+  {
+    "ticker": "EVK.DE",
+    "isin": "DE000EVNK013",
+    "company_name": "Evonik Industries AG",
+    "market_cap_mm": 8094.4,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Davidson Kempner European Partners, LLP",
+      "position_pct": 0.51,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "DE000EVNK013",
+      "crowded_info": "[{\"holder\": \"BlackRock Financial Management, Inc.\", \"position_pct\": 0.49, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Davidson Kempner European Partners, LLP\", \"position_pct\": 0.51, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 1.04, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}]"
+    }
+  },
+  {
+    "ticker": "HROW",
+    "isin": "US4158581094",
+    "company_name": "Harrow Inc",
+    "market_cap_mm": 1388.3,
+    "signal_type": "short_new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Arrowstreet Capital, Limited Partnership",
+      "position_pct": 0.78,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "US4158581094"
+    }
+  }
+]

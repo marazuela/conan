@@ -1,0 +1,565 @@
+# AUTONOMOUS MULTI-SESSION PROJECT — QUICK-START TEMPLATE
+
+**This is a set-up and understanding document, not an execution script.** Before any work begins on the new idea, the session must read this template in full, then iterate — in dialogue with the user — on how each section adapts to the specific domain being built. Which sources replace the five scanners? What is the entity ID system? What are the scoring dimensions and thresholds? What are the deliverables? What cadence does the domain actually demand? No files are created, no tasks are scheduled, and no code is written until that adaptation conversation has produced explicit answers to those questions and they are recorded in `OBJECTIVES.md` and `DECISIONS.md` (as D-000, the founding architecture decision). Skipping this step and jumping to execution will produce a system shaped like this one rather than shaped like the problem.
+
+---
+
+## NON-NEGOTIABLES (the rules that never relax regardless of domain)
+
+1. **SESSION_LOCK is overwrite-only.** Never `rm`. Never attempt delete. The Cowork sandbox cannot reliably delete.
+2. **4-hour stale-lock window.** A lock older than 4 hours is treated as abandoned and may be overwritten.
+3. **Write-scope isolation.** The system folder has writers; the reporting layer has readers. Readers never write into the system folder. Writers never write into the reporting layer.
+4. **Tool Validation Protocol every session.** `py_compile` every tool + probe every external endpoint. Log into SESSION_STATE Tool Health.
+5. **No chat questions in scheduled sessions.** Append to `OPEN_QUESTIONS.md`. Continue with unblocked work.
+6. **Shut down before context exhausts.** Handoff quality outranks output quality outranks output volume.
+7. **Never delete — always archive.** Superseded work moves to `archive/YYYY-MM-DD_reason/`.
+8. **Verify, don't remember.** For anything time-sensitive, factual, or outside stable core knowledge, use a tool. Training memory is not a source.
+
+If any of these is broken, the architecture silently degrades. They are readable in ten seconds on purpose.
+
+---
+
+## WHAT THIS TEMPLATE DOES NOT GIVE YOU
+
+- Domain expertise for the new idea.
+- A list of real, validated sources/APIs for the new domain.
+- The right scoring dimensions — those must be derived from what the domain rewards.
+- The right cadence — a 3-hour cron may be wildly wrong for domains where the world changes daily, weekly, or monthly.
+- Validated endpoints, schemas, or rate limits for the new domain.
+- Content. It gives the scaffolding. The content is the adaptation conversation with the user.
+
+---
+
+## PART 0 — WHEN TO USE THIS TEMPLATE
+
+Use this when the work has all four properties:
+
+1. **Recurring** — the same pipeline runs on a schedule, not once.
+2. **Stateful** — each run builds on prior runs (a candidate list, a signal history, a monitoring queue).
+3. **Unattended** — no human is present during most runs; the system must not block on questions.
+4. **Multi-file / multi-source** — findings come from several inputs that must be cross-referenced.
+
+If any one is missing, a simpler structure suffices. Do not pay this template's coordination tax for a one-shot task.
+
+---
+
+## PART 1 — THE TWO FOUNDING PRINCIPLES
+
+Everything in this template derives from two principles. If you understand only these, you can reconstruct the rest.
+
+**Principle A — Files are the only memory.** Every Cowork session starts cold with no recollection of prior runs. The *only* bridge between sessions is the files in the project folder. A session that finishes without flushing its working state to disk has lost that work forever. Therefore: every meaningful unit of analysis, every decision, every open question, every warning must end up in a named file before the session ends.
+
+**Principle B — Concurrency is managed by convention, not by the OS.** Cowork's sandbox cannot reliably `rm` files and does not give you OS-level locks. Concurrency between overlapping scheduled sessions is enforced by a single plaintext file (`SESSION_LOCK.md`) that sessions agree to check before starting and to overwrite (never delete) when done. This is fragile only if sessions don't follow the convention; with the convention, it is completely reliable.
+
+Everything else is details.
+
+---
+
+## PART 2 — CANONICAL FOLDER STRUCTURE
+
+Adopt this verbatim. The names are load-bearing — skills and the user's muscle memory will reference them.
+
+```
+PROJECT_ROOT/
+├── PROJECT_INSTRUCTIONS.md          # project charter (top-level, above the system folder)
+│
+├── <domain>_system/                 # the writable working system — ONE task-group writes here
+│   ├── README.md                    # entry point; cold-start read order
+│   ├── INSTRUCTIONS.md              # full architecture, pipeline, session rules
+│   ├── OBJECTIVES.md                # goals, mandate, success criteria
+│   ├── CONTEXT.md                   # domain-specific background, validated sources
+│   ├── SESSION_STATE.md             # THE RELAY BATON — rewritten every session
+│   ├── SESSION_LOCK.md              # concurrency gate — LOCKED/UNLOCKED
+│   ├── PROGRESS_LOG.md              # append-only per-session log
+│   ├── INDEX.md                     # map of every file in the folder
+│   ├── DECISIONS.md                 # numbered decisions D-000, D-001, …
+│   ├── OPEN_QUESTIONS.md            # numbered open questions Q-001, Q-002, …
+│   │
+│   ├── framework/                   # scoring/evaluation rubrics
+│   │   └── scoring_system.md
+│   ├── strategies/                  # one file per signal source / method
+│   │   ├── strategy_1.md
+│   │   └── …
+│   ├── tools/                       # executable scanners / scripts
+│   │   ├── run_scanner.py           # dispatcher
+│   │   ├── run_post_scan.py         # aggregation / convergence
+│   │   └── <per-source>.py
+│   ├── signals/                     # raw JSON output from scanners
+│   ├── candidates/                  # per-candidate markdown writeups
+│   │   ├── delivered/               # resolved outcomes
+│   │   └── archive/                 # superseded
+│   ├── reports/                     # daily operational summaries
+│   ├── working/                     # scratch / session-by-session monitoring notes
+│   └── archive/                     # superseded work, never deleted
+│
+└── reporting_layer/                 # read-only consumers write here, never into the system folder
+    ├── performance_reports/         # system-health dashboards (PDF)
+    ├── <deliverable_type>/          # domain deliverables (theses, memos, briefs…)
+    │   ├── docx/
+    │   ├── pdf/
+    │   └── index.json               # dedup registry keyed by primary entity
+    ├── working/                     # scratch for reporting tasks
+    └── archive/                     # superseded deliverables
+```
+
+**Why the two-folder split is non-negotiable:** scheduled tasks coordinate via two orthogonal mechanisms. Writers to `<domain>_system/` coordinate via `SESSION_LOCK.md`. Readers (reporting tasks) are kept from racing by being *write-isolated* to `reporting_layer/` — they can run concurrently with a writer because they never touch any file the writer touches. Lose this split and you have to lock four tasks instead of two.
+
+---
+
+## PART 3 — THE TEN RELAY FILES (FULL SCHEMAS)
+
+### 3.1 `PROJECT_INSTRUCTIONS.md` — the charter
+
+Sections, in order:
+
+1. **Prime Directive** — the single optimization target ("maximum quality and accuracy", or whatever the domain demands).
+2. **Creativity Standard** — permission to be clever, guardrails against clever-but-wrong.
+3. **Reasoning Standard** — decompose, consider 2–3 approaches, steelman alternatives, stress-test, distinguish verified/inferred/speculated.
+4. **Mandatory Self-Review Checklist** — N items, run before any delivery. Minimum: Accuracy, Logic, Completeness, Adversarial, Calibration, Source, Data-freshness. Domain-specific items appended.
+5. **Data and Source Discipline** — verify don't remember; never assume an API field; test endpoints before building against them; cite everything; flag source conflicts.
+6. **Workspace Structure** — one concept per file; update INDEX in-turn; append to PROGRESS_LOG after every block; record decisions in DECISIONS; never delete, move to `archive/`.
+7. **Autonomous Execution** — take initiative; question the plan continuously; surface blockers to OPEN_QUESTIONS and keep working.
+8. **Session Continuity Protocol** — cold-start read order; shutdown protocol; the test ("if a new session reads SESSION_STATE and can't determine what to do next, the handoff has failed").
+9. **Maximum Utilization Rule** — work until the limit; never sacrifice handoff quality for extra work; hierarchy (handoff > output quality > volume).
+10. **Scheduled Session Behavior** — no chat questions; dependencies reset; fail forward; SESSION_STATE is the contract; settled decisions aren't re-litigated.
+11. **The Standing Question** — "Is this the highest-quality result I'm capable of, and if not, what specifically is missing?"
+
+### 3.2 `README.md` — the entry point
+
+Sections:
+- One-paragraph project summary.
+- **Cold-start read order** (5 files max, in order).
+- **Quick-reference table**: Concept → File.
+- Command snippets for common session operations.
+
+### 3.3 `INSTRUCTIONS.md` — the architecture
+
+Sections:
+
+1. **Cold Start Protocol** — numbered steps. Must include: acquire lock, install deps, read SESSION_STATE, read OPEN_QUESTIONS if flagged, read task-specific file only.
+2. **System Architecture** — layers diagram + common data format (the JSON schema).
+3. **The Strategies / Sources Table** — one row per source, edge rationale.
+4. **Signal / Work-Unit Pipeline** — stage names, thresholds between stages, promotion/demotion rules.
+5. **Execution Model** — what runs in-process vs. spawned; timeout budgets.
+6. **Daily Session Flow** — ordered step list.
+7. **Daily Report Contents** — what the operational task must output.
+8. **Execution Environment** — exact `pip install` line, shell path mappings.
+9. **Folder Structure** — mirror of the layout in Part 2.
+10. **Session Rules** — anti-early-stop, signal-pipeline rules.
+11. **Shutdown Protocol** — numbered steps, lock release last.
+12. **Scheduled Session Behavior** — verbatim from charter.
+13. **Scheduled Tasks** — table of tasks, cron, purpose, write scope.
+14. **Implementation Priority Queue** — remaining build items.
+
+### 3.4 `OBJECTIVES.md` — the goal
+
+Sections:
+- **Primary Goal** (one paragraph).
+- **Mandate** — scope boundaries (universe, horizon, constraints).
+- **Strategy / Method Table** — same rows as INSTRUCTIONS, with edge sources.
+- **Sub-Goals** (4–6 numbered).
+- **Success Criteria** — concrete checklist (7 items).
+- **Definition of Done** — one paragraph describing what "finished and running" means.
+
+### 3.5 `SESSION_STATE.md` — the relay baton (the most important file)
+
+This file is rewritten every session. Keep it short (200–400 lines). Sections:
+- **TOP HEADLINE** — one sentence flagging the single most important thing the next session must know.
+- **Current phase** — Build / Operational / Blocked.
+- **Active work units** — table of currently-tracked items (candidates, tickets, cases). Columns: ID | Score | Status | Next-action date | Notes.
+- **Watchlist** — items under the active threshold but trending toward it.
+- **Future pipeline** — items not yet active but with known trigger dates.
+- **Active warnings** (numbered) — known issues, suppressions, quirks.
+- **Next session priority queue** — 3–7 items in order.
+- **Tool Health** — table: Tool | Compiles? | API green? | Last run | Notes.
+- **Timestamp** of last update.
+
+Test of a good SESSION_STATE: hand it to someone who has never seen the project — can they tell you, in one minute, what to do next? If not, it's too long or too vague.
+
+### 3.6 `SESSION_LOCK.md` — concurrency gate
+
+Two states only.
+
+Locked:
+```
+LOCKED
+Timestamp: 2026-04-14T10:58:47Z
+Session: scheduled-2026-04-14-operational
+```
+
+Unlocked:
+```
+UNLOCKED
+Timestamp: 2026-04-14T12:03:22Z
+Session: completed
+```
+
+**Rules (absolutely non-negotiable):**
+- **Overwrite-only semantics.** Never `rm`. Never try to delete. Sandbox can't always delete reliably.
+- **Stale-lock window:** 4 hours. If a lock's timestamp is older than 4 hours, treat as stale and proceed.
+- **Always release.** The very last step of shutdown, after everything else, is writing "UNLOCKED". If the session dies before this step, the stale-lock window recovers it.
+
+### 3.7 `PROGRESS_LOG.md` — append-only session log
+
+Format: `## Session N — YYYY-MM-DD` header, followed by four blocks:
+- `✅ Completed:`
+- `🔄 In progress:`
+- `⏭️ Next:`
+- `⚠️ Blockers:`
+
+Never edit past sessions. Grows indefinitely — acceptable; it's history, not working state. Read it only when tracing a specific past decision.
+
+### 3.8 `INDEX.md` — the map
+
+One-line per file: `- path/file.md — one-sentence purpose`.
+Updated in the same turn any file is created or substantially changed.
+Acts as a poor-man's search — grep INDEX first before spelunking subfolders.
+
+### 3.9 `DECISIONS.md` — numbered decision log
+
+Each entry:
+```
+## D-047 — <short title>
+Date: 2026-04-13
+Context: <why this came up>
+Decision: <what was chosen>
+Alternatives considered: <1–3 options with reasons rejected>
+Implications: <what this enables or constrains>
+```
+
+Numbered strictly sequentially. A past decision is only reopened if concrete new evidence invalidates it (and then a new decision is appended, not the old one edited).
+
+### 3.10 `OPEN_QUESTIONS.md` — numbered open questions log
+
+Each entry:
+```
+## Q-011 — <short title>
+Status: OPEN | ANSWERED (date)
+Raised: 2026-04-09 Session N
+Question: <precise question>
+Context: <why it matters>
+What we'd need to resolve it: <next step or information required>
+Current workaround: <if any>
+```
+
+Scheduled sessions *never* ask questions in chat. They append here and continue.
+
+---
+
+## PART 4 — THE SCHEDULED-TASK TOPOLOGY
+
+The production system runs four tasks. Two are writers to `<domain>_system/`; two are readers that write only to `reporting_layer/`.
+
+| # | Task | Cron (local) | Write scope | Concurrency |
+|---|------|-------------|-------------|-------------|
+| 1 | `<domain>-operational` | `0 */3 * * *` | `<domain>_system/` (writes) | SESSION_LOCK |
+| 2 | `<domain>-maintenance` | `50 */3 * * *` | `<domain>_system/` (writes) | SESSION_LOCK |
+| 3 | `<domain>-performance-report` | `30 1 * * *` | `reporting_layer/performance_reports/` only | independent |
+| 4 | `<domain>-deep-dives` | `30 */4 * * *` | `reporting_layer/<deliverable>/` only | independent |
+
+**Cron offset logic:** operational fires at `HH:00`; maintenance fires at `HH:50` — ~10 minutes before the next operational. This gives operational a near-complete hour of runway before maintenance contends, and gives maintenance the freshest operational output to validate.
+
+**Why not a single mega-task?** Because an operational scanner session + an accuracy-audit maintenance session + a dashboard renderer + a deliverable generator have different failure modes. Splitting them means one class of bug (e.g., a scanner hang) can't break reporting or auditing.
+
+---
+
+## PART 5 — THE FOUR SKILL.md FILES
+
+Each scheduled task is backed by a `SKILL.md`. Below are minimal templates; adapt the body to the domain.
+
+### 5.1 Operational task SKILL.md template
+
+```
+---
+name: <domain>-operational
+description: Autonomous scheduled run: acquire lock, run scanners, score, monitor, produce daily report.
+---
+
+You are running an autonomous scheduled session for <Project>. No human is present.
+
+PHASE 1 — ORIENT
+1. Concurrency check: Read SESSION_LOCK.md.
+   - If LOCKED and timestamp < 4h old: STOP. Do nothing.
+   - Otherwise: overwrite with "LOCKED / Timestamp: <UTC ISO> / Session: scheduled-<date>-operational".
+2. Install deps: pip install <pkgs> --break-system-packages.
+3. Read SESSION_STATE.md.
+4. Read INSTRUCTIONS.md.
+5. Tool Validation Protocol: py_compile every tool; probe every external endpoint. Log results in SESSION_STATE Tool Health.
+6. If SESSION_STATE flags blockers, read OPEN_QUESTIONS.md.
+
+PHASE 2 — DETERMINE MODE
+MODE A (Build) / MODE B (Operational) / MODE C (Blocked).
+
+PHASE 3 — EXECUTE (Operational mode)
+Run each scanner individually to avoid bash timeout. Aggregate. Score. Promote. Monitor actives. Regenerate outputs.
+
+Anti-early-stop: scanning is step 1 of many. The only valid stop is ALL work genuinely blocked.
+
+PHASE 4 — SHUTDOWN (before context runs out)
+1. Flush working state to files.
+2. Overwrite SESSION_STATE.md.
+3. Append to PROGRESS_LOG.md.
+4. Update INDEX.md if files changed.
+5. Overwrite SESSION_LOCK.md with "UNLOCKED / Timestamp: <UTC> / Session: completed".
+```
+
+### 5.2 Maintenance task SKILL.md template
+
+Scope limits are the essence. Maintenance NEVER runs scanners, NEVER modifies candidates/scoring state.
+
+```
+---
+name: <domain>-maintenance
+description: Structural health + signal audit. Read-mostly; does not produce new candidates.
+---
+
+PHASE 1 — CONCURRENCY + ORIENT
+Same lock check as operational. Session name: maintenance-<date>.
+
+PHASE 2 — STRUCTURAL HEALTH
+- py_compile every tool; clear __pycache__.
+- Probe every external endpoint (status codes into SESSION_STATE Tool Health).
+- signals/ health: count, malformed JSON, orphan files.
+- Prune dedup caches older than retention window.
+
+PHASE 3 — SIGNAL QUALITY AUDIT
+- Watchlist JSON hygiene: schema validity, orphaned entries, date sanity.
+- Rotation-state files valid and monotonic.
+- Orphan signal files (signals with no candidate trace and no audit record).
+
+PHASE 4 — BUG DETECTION + IMPROVEMENT
+- Cross-check SESSION_STATE warnings against observed file state.
+- Propose (log only) improvements to OPEN_QUESTIONS or DECISIONS.
+- NEVER edit candidate files, NEVER re-score, NEVER trigger scanners.
+
+PHASE 5 — SHUTDOWN
+Same as operational.
+```
+
+### 5.3 Performance-report task SKILL.md template
+
+Read-only on the system folder. Writes exclusively to `reporting_layer/performance_reports/`. Build the PDF directly via reportlab (no docx→pdf chain — known failure mode when sandbox mounts mis-sync).
+
+Standard sections: cover → executive summary with KPI strip → per-tool performance → signal production over time → API reachability heatmap → convergence/aggregation engine activity → outcome yield funnel → code health → per-session appendix ledger → report metadata.
+
+### 5.4 Deep-dive deliverable task SKILL.md template
+
+Read-only on the system folder. Writes to `reporting_layer/<deliverable>/{docx,pdf}/` plus `reporting_layer/<deliverable>/index.json` as a dedup registry.
+
+Dedup key: hash the source-of-truth file (e.g., the candidate `.md`). Regenerate the deliverable only if any of (a) never produced, (b) staleness > N days, (c) source hash changed, (d) SESSION_STATE flags a material new finding.
+
+---
+
+## PART 6 — COLD-START PROTOCOL (VERBATIM, PARAMETERIZE NAMES)
+
+```
+1. Read SESSION_STATE.md.            # current phase, actives, warnings, next queue
+2. Read INSTRUCTIONS.md.             # architecture, pipeline, session rules
+3. Read OPEN_QUESTIONS.md — only if SESSION_STATE flags blockers.
+4. Read the ONE task-specific file needed (rubric, strategy spec, etc.).
+5. Do NOT read all files. PROGRESS_LOG is history; read only when tracing past decisions.
+```
+
+Test: if after these 4 reads you can't state "here is what I'll do next", SESSION_STATE has failed. Fix the file, not the protocol.
+
+---
+
+## PART 7 — SHUTDOWN PROTOCOL (VERBATIM)
+
+Detect context pressure *before* starting the next work block, not after it fails. If uncertain, shut down now.
+
+```
+1. Flush all working state to files (complete work to its final location; incomplete work to working/).
+2. Overwrite SESSION_STATE.md — this is the relay baton for the next session.
+3. Append a session block to PROGRESS_LOG.md: ✅ done, 🔄 in progress, ⏭️ next, ⚠️ blockers.
+4. Update INDEX.md if any files changed.
+5. Overwrite SESSION_LOCK.md with "UNLOCKED / Timestamp: <UTC> / Session: completed".
+```
+
+Step 5 is last. If the session dies before it, the 4-hour stale window still recovers — but always aim to release cleanly.
+
+Hierarchy under context pressure: **handoff quality > output quality > output volume.**
+
+---
+
+## PART 8 — ANTI-EARLY-STOP RULES
+
+Scheduled sessions have a recurring failure mode: the model runs the visible first step (e.g., "scan") and stops, because the obvious deliverable looks done. Prevent this explicitly:
+
+1. Write the Daily Session Flow as an ordered list where scanning is step 1 of 10, not the whole job.
+2. In both INSTRUCTIONS.md and every SKILL.md, include an explicit anti-early-stop paragraph: "Running scanners is step 1 of many. There is ALWAYS more work. The only valid stop is ALL work genuinely blocked, in which case document blockers in OPEN_QUESTIONS.md and SESSION_STATE.md."
+3. Prefer "work until the usage limit" framing in the charter. The alternative ("stop when tasks are done") is underspecified — there are never no tasks in a stateful monitoring system.
+
+---
+
+## PART 9 — THE SIGNAL / WORK-UNIT SCHEMA
+
+Every upstream source emits the same JSON shape. This is what makes cross-source convergence possible. Adapt the fields to the domain; keep the structural discipline.
+
+```json
+{
+  "entity_id": "<stable ID — ticker, case number, docket, DOI>",
+  "entity_aux_id": "<secondary ID if applicable — ISIN, filing URL>",
+  "entity_name": "<human-readable name>",
+  "entity_size_metric": 1234.5,
+  "signal_type": "<source-specific enum>",
+  "signal_category": "<coarser category for rotation / filtering>",
+  "strength_estimate": 0.0,
+  "source_url": "https://...",
+  "source_date": "YYYY-MM-DD",
+  "scan_date": "YYYY-MM-DDTHH:MM:SSZ",
+  "raw_data": { "...": "source-specific payload" }
+}
+```
+
+Entity resolution: pick one canonical ID system early and stick to it (in investments: OpenFIGI → ticker+MIC). Without this, convergence silently fails because "AAPL" and "Apple Inc." are different strings.
+
+---
+
+## PART 10 — THE GENERALIZED N-DIMENSION SCORING RUBRIC
+
+A 7-dimension rubric is what the investment system uses. The generalizable pattern:
+
+- Pick 5–9 orthogonal dimensions that *must* be true for a high-quality outcome.
+- Weight them (1.0 / 1.5 / 2.0 — avoid finer gradations; they're not knowable).
+- Score each 1–5 integer. Final score = Σ(weight × dim).
+- Set three thresholds: **active** (e.g., 28+), **watch** (22–27), **archive** (14–21), **discard** (<14).
+- A rubric is a *filter*, not a probability. State this explicitly in the rubric file itself.
+
+Adversarial discipline: if the same rubric always produces scores in a narrow band, the dimensions are correlated. Replace one dimension with something that the top and bottom of your current candidate list disagree on.
+
+---
+
+## PART 11 — THE THREE IMPROVEMENT LOOPS
+
+The system improves itself continuously along three orthogonal axes.
+
+**Loop 1 — In-session improvement.** The operational session, when it encounters a bug or a data-shape surprise, writes either a new open question (if it can't fix) or a decision + code fix (if it can). It never silently patches.
+
+**Loop 2 — Between-scan maintenance.** The maintenance task, running on the offset cron, independently audits the state the operational task produced. Cross-task checking catches things a single task wouldn't notice (e.g., signals emitted but never persisted, watchlist entries with stale dates).
+
+**Loop 3 — Observation-driven.** When a hypothesis is proposed but not yet trusted (e.g., "pre-event price action might be predictive"), it goes into OPEN_QUESTIONS with status OBSERVATION. Sessions log instances, not decisions, until enough data accumulates to move it into DECISIONS with a settled rule.
+
+---
+
+## PART 12 — THE MANDATORY SELF-REVIEW CHECKLIST
+
+Every deliverable passes all N items before release:
+
+1. **Accuracy** — is every factual claim verifiable? Did I actually verify, or rely on memory?
+2. **Logic** — does each conclusion follow from its premises?
+3. **Completeness** — addressed the full scope, not just the easy part?
+4. **Adversarial** — re-read as a hostile reviewer looking for what's wrong.
+5. **Calibration** — are verified / inferred / speculated labeled distinctly?
+6. **Source** — are sources authoritative, current, correctly interpreted?
+7. **Creativity** — is this the most interesting correct answer, or the first correct one?
+8. **Data freshness** — is the data within the expected window, not stale cache or training memory?
+9. **Signal validity** — could this be explained by something mundane (boilerplate, sector move) rather than the thesis I'm building?
+10. **Narrative** — for any external-facing claim, does the market/world narrative match, conflict with, or ignore my thesis?
+
+Domain-specific items appended (e.g., "regulatory status re-checked", "no lyrics reproduced", "PII not persisted").
+
+---
+
+## PART 13 — EXECUTION ENVIRONMENT BOILERPLATE
+
+Every SKILL.md begins its Phase 1 with:
+
+```bash
+pip install <domain-specific packages> --break-system-packages
+```
+
+Dependencies reset between sessions. Never skip this step "because last session installed it."
+
+Path translation in Cowork: the working `C:\...\outputs` directory and the user-mounted folder have different paths in the shell vs. in file tools. Always use absolute paths. Reference the path-mapping block at the top of each skill.
+
+External API discipline:
+- Verify every endpoint's schema with a live call at the start of the build phase. Never code against an assumed field.
+- Rate limits: use batch size 10 for unauthenticated services by default (OpenFIGI pattern).
+- Set a wall-clock budget per scanner (35s for EDGAR-style full-text scans) and a subprocess-level hard-kill (120s) one layer above.
+
+---
+
+## PART 14 — THE TOOL VALIDATION PROTOCOL
+
+Run this at the start of every operational and every maintenance session:
+
+```python
+import py_compile, pathlib
+for p in pathlib.Path("tools").glob("*.py"):
+    try:
+        py_compile.compile(str(p), doraise=True)
+    except py_compile.PyCompileError as e:
+        # log to SESSION_STATE Tool Health as BROKEN
+        ...
+```
+
+Why: a silent file-truncation bug (seen in the investment system regression) leaves a `.py` that imports but is missing its tail. `py_compile` catches truncation because the parser sees an incomplete function body. Running on every session means the bug can't live longer than one cron interval.
+
+Pair with endpoint reachability probes (HEAD or minimal GET per source). Log both into SESSION_STATE's Tool Health table.
+
+---
+
+## PART 15 — CONTEXT-PRESSURE DETECTION HEURISTICS
+
+Autonomous sessions fail worst when they try to do one more task and then run out of context before shutdown. Heuristics:
+
+- After completing any major work block (finishing a scanner pass, writing a candidate), *before* starting another, estimate whether you have enough capacity to do the next block AND execute the full 5-step shutdown.
+- If uncertain, shut down now. A clean handoff is always worth more than a half-finished task the next session can't pick up.
+- Never mix: "flush partial work to `working/`" is acceptable; "leave partial work in context and hope the next session reads the transcript" is not — the next session does not read transcripts.
+
+---
+
+## PART 16 — PORTING THIS TO A NEW DOMAIN (PROCEDURE)
+
+Step-by-step to instantiate this template for a new idea. This is the action end-state of the template.
+
+1. **Name the domain.** This becomes the folder name (`<domain>_system/`) and the task-name prefix (`<domain>-operational`, etc.).
+2. **Write OBJECTIVES.md first.** Primary goal, mandate, success criteria. Everything else follows.
+3. **Enumerate 3–7 sources/strategies.** One file per source in `strategies/`. Each must name: what data, why this source has structural edge, what the entity ID will be, what the signal shape will be.
+4. **Define the signal JSON schema** — one shape all sources emit.
+5. **Define the scoring rubric** — 5–9 dimensions, weights, thresholds.
+6. **Write INSTRUCTIONS.md** — fill in the 14 sections.
+7. **Create the relay files empty but valid**: SESSION_STATE (initial state = Build), SESSION_LOCK (UNLOCKED), PROGRESS_LOG (empty header), INDEX (1 line per existing file), DECISIONS (D-000 = "initial architecture"), OPEN_QUESTIONS (empty).
+8. **Create the four SKILL.md files** from the templates in Part 5, parameterized with the domain name.
+9. **Register the four scheduled tasks** with cron offsets `0 */3`, `50 */3`, `30 1`, `30 */4` (or adjust cadence to the domain's rate of change).
+10. **Run the first operational session manually** to confirm lock acquisition, deps install, one scanner runs end-to-end, SESSION_STATE gets rewritten, lock releases.
+11. **Let it run autonomously for 7 days** before inspecting. The system needs history to reveal its failure modes.
+
+---
+
+## PART 17 — FAILURE MODES TO ANTICIPATE
+
+A curated list, derived from real incidents in the parent investment system's first 55 sessions:
+
+- **Silent file truncation.** Mitigation: Tool Validation Protocol every session.
+- **API endpoint returns 404 where 200 was expected.** Mitigation: reachability probes; record status codes in SESSION_STATE; fall back gracefully rather than crash.
+- **Deduplication keys collide.** Mitigation: hash the source file's *content*, not its path.
+- **Convergence / aggregation false positives** — two signals pointing at the same entity but in opposite directions register as "strong". Mitigation: directional filtering with explicit penalty for conflicting directions.
+- **Watchlist corruption** — entry format drifts over months. Mitigation: maintenance-task schema validation; reject and quarantine malformed entries.
+- **Stale lock from a crashed session.** Mitigation: 4-hour stale-lock window baked into the concurrency check.
+- **SESSION_STATE grows unbounded.** Mitigation: enforce length limit (400 lines); if the information is genuinely needed long-term, it goes in its own named file and SESSION_STATE links to it.
+- **PROGRESS_LOG grows past usable length.** Mitigation: accepted; PROGRESS_LOG is history, never read during routine operation. If truncation becomes necessary, archive to `archive/PROGRESS_LOG_through_YYYY-MM-DD.md` and restart.
+- **Scheduled task forgets to release the lock.** Mitigation: the stale-lock window recovers automatically within 4 hours; plus, the shutdown protocol makes lock-release the literal last step, so if *any* shutdown step fires, release fires.
+- **Two writer tasks accidentally overlap because of clock skew.** Mitigation: cron offsets are ≥10 minutes; lock check is the very first action of every task.
+- **A "clever" signal that turns out to be explained by mundane boilerplate.** Mitigation: Self-Review item #9 (Signal validity) is mandatory before any candidate promotion.
+
+---
+
+## PART 18 — THE STANDING QUESTION
+
+Across every session, before every meaningful output, the model asks itself:
+
+> "Is this the highest-quality, most accurate, most thoroughly validated, most insightful result I am capable of producing for this objective — and if not, what specifically do I need to do before I'm willing to call it done?"
+
+If the answer is anything other than an honest yes, keep working.
+
+---
+
+## HOW TO USE THIS TEMPLATE IN A NEW PROJECT — ACTION END-STATE
+
+1. **Read this file in full** at the start of the new-idea conversation. Do not skim.
+2. **Iterate with the user** on the adaptation questions: What sources? What entity ID? What scoring dimensions and thresholds? What deliverables? What cadence? What is the mandate and what is out of scope?
+3. **Record adaptation decisions** in draft form during the conversation. When the user confirms, they become `OBJECTIVES.md` and `DECISIONS.md` D-000 in the new project folder.
+4. **Follow Part 16** step-by-step to instantiate the folder, files, and scheduled tasks.
+5. **Do not skip steps 1–3.** Jumping to Part 16 without the adaptation conversation produces a system shaped like the parent project rather than shaped like the new problem.

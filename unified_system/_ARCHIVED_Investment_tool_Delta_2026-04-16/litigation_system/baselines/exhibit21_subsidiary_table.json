@@ -1,0 +1,25 @@
+{
+  "_schema_version": 1,
+  "_description": "Subsidiary -> parent issuer table built from SEC Exhibit 21 filings. Used by party_resolver.py as fallback step 4 when EDGAR exact/fuzzy match fails. Source: efts.sec.gov/LATEST/search-index?q=\"Exhibit+21\"&forms=10-K. Key = normalized subsidiary name (lowercase, suffix-stripped). Value = parent CIK + derivation.",
+  "_entry_schema": {
+    "parent_cik": "zero-padded 10-digit SEC CIK of the registrant whose 10-K/Exhibit-21 lists this sub",
+    "parent_name": "canonical name of the parent per SEC records",
+    "parent_ticker": "primary ticker of the parent",
+    "parent_issuer_figi": "share-class FIGI of the parent (may be null until separately resolved)",
+    "relationship": "one of: wholly_owned | majority_owned | minority_stake | joint_venture | unknown; derived from Exhibit-21 wording",
+    "exhibit21_source_url": "accession-specific URL of the Exhibit-21 file that supplied this mapping",
+    "filing_date": "ISO 8601 date of the 10-K filing",
+    "jurisdiction": "state/country of incorporation as listed in Exhibit 21 (when parsed)",
+    "confidence_tier": "direct (sub named as direct sub of parent, 0.90) | indirect (sub named under an intermediate holding, 0.75)",
+    "observed_aliases": "optional list of alternative names for this sub observed across Exhibit-21 filings",
+    "last_refreshed_at": "ISO 8601 UTC of the last 10-K scrape that touched this entry"
+  },
+  "_population_status": "EMPTY. Target: top 100 S&P 500 constituents by market cap, latest 10-K each. Blocked this session by Cowork sandbox unavailability; the efts.sec.gov query path is VERIFIED live (see CONTEXT.md). Expected yield: ~8,000-15,000 subsidiary rows after de-duplication. Population script to be added at tools/build_exhibit21_table.py in the next session.",
+  "_known_caveats": [
+    "Exhibit 21 is a tabular but unstructured filing — parser must handle LaTeX/TeX artifacts, HTML tables, and plain-text tab-separated layouts.",
+    "Intermediate holding companies can obscure the economic parent; confidence_tier=indirect flags this.",
+    "Some registrants file Exhibit 21 as 'Not Applicable' or exempt — these contribute nothing to the table and should not be re-queried on subsequent refreshes.",
+    "Name collisions across parents (e.g., 'Holdings I LLC') are real; the resolver consumes exact-normalized matches only. Collisions surface as multiple entries under the same key and must be disambiguated by the caller."
+  ],
+  "entries": {}
+}

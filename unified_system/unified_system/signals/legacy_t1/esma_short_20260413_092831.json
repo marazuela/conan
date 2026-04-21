@@ -1,0 +1,45 @@
+[
+  {
+    "ticker": "SAX.DE",
+    "isin": "DE0007493991",
+    "company_name": "Str\u00f6er SE & Co. KGaA",
+    "market_cap_mm": 1913.4,
+    "signal_type": "short_new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "PDT Partners, LLC",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-10",
+      "isin": "DE0007493991"
+    }
+  },
+  {
+    "ticker": "BOSS.DE",
+    "isin": "DE000A1PHFF7",
+    "company_name": "HUGO BOSS AG",
+    "market_cap_mm": 2550.1,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Marshall Wace LLP",
+      "position_pct": 1.98,
+      "previous_position_pct": 2.09,
+      "change_pct": -0.11,
+      "position_date": "2026-04-10",
+      "isin": "DE000A1PHFF7",
+      "crowded_info": "[{\"holder\": \"ExodusPoint Capital Management, LP\", \"position_pct\": 0.61, \"date\": \"2026-04-10\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 1.98, \"date\": \"2026-04-10\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.79, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"BlackRock Investment Management (UK) Limited\", \"position_pct\": 1.26, \"date\": \"2026-04-02\", \"regulator\": \"BAFIN\"}, {\"holder\": \"SIH Partners, LLLP\", \"position_pct\": 0.71, \"date\": \"2026-04-02\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 0.59, \"date\": \"2026-03-31\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.72, \"date\": \"2026-03-26\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Landseer Asset Management UK LLP\", \"position_pct\": 0.52, \"date\": \"2026-01-16\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 0.7, \"date\": \"2025-05-21\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Tybourne Equity Master Fund\", \"position_pct\": 0.72, \"date\": \"2020-03-13\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Adage Capital Management L.P.\", \"position_pct\": 0.56, \"date\": \"2017-09-21\", \"regulator\": \"BAFIN\"}]"
+    }
+  }
+]

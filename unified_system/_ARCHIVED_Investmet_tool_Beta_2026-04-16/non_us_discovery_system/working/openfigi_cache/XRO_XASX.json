@@ -1,0 +1,11 @@
+{
+  "ticker_local": "XRO",
+  "mic": "XASX",
+  "figi": "BBG003LRCQ09",
+  "issuer_figi": "BBG003LRCPZ3",
+  "name": "XERO LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

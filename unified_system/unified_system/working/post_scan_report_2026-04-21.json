@@ -1,0 +1,138 @@
+{
+  "ran_at_utc": "2026-04-21T14:16:21.886555Z",
+  "per_scanner_signals_seen": {
+    "bmv_scanner_output.json": 8,
+    "bse_nse_scanner_output.json": 44,
+    "courtlistener_scanner_output.json": 0,
+    "cvm_scanner_output.json": 76,
+    "edgar_filing_monitor_scanner_output.json": 0,
+    "hkex_scanner_output.json": 4,
+    "kind_scanner_output.json": 0,
+    "pre_phase3_readout_scanner_output.json": 115,
+    "sec_enforcement_scanner_output.json": 30,
+    "sedar_plus_scanner_output.json": 0,
+    "takeover_candidate_scanner_output.json": 85,
+    "tdnet_scanner_output.json": 42
+  },
+  "ingestion": {
+    "added": 0,
+    "skipped_duplicates": 404,
+    "total": 765
+  },
+  "hooks": {
+    "catalyst_calendar": {
+      "status": "ok",
+      "summary": {
+        "n_total": 40,
+        "per_bucket": {
+          "overdue": 0,
+          "this_week": 4,
+          "next_30_days": 11,
+          "30_to_90_days": 23,
+          "90_plus_days": 0
+        },
+        "per_source": {
+          "curated": 5,
+          "pre_phase3_readout": 35
+        },
+        "per_event_type": {
+          "activist_proxy": 1,
+          "PDUFA": 3,
+          "shareholder_meeting": 1,
+          "trial_readout": 35
+        }
+      },
+      "out_json": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/catalyst_calendar.json",
+      "out_md": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/catalyst_calendar.md"
+    },
+    "candidate_monitor": {
+      "status": "ok",
+      "dry_run": true,
+      "tickers_checked": [
+        "RPAY",
+        "VRDN",
+        "AXSM",
+        "VERA",
+        "RGR"
+      ],
+      "n_archived": 0,
+      "n_reviews": 0,
+      "errors": [],
+      "report_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/candidate_monitor_report_2026-04-21.json"
+    },
+    "legacy_candidate_reconcile": {
+      "status": "error",
+      "error": "KeyError('SUPABASE_URL')"
+    },
+    "validate_signal_log": {
+      "status": "ok",
+      "signal_log_size": 765,
+      "max_severity": "green",
+      "counts": {
+        "red": 0,
+        "yellow": 0,
+        "green": 11,
+        "info": 0
+      },
+      "out": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/signals/_validation_report.json"
+    },
+    "legal_enricher": {
+      "status": "ok",
+      "enriched": 46,
+      "by_color": {
+        "GREEN": 0,
+        "YELLOW": 15,
+        "ORANGE": 18,
+        "RED": 13
+      },
+      "report_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/legal_enrichment_report_2026-04-21.json"
+    },
+    "biotech_enricher": {
+      "status": "ok",
+      "enriched": 115,
+      "by_color": {
+        "GREEN": 23,
+        "YELLOW": 78,
+        "ORANGE": 14,
+        "RED": 0
+      },
+      "tier_histogram": {
+        "endpoint": {
+          "1": 0,
+          "2": 14,
+          "3": 38,
+          "4": 56,
+          "5": 7
+        },
+        "sponsor": {
+          "1": 0,
+          "2": 0,
+          "3": 21,
+          "4": 43,
+          "5": 51
+        }
+      },
+      "report_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/biotech_enrichment_report_2026-04-21.json"
+    },
+    "health_check": {
+      "status": "ok",
+      "max_severity": "green",
+      "counts": {
+        "red": 0,
+        "yellow": 0,
+        "green": 36,
+        "info": 6
+      },
+      "out_json": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/health_report_20260421_1416.json",
+      "out_md": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/working/health_report_20260421_1416.md"
+    },
+    "build_dashboard": {
+      "status": "ok",
+      "dashboard": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/DASHBOARD.html",
+      "signal_count": 765,
+      "health": "green",
+      "live_candidates": 5,
+      "drafts_pending": 0
+    }
+  }
+}

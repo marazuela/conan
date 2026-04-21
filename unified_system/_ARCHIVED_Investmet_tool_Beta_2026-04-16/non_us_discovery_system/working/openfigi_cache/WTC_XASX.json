@@ -1,0 +1,11 @@
+{
+  "ticker_local": "WTC",
+  "mic": "XASX",
+  "figi": "BBG00CJZ0G27",
+  "issuer_figi": "BBG00CJZ0G09",
+  "name": "WISETECH GLOBAL LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

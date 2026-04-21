@@ -1,0 +1,11 @@
+{
+  "ticker_local": "WMI",
+  "mic": "XASX",
+  "figi": "BBG00GQ4R1Z7",
+  "issuer_figi": "BBG00GQ4R1Y8",
+  "name": "WAM MICROCAP LTD",
+  "security_type": "Mutual Fund",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

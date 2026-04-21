@@ -1,0 +1,402 @@
+[
+  {
+    "ticker": "RVYL",
+    "isin": null,
+    "company_name": "RYVYL Inc.  (RVYL)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1419275/000118518526001363",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "liquidity shortfall",
+      "filing_type": "10-K",
+      "cik": "0001419275",
+      "adsh": "0001185185-26-001363",
+      "file_description": "FORM 10-K",
+      "company_raw": "RYVYL Inc.  (RVYL)  (CIK 0001419275)"
+    }
+  },
+  {
+    "ticker": "NMHI",
+    "isin": null,
+    "company_name": "Nature's Miracle Holding Inc.  (NMHI, NMHIW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1947861/000121390026044157",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "liquidity shortfall",
+      "filing_type": "10-K",
+      "cik": "0001947861",
+      "adsh": "0001213900-26-044157",
+      "file_description": "ANNUAL REPORT",
+      "company_raw": "Nature's Miracle Holding Inc.  (NMHI, NMHIW)  (CIK 0001947861)"
+    }
+  },
+  {
+    "ticker": "HYAC",
+    "isin": null,
+    "company_name": "Haymaker Acquisition Corp. 4  (HYAC, HYAC-UN, HYAC-WT)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1970509/000110465926043241",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K",
+      "cik": "0001970509",
+      "adsh": "0001104659-26-043241",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Haymaker Acquisition Corp. 4  (HYAC, HYAC-UN, HYAC-WT)  (CIK 0001970509)"
+    }
+  },
+  {
+    "ticker": "RMIX",
+    "isin": null,
+    "company_name": "Suncrete, Inc.  (RMIX)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2094433/000110465926043237",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K",
+      "cik": "0002094433",
+      "adsh": "0001104659-26-043237",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Suncrete, Inc.  (RMIX)  (CIK 0002094433)"
+    }
+  },
+  {
+    "ticker": "CSDX",
+    "isin": null,
+    "company_name": "CS DIAGNOSTICS CORP.  (CSDX)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1106861/000121465926004694",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001106861",
+      "adsh": "0001214659-26-004694",
+      "file_description": null,
+      "company_raw": "CS DIAGNOSTICS CORP.  (CSDX)  (CIK 0001106861)"
+    }
+  },
+  {
+    "ticker": "BNAI",
+    "isin": null,
+    "company_name": "Brand Engagement Network Inc.  (BNAI, BNAIW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1838163/000149315226016954",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001838163",
+      "adsh": "0001493152-26-016954",
+      "file_description": "EX-23.1",
+      "company_raw": "Brand Engagement Network Inc.  (BNAI, BNAIW)  (CIK 0001838163)"
+    }
+  },
+  {
+    "ticker": "COSM",
+    "isin": null,
+    "company_name": "Cosmos Health Inc.  (COSM)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1474167/000147793226002278",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001474167",
+      "adsh": "0001477932-26-002278",
+      "file_description": "CONSENT",
+      "company_raw": "Cosmos Health Inc.  (COSM)  (CIK 0001474167)"
+    }
+  },
+  {
+    "ticker": "BOXL",
+    "isin": null,
+    "company_name": "Boxlight Corp  (BOXL)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1624512/000162828026025273",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001624512",
+      "adsh": "0001628280-26-025273",
+      "file_description": "EX-23.11",
+      "company_raw": "Boxlight Corp  (BOXL)  (CIK 0001624512)"
+    }
+  },
+  {
+    "ticker": "POLA",
+    "isin": null,
+    "company_name": "Polar Power, Inc.  (POLA)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1622345/000149315226016671",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001622345",
+      "adsh": "0001493152-26-016671",
+      "file_description": "EX-23.1",
+      "company_raw": "Polar Power, Inc.  (POLA)  (CIK 0001622345)"
+    }
+  },
+  {
+    "ticker": "DPLS",
+    "isin": null,
+    "company_name": "DarkPulse, Inc.  (DPLS)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/866439/000168316826002937",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0000866439",
+      "adsh": "0001683168-26-002937",
+      "file_description": "CONSENT",
+      "company_raw": "DarkPulse, Inc.  (DPLS)  (CIK 0000866439)"
+    }
+  },
+  {
+    "ticker": "FOXO",
+    "isin": null,
+    "company_name": "FOXO TECHNOLOGIES INC.  (FOXO, FOXOW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1812360/000149315226016725",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001812360",
+      "adsh": "0001493152-26-016725",
+      "file_description": "EX-23.1",
+      "company_raw": "FOXO TECHNOLOGIES INC.  (FOXO, FOXOW)  (CIK 0001812360)"
+    }
+  },
+  {
+    "ticker": "YHC",
+    "isin": null,
+    "company_name": "LQR House Inc.  (YHC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1843165/000121390026044131",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001843165",
+      "adsh": "0001213900-26-044131",
+      "file_description": "CONSENT OF DBBMCKENNON",
+      "company_raw": "LQR House Inc.  (YHC)  (CIK 0001843165)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Lomond Therapeutics Holdings, Inc.",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1900520/000121390026044136",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001900520",
+      "adsh": "0001213900-26-044136",
+      "file_description": "CONSENT OF EISNERAMPER LLP, INDEPENDENT REGISTERED PUBLIC ACCOUNTING FIRM",
+      "company_raw": "Lomond Therapeutics Holdings, Inc.  (CIK 0001900520)"
+    }
+  },
+  {
+    "ticker": "DBGI",
+    "isin": null,
+    "company_name": "Digital Brands Group, Inc.  (DBGI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1668010/000149315226016851",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001668010",
+      "adsh": "0001493152-26-016851",
+      "file_description": "EX-23.1",
+      "company_raw": "Digital Brands Group, Inc.  (DBGI)  (CIK 0001668010)"
+    }
+  },
+  {
+    "ticker": "NCL",
+    "isin": null,
+    "company_name": "Northann Corp.  (NCL)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1923780/000157587226000245",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001923780",
+      "adsh": "0001575872-26-000245",
+      "file_description": "EXHIBIT 23.1",
+      "company_raw": "Northann Corp.  (NCL)  (CIK 0001923780)"
+    }
+  },
+  {
+    "ticker": "SERV",
+    "isin": null,
+    "company_name": "Serve Robotics Inc. /DE/  (SERV)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1832483/000121390026043149",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K/A",
+      "cik": "0001832483",
+      "adsh": "0001213900-26-043149",
+      "file_description": "AUDITED CONSOLIDATED FINANCIAL STATEMENTS OF DILIGENT ROBOTICS, INC. FOR THE YEAR ENDED DECEMBER 31, 2025",
+      "company_raw": "Serve Robotics Inc. /DE/  (SERV)  (CIK 0001832483)"
+    }
+  },
+  {
+    "ticker": "HNOI",
+    "isin": null,
+    "company_name": "HNO International, Inc.  (HNOI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1342916/000134291626000019",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K",
+      "cik": "0001342916",
+      "adsh": "0001342916-26-000019",
+      "file_description": "FORM 8-K",
+      "company_raw": "HNO International, Inc.  (HNOI)  (CIK 0001342916)"
+    }
+  },
+  {
+    "ticker": "SNSE",
+    "isin": null,
+    "company_name": "Sensei Biotherapeutics, Inc.  (SNSE)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1829802/000119312526157038",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K/A",
+      "cik": "0001829802",
+      "adsh": "0001193125-26-157038",
+      "file_description": "EX-99.3",
+      "company_raw": "Sensei Biotherapeutics, Inc.  (SNSE)  (CIK 0001829802)"
+    }
+  },
+  {
+    "ticker": "TAAG",
+    "isin": null,
+    "company_name": "Awareness Group, Inc.  (TAAG)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1386044/000147793226002310",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001386044",
+      "adsh": "0001477932-26-002310",
+      "file_description": "FORM 10-K",
+      "company_raw": "Awareness Group, Inc.  (TAAG)  (CIK 0001386044)"
+    }
+  },
+  {
+    "ticker": "WERN",
+    "isin": null,
+    "company_name": "WERNER ENTERPRISES INC  (WERN)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/793074/000079307426000090",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K/A",
+      "cik": "0000793074",
+      "adsh": "0000793074-26-000090",
+      "file_description": "EX-99.1",
+      "company_raw": "WERNER ENTERPRISES INC  (WERN)  (CIK 0000793074)"
+    }
+  }
+]

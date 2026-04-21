@@ -1,0 +1,11 @@
+{
+  "ticker_local": "RNK",
+  "mic": "XLON",
+  "figi": "BBG000BDZ5Z0",
+  "issuer_figi": "BBG000BDZ517",
+  "name": "RANK GROUP PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

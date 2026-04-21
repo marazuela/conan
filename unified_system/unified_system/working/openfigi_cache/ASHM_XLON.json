@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ASHM",
+  "mic": "XLON",
+  "figi": "BBG000BQY7Z8",
+  "issuer_figi": "BBG000BQY715",
+  "name": "ASHMORE GROUP PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

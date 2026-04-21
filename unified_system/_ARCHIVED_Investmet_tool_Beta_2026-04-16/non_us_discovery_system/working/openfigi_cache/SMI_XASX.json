@@ -1,0 +1,11 @@
+{
+  "ticker_local": "SMI",
+  "mic": "XASX",
+  "figi": "BBG004LS4065",
+  "issuer_figi": "BBG004D522P1",
+  "name": "SANTANA MINERALS LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "ticker": "DOU.DE",
+    "isin": "DE000BEAU1Y4",
+    "company_name": "Douglas AG",
+    "market_cap_mm": null,
+    "signal_type": "short_new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-17",
+    "scan_date": "2026-04-20",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Citadel Advisors LLC",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-17",
+      "isin": "DE000BEAU1Y4"
+    }
+  },
+  {
+    "ticker": "TUIFF.DE",
+    "isin": "DE000TUAG505",
+    "company_name": "TUI AG",
+    "market_cap_mm": null,
+    "signal_type": "short_large_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-17",
+    "scan_date": "2026-04-20",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "D. E. Shaw & Co., L.P.",
+      "position_pct": 2.0,
+      "previous_position_pct": 1.91,
+      "change_pct": 0.09,
+      "position_date": "2026-04-17",
+      "isin": "DE000TUAG505",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co., L.P.\", \"position_pct\": 2.0, \"date\": \"2026-04-17\", \"regulator\": \"BAFIN\"}, {\"holder\": \"BlackRock Financial Management, Inc.\", \"position_pct\": 0.71, \"date\": \"2026-04-16\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Capital Fund Management SA\", \"position_pct\": 1.03, \"date\": \"2026-04-15\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 1.65, \"date\": \"2026-04-07\", \"regulator\": \"BAFIN\"}, {\"holder\": \"LMR Partners LLP\", \"position_pct\": 0.62, \"date\": \"2026-03-24\", \"regulator\": \"BAFIN\"}]"
+    }
+  }
+]

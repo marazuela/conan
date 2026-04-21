@@ -1,0 +1,11 @@
+{
+  "ticker_local": "LMP",
+  "mic": "XLON",
+  "figi": "BBG000QC9200",
+  "issuer_figi": "BBG000QC91S2",
+  "name": "LONDONMETRIC PROPERTY PLC",
+  "security_type": "REIT",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

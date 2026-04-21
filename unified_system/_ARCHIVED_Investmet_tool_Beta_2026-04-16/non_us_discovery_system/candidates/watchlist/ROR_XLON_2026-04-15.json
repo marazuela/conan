@@ -1,0 +1,30 @@
+{
+  "ticker_local": "ROR",
+  "mic": "XLON",
+  "ticker_plus_mic": "ROR.XLON",
+  "company_name_en": "ROTORK PLC",
+  "figi": "BBG000BDZHT1",
+  "issuer_figi": "BBG000BDZHL9",
+  "signal_id": "52ac2dda2005973e754b1ac311504d20",
+  "signal_type": "buyback_initiation",
+  "signal_category": "shareholder",
+  "thesis_direction": "long",
+  "score_total": 25.0,
+  "rubric_scores": {
+    "signal_strength": 3,
+    "catalyst_clarity": 3,
+    "info_asymmetry": 2,
+    "risk_reward": 3,
+    "edge_decay": 3,
+    "liquidity": 4,
+    "catalyst_timeline": 3
+  },
+  "translation_confidence": "n/a",
+  "market_cap_usd_mm": 3456.27,
+  "source_url": "https://www.investegate.co.uk/announcement/rns/rotork--ror/share-buyback-programme/9521981",
+  "source_date": "2026-04-15T13:19:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "lse_rns",
+  "routing": "watchlist",
+  "raw_headline": "Share buyback programme"
+}

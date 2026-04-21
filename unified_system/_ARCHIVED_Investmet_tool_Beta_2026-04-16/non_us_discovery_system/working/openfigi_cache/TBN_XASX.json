@@ -1,0 +1,11 @@
+{
+  "ticker_local": "TBN",
+  "mic": "XASX",
+  "figi": "BBG01K8LD2N5",
+  "issuer_figi": "BBG01K8LD2M6",
+  "name": "TAMBORAN RESOURCES CORP-CDI",
+  "security_type": "Depositary Receipt",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

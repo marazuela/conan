@@ -1,0 +1,202 @@
+[
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Corgi ETF Trust III",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2100194/000210019426000008",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "N-1A/A",
+      "cik": "0002100194",
+      "adsh": "0002100194-26-000008",
+      "file_description": "PRE-EFFECTIVE AMENDMENT TO REGISTRATION STATEMENT ON FORM N-1A",
+      "company_raw": "Corgi ETF Trust III  (CIK 0002100194)"
+    }
+  },
+  {
+    "ticker": "HON",
+    "isin": null,
+    "company_name": "HONEYWELL INTERNATIONAL INC  (HON)",
+    "market_cap_mm": 150057.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/773840/000077384026000031",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "ARS",
+      "cik": "0000773840",
+      "adsh": "0000773840-26-000031",
+      "file_description": "ARS",
+      "company_raw": "HONEYWELL INTERNATIONAL INC  (HON)  (CIK 0000773840)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Dorian Inc.",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1818452/000181845226000003",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "C",
+      "cik": "0001818452",
+      "adsh": "0001818452-26-000003",
+      "file_description": "DORYY.PDF",
+      "company_raw": "Dorian Inc.  (CIK 0001818452)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Lumida Inc",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2098128/000209812826000001",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "C",
+      "cik": "0002098128",
+      "adsh": "0002098128-26-000001",
+      "file_description": "LUMS.PDF",
+      "company_raw": "Lumida Inc  (CIK 0002098128)"
+    }
+  },
+  {
+    "ticker": "MHO",
+    "isin": null,
+    "company_name": "M/I HOMES, INC.  (MHO)",
+    "market_cap_mm": 3271.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/799292/000119312526150356",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0000799292",
+      "adsh": "0001193125-26-150356",
+      "file_description": "DEF 14A",
+      "company_raw": "M/I HOMES, INC.  (MHO)  (CIK 0000799292)"
+    }
+  },
+  {
+    "ticker": "MHO",
+    "isin": null,
+    "company_name": "M/I HOMES, INC.  (MHO)",
+    "market_cap_mm": 3271.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/799292/000119312526150356",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0000799292",
+      "adsh": "0001193125-26-150356",
+      "file_description": "DEF 14A",
+      "company_raw": "M/I HOMES, INC.  (MHO)  (CIK 0000799292)"
+    }
+  },
+  {
+    "ticker": "TMDX",
+    "isin": null,
+    "company_name": "TransMedics Group, Inc.  (TMDX)",
+    "market_cap_mm": 3745.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1756262/000119312526150357",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001756262",
+      "adsh": "0001193125-26-150357",
+      "file_description": "DEF 14A",
+      "company_raw": "TransMedics Group, Inc.  (TMDX)  (CIK 0001756262)"
+    }
+  },
+  {
+    "ticker": "PSFE",
+    "isin": null,
+    "company_name": "Paysafe Ltd  (PSFE, PSEWF)",
+    "market_cap_mm": 421.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1833835/000119312526150337",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "6-K",
+      "cik": "0001833835",
+      "adsh": "0001193125-26-150337",
+      "file_description": "EX-99.1",
+      "company_raw": "Paysafe Ltd  (PSFE, PSEWF)  (CIK 0001833835)"
+    }
+  },
+  {
+    "ticker": "HBNB",
+    "isin": null,
+    "company_name": "Hotel101 Global Holdings Corp.  (HBNB)",
+    "market_cap_mm": 1468.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2054507/000121390026042167",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "6-K",
+      "cik": "0002054507",
+      "adsh": "0001213900-26-042167",
+      "file_description": "NOTICE OF EXTRAORDINARY GENERAL MEETING OF SHAREHOLDERS OF HOTEL101 GLOBAL HOLDINGS CORP. TO BE HELD ON APRIL 22, 2026, WITH ATTACHED ANNEXES",
+      "company_raw": "Hotel101 Global Holdings Corp.  (HBNB)  (CIK 0002054507)"
+    }
+  },
+  {
+    "ticker": "HON",
+    "isin": null,
+    "company_name": "HONEYWELL INTERNATIONAL INC  (HON)",
+    "market_cap_mm": 150057.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/773840/000077384026000029",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "DEF 14A",
+      "cik": "0000773840",
+      "adsh": "0000773840-26-000029",
+      "file_description": "DEF 14A",
+      "company_raw": "HONEYWELL INTERNATIONAL INC  (HON)  (CIK 0000773840)"
+    }
+  }
+]

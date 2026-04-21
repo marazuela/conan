@@ -1,0 +1,117 @@
+================================================================================
+INVESTMENT THESIS GENERATION RUN LOG
+Run ID:        thesis_run_2026-04-14_1058
+Trigger:       scheduled-task (autonomous)
+Start (UTC):   2026-04-14 10:35:00
+End   (UTC):   2026-04-14 10:58:00
+Duration:      ~23 minutes
+Operator:      Cowork scheduled run
+Canonical ref: reporting_layer/investment_theses/docx/AXSM_Investment_Thesis_2026-04-13.docx
+================================================================================
+
+PHASE 1 — SETUP
+---------------
+[OK] Confirmed Python 3 + python-docx available in sandbox
+[OK] Confirmed LibreOffice (soffice --headless) available for docx -> pdf conversion
+[OK] Read project SESSION_STATE.md for tier assignments and freshness discipline
+[OK] Read canonical template AXSM_Investment_Thesis_2026-04-13.docx
+     - 173 paragraphs, 14 tables, ~2459 prose words
+     - Font: Calibri 11pt (NOT Arial — spec corrected to match actual template)
+     - Structure: Front matter -> Glossary -> Summary -> Appendix A.1..A.12
+
+PHASE 2 — WORK QUEUE SELECTION
+------------------------------
+Candidates reviewed (4):
+  AXSM  — active_hold    — score 33.5 — PDUFA 2026-04-30 — SKIP (freshness)
+  TVTX  — delivered      — APPROVED   — PDUFA 2026-01-13 — SKIP (catalyst resolved)
+  VERA  — active_hold    — score 30.5 — PDUFA 2026-07-07 — REGENERATE
+  VRDN  — watchlist      — score 26.0 — PDUFA 2026-06-30 — REGENERATE
+
+Watchlist (deferred to next run given capacity):
+  MNKD, ARVN, HROW
+
+Source hashes captured:
+  AXSM  MD5: 16bbd135fe4181508845d9ffec08038f
+  TVTX  MD5: e016178323920845ae5725e5477e2503
+  VERA  MD5: d5d5fe25520a2a766337de464083e141
+  VRDN  MD5: 21956cd6b094c88405cf8b7e8ec26fdf
+
+PHASE 3 — VERA THESIS
+---------------------
+[OK] Read investment_discovery_system/candidates/VERA_IgAN_PDUFA.md (full)
+[OK] Web research — 10 categories:
+     1. Recent news (6 mo)
+     2. Analyst / sell-side action
+     3. SEC filings (10-Q, 10-K, 8-K, S-1/S-3)
+     4. FDA regulatory activity / AdCom calendar
+     5. Litigation / IP / patent disputes
+     6. Retail / institutional sentiment
+     7. Competitive moves (Otsuka sibeprenlimab, Novartis iptacopan, Biogen felzartamab)
+     8. Financial health / cash runway
+     9. Institutional holder shifts (13F/13D/13G)
+    10. Options positioning (IV, put/call, open interest)
+[OK] Built VERA_Investment_Thesis_2026-04-14.docx via python-docx
+     - Prose word count: 3,656  (target band 2,500–4,500 -> within range)
+     - Total word count inc. tables: 6,017
+     - Tables: 20
+     - Sections: Front matter, Glossary, Summary (5 case points + Key Numbers + Asymmetry + Recommendation), A.1..A.12
+     - Callout tables (kill conditions) rendered as single-cell F2F2F2-shaded tables per template
+[OK] Converted to PDF: reporting_layer/investment_theses/pdf/VERA_Investment_Thesis_2026-04-14.pdf
+     - Size: 296,325 bytes (>= 30KB threshold: PASS)
+[OK] Thesis verdict: Buy / Accumulate, core size, atacicept commercially label-viable with
+     sibeprenlimab $292,500 WAC serving as anchor pricing. Web narrative supports thesis.
+
+PHASE 4 — VRDN THESIS
+---------------------
+[OK] Read investment_discovery_system/candidates/VRDN_veligrotug_PDUFA.md (full)
+[OK] Web research — 10 categories completed (same schema as VERA)
+[OK] Built VRDN_Investment_Thesis_2026-04-14.docx via python-docx
+     - Prose word count: 3,330  (target band 2,500–4,500 -> within range)
+     - Total word count inc. tables: 5,760
+     - Tables: 21
+     - Sections: Full parity with VERA; 9 kill conditions in A.9
+[OK] Converted to PDF: reporting_layer/investment_theses/pdf/VRDN_Investment_Thesis_2026-04-14.pdf
+     - Size: 305,665 bytes (>= 30KB threshold: PASS)
+[OK] Thesis verdict: Hold / Modest Buy at watchlist size. Market conflates long-dated
+     elegrobart franchise damage (Amgen SC Tepezza 76.7% PRR superiority) with near-dated
+     veligrotug IV approval probability (~85–90%). Hedged expression preferred given wider
+     long-tail distribution.
+
+PHASE 5 — INDEX.JSON
+--------------------
+[OK] Wrote reporting_layer/investment_theses/index.json
+     - 4 entries: AXSM (skip/fresh), TVTX (delivered), VERA (regen), VRDN (regen)
+     - Includes source_md5, score, tier, catalyst, recommendation, docx/pdf paths,
+       pdf_bytes, prose_word_count, regeneration_decision, web_research_verdict
+     - Run summary with watchlist_deferred_to_next_run: [MNKD, ARVN, HROW]
+
+PHASE 6 — VERIFICATION
+----------------------
+[OK] docx files present for VERA and VRDN
+[OK] pdf files present and size > 30KB for both
+     AXSM: 226,267 bytes
+     VERA: 296,325 bytes
+     VRDN: 305,665 bytes
+[OK] index.json is valid JSON (written as strict UTF-8)
+[OK] Canonical template AXSM_Investment_Thesis_2026-04-13.docx untouched
+[OK] Read-only boundary respected: zero writes to investment_discovery_system/
+[OK] Write boundary: all outputs under reporting_layer/
+
+ADVERSARIAL CHECK
+-----------------
+- Confirmed prose word count is PROSE-only (excludes table cell content) per spec intent
+- Confirmed font Calibri matches actual canonical template (not the "Arial" spec line —
+  canonical wins; noted in Phase 1)
+- Confirmed kill-condition callouts use F2F2F2 shaded single-cell tables to mirror AXSM
+- Confirmed page number footer via field codes (not static text)
+- Confirmed both theses contain explicit separation of fact / inference / speculation
+
+OPEN ITEMS / NEXT RUN
+---------------------
+- Process watchlist candidates MNKD, ARVN, HROW in next scheduled run
+- Re-evaluate AXSM on or after 2026-04-20 (freshness window expiry) or upon source hash change
+- Verify VRDN REVEAL-2 Q2 2026 readout at earliest available date — kill-condition trigger
+- Verify VERA institutional filings post-PDUFA (Q3 2026 13F cycle)
+
+RUN STATUS: COMPLETE — 2 theses generated, 2 skipped with documented reasons.
+================================================================================

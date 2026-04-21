@@ -1,0 +1,200 @@
+[
+  {
+    "ticker": "AMS.L",
+    "isin": "GB0004536594",
+    "company_name": "Advanced Medical Solutions Group",
+    "market_cap_mm": 442.5,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2025-08-11",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "AQR Capital Management, LLC",
+      "position_pct": 0.59,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2025-08-11",
+      "isin": "GB0004536594",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.59, \"date\": \"2025-08-11\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 0.59, \"date\": \"2026-03-25\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.61, \"date\": \"2026-04-07\"}]"
+    }
+  },
+  {
+    "ticker": "AMS.L",
+    "isin": "GB0004536594",
+    "company_name": "Advanced Medical Solutions Group",
+    "market_cap_mm": 442.5,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-03-25",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Citadel Advisors LLC",
+      "position_pct": 0.59,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-03-25",
+      "isin": "GB0004536594",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.59, \"date\": \"2025-08-11\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 0.59, \"date\": \"2026-03-25\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.61, \"date\": \"2026-04-07\"}]"
+    }
+  },
+  {
+    "ticker": "AMS.L",
+    "isin": "GB0004536594",
+    "company_name": "Advanced Medical Solutions Group",
+    "market_cap_mm": 442.5,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Qube Research & Technologies Limited",
+      "position_pct": 0.61,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-07",
+      "isin": "GB0004536594",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.59, \"date\": \"2025-08-11\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 0.59, \"date\": \"2026-03-25\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.61, \"date\": \"2026-04-07\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-03-27",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "D. E. Shaw & Co. LP",
+      "position_pct": 0.59,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-03-27",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-03-19",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Marshall Wace LLP",
+      "position_pct": 0.8,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-03-19",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-03-20",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Millennium International Management LP",
+      "position_pct": 0.56,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-03-20",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-03-25",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "PDT Partners, LLC",
+      "position_pct": 0.6,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-03-25",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Premier Miton Group plc",
+      "position_pct": 0.72,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-08",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  },
+  {
+    "ticker": "BCG.L",
+    "isin": "GB00BN44P254",
+    "company_name": "BALTIC CLASSIFIEDS GROUP PLC",
+    "market_cap_mm": 863.0,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-02",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Qube Research & Technologies Limited",
+      "position_pct": 0.7,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-02",
+      "isin": "GB00BN44P254",
+      "crowded_info": "[{\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.59, \"date\": \"2026-03-27\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.8, \"date\": \"2026-03-19\"}, {\"holder\": \"Millennium International Management LP\", \"position_pct\": 0.56, \"date\": \"2026-03-20\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 0.6, \"date\": \"2026-03-25\"}, {\"holder\": \"Premier Miton Group plc\", \"position_pct\": 0.72, \"date\": \"2026-04-08\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.7, \"date\": \"2026-04-02\"}]"
+    }
+  }
+]

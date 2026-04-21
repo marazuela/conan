@@ -1,0 +1,11 @@
+{
+  "ticker_local": "BKM",
+  "mic": "XLON",
+  "figi": "BBG000Q0Q476",
+  "issuer_figi": "BBG000Q0Q314",
+  "name": "BANK MUSCAT SAOG-GDR REG S",
+  "security_type": "Depositary Receipt",
+  "exchange_code": "LI",
+  "resolved": true,
+  "error": null
+}

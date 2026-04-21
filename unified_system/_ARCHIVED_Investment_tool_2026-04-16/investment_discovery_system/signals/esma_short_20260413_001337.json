@@ -1,0 +1,46 @@
+[
+  {
+    "ticker": "IQX.DE",
+    "isin": "GB0009619924",
+    "company_name": "IQE",
+    "market_cap_mm": null,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Qube Research & Technologies Limited",
+      "position_pct": 0.5,
+      "previous_position_pct": 0.5,
+      "change_pct": 0.0,
+      "position_date": "2026-04-09",
+      "isin": "GB0009619924",
+      "crowded_info": "[{\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 1.09, \"date\": \"2026-04-09\", \"regulator\": \"FCA\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 0.95, \"date\": \"2026-04-09\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "SPI.L",
+    "isin": "GB00BNLPYF73",
+    "company_name": "SPIRE HEALTHCARE GROUP PLC",
+    "market_cap_mm": 610.5,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Walleye Capital LLC",
+      "position_pct": 0.5,
+      "previous_position_pct": 0.5,
+      "change_pct": 0.0,
+      "position_date": "2026-04-09",
+      "isin": "GB00BNLPYF73",
+      "crowded_info": "[{\"holder\": \"GLG Partners LP\", \"position_pct\": 0.6, \"date\": \"2026-03-31\", \"regulator\": \"FCA\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.5, \"date\": \"2026-03-24\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.5, \"date\": \"2026-03-25\", \"regulator\": \"FCA\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"FCA\"}]"
+    }
+  }
+]

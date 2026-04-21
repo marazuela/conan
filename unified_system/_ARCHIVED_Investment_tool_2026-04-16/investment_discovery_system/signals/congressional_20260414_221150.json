@@ -1,0 +1,167 @@
+[
+  {
+    "ticker": "FCNCA",
+    "isin": null,
+    "company_name": "First Citizens BancShares Inc",
+    "market_cap_mm": 23559.5,
+    "signal_type": "congressional_trade",
+    "signal_category": "congressional",
+    "strength_estimate": 2,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-26",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "sell",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-26",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 1,
+      "signal_flags": []
+    }
+  },
+  {
+    "ticker": "JNJ",
+    "isin": null,
+    "company_name": "Johnson & Johnson",
+    "market_cap_mm": 579532.5,
+    "signal_type": "congressional_timing_cluster:3_members",
+    "signal_category": "congressional",
+    "strength_estimate": 4,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-26",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "sell",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-26",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 3,
+      "signal_flags": [
+        "timing_cluster:3_members"
+      ]
+    }
+  },
+  {
+    "ticker": "LCLIN",
+    "isin": null,
+    "company_name": "Linde",
+    "market_cap_mm": null,
+    "signal_type": "congressional_timing_cluster:2_members",
+    "signal_category": "congressional",
+    "strength_estimate": 3,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-26",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "buy",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-26",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 2,
+      "signal_flags": [
+        "timing_cluster:2_members"
+      ]
+    }
+  },
+  {
+    "ticker": "PEP",
+    "isin": null,
+    "company_name": "PepsiCo Inc",
+    "market_cap_mm": 212860.0,
+    "signal_type": "congressional_unusual_size",
+    "signal_category": "congressional",
+    "strength_estimate": 3,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-26",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "sell",
+      "range": "15K\u201350K",
+      "amount_midpoint": 32500.0,
+      "transaction_date": "2026-03-26",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 1,
+      "signal_flags": [
+        "unusual_size"
+      ]
+    }
+  },
+  {
+    "ticker": "SPGI",
+    "isin": null,
+    "company_name": "S&P Global Inc",
+    "market_cap_mm": 127061.7,
+    "signal_type": "congressional_unusual_size+timing_cluster:3_members",
+    "signal_category": "congressional",
+    "strength_estimate": 4,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-26",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "sell",
+      "range": "15K\u201350K",
+      "amount_midpoint": 32500.0,
+      "transaction_date": "2026-03-26",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 3,
+      "signal_flags": [
+        "unusual_size",
+        "timing_cluster:3_members"
+      ]
+    }
+  },
+  {
+    "ticker": "WAT",
+    "isin": null,
+    "company_name": "Waters Corp",
+    "market_cap_mm": 32490.8,
+    "signal_type": "congressional_trade",
+    "signal_category": "congressional",
+    "strength_estimate": 2,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-10",
+    "scan_date": "2026-04-14",
+    "raw_data": {
+      "representative": "Thomas Kean Jr",
+      "party": "Republican",
+      "house": "House",
+      "state": "NJ",
+      "transaction": "sell",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-10",
+      "owner": "Undisclosed",
+      "committee_alignment": null,
+      "cluster_count": 1,
+      "signal_flags": []
+    }
+  }
+]

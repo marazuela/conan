@@ -1,0 +1,77 @@
+# Thesis Run Log — 2026-04-15 06:45 UTC
+
+## Scope
+Scheduled autonomous run. Current date 2026-04-15. Task: produce/refresh investment thesis PDFs for candidates in investment_discovery_system/candidates/ per Phase 2 rules (a)-(d).
+
+## Candidates Considered (7)
+AXSM, VERA, VRDN, AVNS, GSAT, RPAY, TVTX
+
+## Phase 2 Rule Evaluation
+
+| Ticker | Thesis date | Source md5 status | Rule triggered? | Action |
+|--------|-------------|-------------------|-----------------|--------|
+| AXSM   | 2026-04-13 (2d) | unchanged (16bbd135...) | None | SKIP |
+| VERA   | 2026-04-14 (1d) | unchanged (d5d5fe25...) | None | SKIP |
+| VRDN   | 2026-04-14 (1d) | unchanged (21956cd6...) | None | SKIP |
+| AVNS   | 2026-04-14 (1d) | unchanged (914e1670...) | None | SKIP |
+| GSAT   | 2026-04-14 (1d) | unchanged (b13658ff...) | None | SKIP |
+| RPAY   | 2026-04-15 (0d) | unchanged (5282c696...) | Rule (d) — web research surfaced material new fact | PATCH v1 → v2 |
+| TVTX   | delivered (Jan 2026 APPROVED) | n/a | n/a | SKIP (permanent) |
+
+## Web Research Performed (2 tickers)
+
+### AXSM — T-15 kill-sweep (2 queries)
+- Q: "AXSM Axsome Therapeutics AXS-05 ADA PDUFA April 2026 news" — surfaced FDA acceptance/priority review context; nothing new.
+- Q: "Axsome OR AXSM April 14 2026 OR April 15 2026 news" — surfaced only Apr 8 Q1 earnings announcement (May 4 reporting date) and Apr 1 Takeda/balipodect licensing. Both pre-known or non-thesis-material.
+- Verdict: AXSM thesis dated 2026-04-13 remains intact. No regeneration.
+
+### RPAY — web layer validation (4 queries)
+- Q1: "RPAY Repay Holdings Forager 13D April 2026 poison pill" — surfaced (a) Veradace 8.4% letter Apr 9 and (b) an "ATG Fund Delaware Chancery lawsuit" claim against RPAY.
+- Q2 (validation): "ATG Fund Repay Holdings Delaware Chancery lawsuit April 2026" — ATG lawsuit is against Empery Digital (EMPD), NOT RPAY. Conflation rejected.
+- Q3 (validation): "Veradace Partners Repay Holdings RPAY 8.4% shareholder letter KUBRA" — confirmed via Business Wire, stocktitan, Payments Dive, Yahoo Finance. Letter dated 2026-04-09 addressed to RPAY independent board; demands KUBRA termination + 2 board seats; references shareholder survey where "every single investor" polled opposed deal. RPAY board same-day response reiterated KUBRA commitment.
+- Q4: "Veradace Partners hedge fund activist profile history campaigns" — Dallas-based, founded 2019 by Alex Vezendan and John Conlin (ex-NWQ Investment Management co-president, $30B AUM). Concentrated, constructive-activist posture.
+- Verdict: STRENGTHENS thesis. Added Veradace layer across 10 document locations.
+
+## RPAY v1 → v2 Patch Summary
+
+### Rationale
+The RPAY v1 thesis (produced earlier 2026-04-15) did not mention Veradace Partners at all. This is a material gap: a second 8.4% shareholder publicly opposing management's capital allocation, combined with Forager's 12.9% accumulation, creates a two-axis pressure structure (not a bilateral standoff) that materially affects the thesis probability distribution. Per Project Instruction #10 (Narrative check) and Phase 2 rule (d), regeneration was warranted.
+
+### Patch Locations (10)
+1. Summary paragraph — appended Veradace sentence with stake, founders, demand, combined ~21% float opposition.
+2. Case in Five Points → Case in Six Points — new point 6 on two-axis pressure and hardening Apr 9 board response.
+3. Key Numbers table — 3 new rows: Veradace stake 8.4%, KUBRA deal $372M / -17% announcement reaction, visible governance opposition ~21.3%.
+4. A.4 Governance Case — 1 new paragraph explaining two-axis structure (pill solves Forager-accumulation, leaves Veradace-organizing open).
+5. A.7 Market Interpretation table — new row on the Apr 9 Veradace letter's significance.
+6. Kill conditions — new Kill condition 7 (Veradace private settlement without Forager).
+7. Catalyst Calendar — 2 new rows: Apr 14–28 Veradace follow-up watch; Q2 2026 KUBRA close/renegotiation.
+8. Sources & Verification — 4 new bullets: Business Wire Veradace letter, stocktitan RPAY response, Payments Dive coverage, Veradace Form ADV.
+9. Recommendation callout — v2 addendum italic line.
+10. Verdict callout — v2 addendum italic line summarizing combined ~21% float opposition.
+
+### Archive
+v1 docx + pdf preserved at: reporting_layer/archive/2026-04-15_RPAY_superseded_v1/
+Per never-delete rule. Dated suffix.
+
+### Final v2 Metrics
+- docx: reporting_layer/investment_theses/docx/RPAY_Investment_Thesis_2026-04-15.docx
+- pdf: reporting_layer/investment_theses/pdf/RPAY_Investment_Thesis_2026-04-15.pdf (283,898 bytes)
+- Tables: 14 (all preserved)
+- Paragraphs: 147
+- Word count: ~5735 (was 5243; +492 for Veradace layer)
+- Appendix sections: A.1 through A.12 all intact
+- Version marker: "15 April 2026 (v2 — Veradace update)" in front matter
+
+## Housekeeping
+- No LibreOffice tmp artifacts present in pdf/ after conversion (clean).
+- index.json updated with RPAY v2 entry, prior version history preserved in run_history array.
+
+## Blockers / Failures
+None.
+
+## Next Run Should
+- Continue routine 7-day-freshness watch on all 6 active theses.
+- Monitor RPAY for Forager 13D/A #3, PREC14A, Veradace 13D conversion, RPAY 8-K on KUBRA progress.
+- Monitor AXSM T-14 / T-13 daily per intensive window.
+- Re-evaluate watchlist thesis coverage (MNKD, ARVN, HROW) at T-20 trigger per SESSION_STATE pipeline — none have candidate .md files yet so none are thesis-eligible this run.
+

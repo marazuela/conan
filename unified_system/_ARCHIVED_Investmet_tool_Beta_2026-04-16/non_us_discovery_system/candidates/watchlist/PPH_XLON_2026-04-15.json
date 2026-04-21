@@ -1,0 +1,21 @@
+{
+  "ticker_local": "PPH",
+  "mic": "XLON",
+  "ticker_plus_mic": "PPH.XLON",
+  "company_name_en": "PPHE HOTEL GROUP LIMITED",
+  "company_name_local": null,
+  "figi": "BBG000PZFM18",
+  "issuer_figi": "BBG000PZFGX6",
+  "signal_id": "bef7528cd5ff9996b5720e4aa940c625",
+  "signal_type": "trading_update",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "score_total": 23.0,
+  "translation_confidence": "n/a",
+  "market_cap_usd_mm": 903.68,
+  "source_url": "https://www.investegate.co.uk/announcement/rns/pphe-hotel-group-ltd--pph/notice-of-trading-update/9520464",
+  "source_date": "2026-04-15T07:00:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "lse_rns",
+  "routing": "watchlist"
+}

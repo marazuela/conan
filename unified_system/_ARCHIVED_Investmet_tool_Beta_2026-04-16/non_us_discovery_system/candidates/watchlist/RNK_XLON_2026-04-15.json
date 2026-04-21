@@ -1,0 +1,21 @@
+{
+  "ticker_local": "RNK",
+  "mic": "XLON",
+  "ticker_plus_mic": "RNK.XLON",
+  "company_name_en": "RANK GROUP PLC",
+  "company_name_local": null,
+  "figi": "BBG000BDZ5Z0",
+  "issuer_figi": "BBG000BDZ517",
+  "signal_id": "3c5194680c1933bf2b63b067b66b0d6c",
+  "signal_type": "trading_update",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "score_total": 23.0,
+  "translation_confidence": "n/a",
+  "market_cap_usd_mm": 537.79,
+  "source_url": "https://www.investegate.co.uk/announcement/rns/rank-group--rnk/q3-2025-26-trading-update/9520281",
+  "source_date": "2026-04-15T07:00:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "lse_rns",
+  "routing": "watchlist"
+}

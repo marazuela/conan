@@ -1,0 +1,11 @@
+{
+  "ticker_local": "CAR",
+  "mic": "XASX",
+  "figi": "BBG000CJYVN3",
+  "issuer_figi": "BBG000CJYVC5",
+  "name": "CAR GROUP LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

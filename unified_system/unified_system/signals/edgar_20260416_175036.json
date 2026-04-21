@@ -1,0 +1,282 @@
+[
+  {
+    "ticker": "RGR",
+    "isin": null,
+    "company_name": "STURM RUGER & CO INC  (RGR)",
+    "market_cap_mm": 664.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/95029/000207709626000067",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "PRER14A",
+      "cik": "0000095029",
+      "adsh": "0002077096-26-000067",
+      "file_description": "PROXY STATEMENT",
+      "company_raw": "STURM RUGER & CO INC  (RGR)  (CIK 0000095029)"
+    }
+  },
+  {
+    "ticker": "APLS",
+    "isin": null,
+    "company_name": "Apellis Pharmaceuticals, Inc.  (APLS)",
+    "market_cap_mm": 5224.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1492422/000119312526153887",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "SC 14D9",
+      "cik": "0001492422",
+      "adsh": "0001193125-26-153887",
+      "file_description": "SC 14D9",
+      "company_raw": "Apellis Pharmaceuticals, Inc.  (APLS)  (CIK 0001492422)"
+    }
+  },
+  {
+    "ticker": "CRWV",
+    "isin": null,
+    "company_name": "CoreWeave, Inc.  (CRWV)",
+    "market_cap_mm": 62039.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1769628/000176962826000164",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001769628",
+      "adsh": "0001769628-26-000164",
+      "file_description": "EX-10.2",
+      "company_raw": "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+    }
+  },
+  {
+    "ticker": "PAR",
+    "isin": null,
+    "company_name": "PAR TECHNOLOGY CORP  (PAR)",
+    "market_cap_mm": 550.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/708821/000070882126000046",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "8-K",
+      "cik": "0000708821",
+      "adsh": "0000708821-26-000046",
+      "file_description": "8-K",
+      "company_raw": "PAR TECHNOLOGY CORP  (PAR)  (CIK 0000708821)"
+    }
+  },
+  {
+    "ticker": "RGR",
+    "isin": null,
+    "company_name": "STURM RUGER & CO INC  (RGR)",
+    "market_cap_mm": 664.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/95029/000207709626000067",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "PRER14A",
+      "cik": "0000095029",
+      "adsh": "0002077096-26-000067",
+      "file_description": "PROXY STATEMENT",
+      "company_raw": "STURM RUGER & CO INC  (RGR)  (CIK 0000095029)"
+    }
+  },
+  {
+    "ticker": "SPSC",
+    "isin": null,
+    "company_name": "SPS COMMERCE INC  (SPSC)",
+    "market_cap_mm": 2116.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1092699/000109269926000028",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001092699",
+      "adsh": "0001092699-26-000028",
+      "file_description": "EX-10.1",
+      "company_raw": "SPS COMMERCE INC  (SPSC)  (CIK 0001092699)"
+    }
+  },
+  {
+    "ticker": "HNRG",
+    "isin": null,
+    "company_name": "HALLADOR ENERGY CO  (HNRG)",
+    "market_cap_mm": 757.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/788965/000110465926043845",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0000788965",
+      "adsh": "0001104659-26-043845",
+      "file_description": "8-K",
+      "company_raw": "HALLADOR ENERGY CO  (HNRG)  (CIK 0000788965)"
+    }
+  },
+  {
+    "ticker": "PRME",
+    "isin": null,
+    "company_name": "Prime Medicine, Inc.  (PRME)",
+    "market_cap_mm": 666.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1894562/000162828026025372",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001894562",
+      "adsh": "0001628280-26-025372",
+      "file_description": "EX-10.1",
+      "company_raw": "Prime Medicine, Inc.  (PRME)  (CIK 0001894562)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Ionetix Corp / DE /",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2108121/000121390026044239",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0002108121",
+      "adsh": "0001213900-26-044239",
+      "file_description": "2016 EQUITY INCENTIVE PLAN AND FORM OF AWARD AGREEMENTS",
+      "company_raw": "Ionetix Corp / DE /  (CIK 0002108121)"
+    }
+  },
+  {
+    "ticker": "HRZN",
+    "isin": null,
+    "company_name": "Horizon Technology Finance Corp  (HRZN, HTFC)",
+    "market_cap_mm": 301.0,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1487428/000114036126014610",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "8-K",
+      "cik": "0001487428",
+      "adsh": "0001140361-26-014610",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Horizon Technology Finance Corp  (HRZN, HTFC)  (CIK 0001487428)"
+    }
+  },
+  {
+    "ticker": "GSAT",
+    "isin": null,
+    "company_name": "Globalstar, Inc.  (GSAT)",
+    "market_cap_mm": 10279.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1366868/000114036126014528",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "8-K",
+      "cik": "0001366868",
+      "adsh": "0001140361-26-014528",
+      "file_description": "EXHIBIT 99.2",
+      "company_raw": "Globalstar, Inc.  (GSAT)  (CIK 0001366868)"
+    }
+  },
+  {
+    "ticker": "IMKTA",
+    "isin": null,
+    "company_name": "INGLES MARKETS INC  (IMKTA)",
+    "market_cap_mm": 1682.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/50493/000092189526000998",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "proxy contest",
+      "filing_type": "DFAN14A",
+      "cik": "0000050493",
+      "adsh": "0000921895-26-000998",
+      "file_description": null,
+      "company_raw": "INGLES MARKETS INC  (IMKTA)  (CIK 0000050493)"
+    }
+  },
+  {
+    "ticker": "RGR",
+    "isin": null,
+    "company_name": "STURM RUGER & CO INC  (RGR)",
+    "market_cap_mm": 664.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/95029/000207709626000067",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "proxy contest",
+      "filing_type": "PRER14A",
+      "cik": "0000095029",
+      "adsh": "0002077096-26-000067",
+      "file_description": "PROXY STATEMENT",
+      "company_raw": "STURM RUGER & CO INC  (RGR)  (CIK 0000095029)"
+    }
+  },
+  {
+    "ticker": "MYX",
+    "isin": null,
+    "company_name": "Maywood Acquisition Corp. 2  (MYX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2080087/000147793226002212",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "proxy contest",
+      "filing_type": "8-K",
+      "cik": "0002080087",
+      "adsh": "0001477932-26-002212",
+      "file_description": "FORM OF INDEMNIFICATION AGREEMENT",
+      "company_raw": "Maywood Acquisition Corp. 2  (MYX)  (CIK 0002080087)"
+    }
+  }
+]

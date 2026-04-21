@@ -1,0 +1,21 @@
+{
+  "ticker_local": "3046",
+  "mic": "XTKS",
+  "ticker_plus_mic": "3046.XTKS",
+  "company_name_en": "JINS HOLDINGS Inc.",
+  "company_name_local": "\uff2a\uff29\uff2e\uff33\uff28\uff24",
+  "figi": "BBG000MWNCB0",
+  "issuer_figi": "BBG000MWNBH6",
+  "signal_id": "8560fcabd218bb3b36d44c7204893482",
+  "signal_type": "guidance_revision",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "score_total": 25.0,
+  "translation_confidence": 0.7,
+  "market_cap_usd_mm": 927.49,
+  "source_url": "https://www.release.tdnet.info/inbs/140120260410501587.pdf",
+  "source_date": "2026-04-10T07:00:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "tdnet",
+  "routing": "watchlist"
+}

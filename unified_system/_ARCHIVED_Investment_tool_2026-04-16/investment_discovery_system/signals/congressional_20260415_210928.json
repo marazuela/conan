@@ -1,0 +1,56 @@
+[
+  {
+    "ticker": "CIONQ",
+    "isin": null,
+    "company_name": "IONQ I",
+    "market_cap_mm": null,
+    "signal_type": "congressional_trade",
+    "signal_category": "congressional",
+    "strength_estimate": 2,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-18",
+    "scan_date": "2026-04-15",
+    "raw_data": {
+      "representative": "Greg Steube",
+      "party": "Republican",
+      "house": "House",
+      "state": "FL",
+      "transaction": "buy",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-18",
+      "owner": "Spouse",
+      "committee_alignment": null,
+      "cluster_count": 1,
+      "signal_flags": []
+    }
+  },
+  {
+    "ticker": "MAR",
+    "isin": null,
+    "company_name": "Marriott International Inc",
+    "market_cap_mm": 96385.5,
+    "signal_type": "congressional_unusual_size",
+    "signal_category": "congressional",
+    "strength_estimate": 3,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-15",
+    "raw_data": {
+      "representative": "Greg Steube",
+      "party": "Republican",
+      "house": "House",
+      "state": "FL",
+      "transaction": "buy",
+      "range": "15K\u201350K",
+      "amount_midpoint": 32500.0,
+      "transaction_date": "2026-04-08",
+      "owner": "Spouse",
+      "committee_alignment": null,
+      "cluster_count": 1,
+      "signal_flags": [
+        "unusual_size"
+      ]
+    }
+  }
+]

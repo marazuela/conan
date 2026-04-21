@@ -1,0 +1,25 @@
+10:11:39 [run_scanner] INFO: Running esma_short: FCA/ESMA short position aggregation
+10:11:40 [esma_short_scanner] INFO: FCA: Downloaded XLSX: 3,016,156 bytes
+10:11:41 [esma_short_scanner] INFO: FCA: Parsed 576 current positions
+10:11:41 [esma_short_scanner] INFO: FCA: 576 positions fetched
+10:11:44 [esma_short_scanner] INFO: AMF: Parsed 189 active positions
+10:11:44 [esma_short_scanner] INFO: AMF: 189 positions fetched
+10:11:44 [esma_short_scanner] INFO: AFM: Parsed 986 current positions
+10:11:44 [esma_short_scanner] INFO: AFM: 986 positions fetched
+10:11:46 [esma_short_scanner] INFO: BaFin: Parsed 472 current positions
+10:11:46 [esma_short_scanner] INFO: BAFIN: 472 positions fetched
+10:11:46 [esma_short_scanner] INFO: Total positions across all regulators: 2223
+10:11:46 [esma_short_scanner] INFO: Loaded prior snapshot for FCA: 576 positions
+10:11:46 [esma_short_scanner] INFO: Loaded prior snapshot for AMF: 189 positions
+10:11:46 [esma_short_scanner] INFO: Loaded prior snapshot for AFM: 986 positions
+10:11:46 [esma_short_scanner] INFO: Loaded prior snapshot for BAFIN: 467 positions
+10:11:46 [esma_short_scanner] INFO: Saved snapshot: /sessions/sleepy-clever-noether/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/fca_snapshot_20260416.json (576 positions)
+10:11:46 [esma_short_scanner] INFO: Saved snapshot: /sessions/sleepy-clever-noether/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/amf_snapshot_20260416.json (189 positions)
+10:11:46 [esma_short_scanner] INFO: Saved snapshot: /sessions/sleepy-clever-noether/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/afm_snapshot_20260416.json (986 positions)
+10:11:46 [esma_short_scanner] INFO: Saved snapshot: /sessions/sleepy-clever-noether/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/bafin_snapshot_20260416.json (472 positions)
+10:11:46 [esma_short_scanner] INFO: Crowded shorts (>=3 holders): 176 ISINs
+10:11:46 [esma_short_scanner] INFO: Loaded 287 cached ISIN->ticker mappings
+10:11:53 [esma_short_scanner] INFO: Saved 290 ISIN->ticker mappings to cache
+10:11:53 [esma_short_scanner] INFO: Saved 3 signals to /sessions/sleepy-clever-noether/mnt/Investment tool/investment_discovery_system/signals/esma_short_20260416_101153.json
+10:11:53 [run_scanner] INFO:   esma_short: 3 signals in 13.8s
+OK: esma_short — 3 signals in 13.8s

@@ -1,0 +1,21 @@
+{
+  "ticker_local": "8766",
+  "mic": "XTKS",
+  "ticker_plus_mic": "8766.XTKS",
+  "company_name_en": "Tokio Marine Holdings, Inc.",
+  "company_name_local": "\u6771\u4eac\u6d77\u4e0a",
+  "figi": "BBG000BBN7R2",
+  "issuer_figi": "BBG000BBN738",
+  "signal_id": "677567dc748dedbbf0b4fc9bf168b386",
+  "signal_type": "equity_fundraise",
+  "signal_category": "shareholder",
+  "thesis_direction": "short",
+  "score_total": 27.0,
+  "translation_confidence": 0.85,
+  "market_cap_usd_mm": 80848.28,
+  "source_url": "https://www.release.tdnet.info/inbs/140120260413502569.pdf",
+  "source_date": "2026-04-13T06:30:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "tdnet",
+  "routing": "watchlist"
+}

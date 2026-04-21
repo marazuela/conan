@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ASB",
+  "mic": "XASX",
+  "figi": "BBG000BHLCK7",
+  "issuer_figi": "BBG000BHLC18",
+  "name": "AUSTAL LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

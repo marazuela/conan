@@ -1,0 +1,623 @@
+{
+  "ran_at_utc": "2026-04-21T14:16:21.892847Z",
+  "today": "2026-04-21",
+  "window_days": 180,
+  "summary": {
+    "n_total": 40,
+    "per_bucket": {
+      "overdue": 0,
+      "this_week": 4,
+      "next_30_days": 11,
+      "30_to_90_days": 23,
+      "90_plus_days": 0
+    },
+    "per_source": {
+      "curated": 5,
+      "pre_phase3_readout": 35
+    },
+    "per_event_type": {
+      "activist_proxy": 1,
+      "PDUFA": 3,
+      "shareholder_meeting": 1,
+      "trial_readout": 35
+    }
+  },
+  "buckets": {
+    "overdue": [],
+    "this_week": [
+      {
+        "date_iso": "2026-04-21",
+        "days_until": 0,
+        "ticker": null,
+        "company_name": "Novo Nordisk A/S",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Research Study to See How Well Different Doses of CagriSema Help People With Excess Body Weight Lose Weight | approval_p=0.71, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06388187",
+          "approval_probability": 0.71
+        }
+      },
+      {
+        "date_iso": "2026-04-22",
+        "days_until": 1,
+        "ticker": null,
+        "company_name": "Otsuka Pharmaceutical Development & Commercialization, Inc.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "P3b Short-term Study of CTN in Patients With ADHD and Comorbid Anxiety | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06973577",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-04-24",
+        "days_until": 3,
+        "ticker": null,
+        "company_name": "Novartis Pharmaceuticals",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Study of Ianalumab Versus Placebo in Addition to First-line Corticosteroids in Primary Immune Thrombocytopenia (ITP) | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05653349",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-04-27",
+        "days_until": 6,
+        "ticker": null,
+        "company_name": "Sanofi",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Immunogenicity and Safety Study of an Investigational Quadrivalent Meningococcal Conjugate Vaccine Administered in Healthy Children and Adolescents in China | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT07135986",
+          "approval_probability": 0.58
+        }
+      }
+    ],
+    "next_30_days": [
+      {
+        "date_iso": "2026-04-29",
+        "days_until": 8,
+        "ticker": null,
+        "company_name": "Ocular Therapeutix, Inc.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Study to Evaluate the Efficacy and Safety of Intravitreal OTX-TKI (Ocular Therapeutix) (Axitinib Implant) in Subjects With Neovascular Age-Related Macular Degeneration | approval_p=0.63, +50.0% / -35.",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06223958",
+          "approval_probability": 0.63
+        }
+      },
+      {
+        "date_iso": "2026-04-30",
+        "days_until": 9,
+        "ticker": null,
+        "company_name": "Chiesi Farmaceutici S.p.A.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Open Label Extension of 2 mg/kg Pegunigalsidase Alfa (PRX-102) Every 4 Weeks in Adult Fabry Disease Patients | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT03614234",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-04-30",
+        "days_until": 9,
+        "ticker": "AXSM",
+        "company_name": "",
+        "event_type": "PDUFA",
+        "source": "curated",
+        "candidate_status": "active",
+        "priority": "HIGH",
+        "notes": "FDA decision April 30 for the first-ever drug approved specifically for Alzheimer's agitation — a $5B+ unmet need. → Potential outcomes: clean approval with broad label (+15-30%, sustained re-rating),",
+        "md_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/candidates/AXSM_ADA_PDUFA.md"
+      },
+      {
+        "date_iso": "2026-05-01",
+        "days_until": 10,
+        "ticker": null,
+        "company_name": "Beijing Dongfang Biotech Co., Ltd.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Phase 3 Study to Evaluate the Efficacy of JY09 Compared With Placebo in T2DM Patients | approval_p=0.68, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06254014",
+          "approval_probability": 0.68
+        }
+      },
+      {
+        "date_iso": "2026-05-01",
+        "days_until": 10,
+        "ticker": "RPAY",
+        "company_name": "",
+        "event_type": "activist_proxy",
+        "source": "curated",
+        "candidate_status": "active",
+        "priority": "HIGH",
+        "notes": "Forager Capital published a $4.80/share all-cash take-out offer for Repay on April 17, 2026; stock at $3.18 implies a 51% spread — the market is pricing meaningful rejection risk. → Potential outcomes",
+        "md_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/candidates/RPAY_Forager_ActivistPoisonPill.md"
+      },
+      {
+        "date_iso": "2026-05-05",
+        "days_until": 14,
+        "ticker": null,
+        "company_name": "BioNTech SE",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Learn About COVID-19 RNA-Based Variant-Adapted Vaccine Candidate(s) Against SARS-CoV-2 in Participants Ages 12 Through 64 Years Considered at Higher Risk of Severe COVID-19, and Participant",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT07069309",
+          "approval_probability": 0.69
+        }
+      },
+      {
+        "date_iso": "2026-05-07",
+        "days_until": 16,
+        "ticker": null,
+        "company_name": "Otsuka Pharmaceutical Development & Commercialization, Inc.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Trial of Sibeprenlimab in the Treatment of A Nephropathy (IgAN) | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05248646",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-13",
+        "days_until": 22,
+        "ticker": null,
+        "company_name": "CeleCor Therapeutics",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Phase 3 Study of Zalunfiban in Subjects With ST-elevation MI | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04825743",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-14",
+        "days_until": 23,
+        "ticker": null,
+        "company_name": "AstraZeneca",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "EPIC-ATTR: A Study to Evaluate the Effect of Eplontersen on the Transthyretin Reduction and Long-term Safety in Chinese Subjects With Transthyretin Amyloid Cardiomyopathy | approval_p=0.58, +50.0% / -",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06194825",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-15",
+        "days_until": 24,
+        "ticker": null,
+        "company_name": "Sanofi",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Evaluate the Effect of Venglustat Tablets on Left Ventricular Mass Index in Male and Female Adult Participants With Fabry Disease | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05280548",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-18",
+        "days_until": 27,
+        "ticker": null,
+        "company_name": "Han Xu, M.D., Ph.D., FAPCR, Sponsor-Investigator, IRB Chair",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Pharmacogenomics IND Commercial SNP Clinical Study - Abiraterone and Single Nucleotide Polymorphisms | approval_p=0.62, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT03348670",
+          "approval_probability": 0.62
+        }
+      }
+    ],
+    "30_to_90_days": [
+      {
+        "date_iso": "2026-05-22",
+        "days_until": 31,
+        "ticker": null,
+        "company_name": "Swedish Orphan Biovitrum",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study Evaluating Physical Activity and Joint Health in Severe Haemophilia A Patients ≥12 Years Treated Once Weekly With Efanesoctocog Alfa | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05817812",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-25",
+        "days_until": 34,
+        "ticker": null,
+        "company_name": "UCB Biopharma SRL",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Assess the Long-term Safety, Tolerability, and Efficacy of Bimekizumab in the Treatment of Subjects With Active Psoriatic Arthritis | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04009499",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-05-27",
+        "days_until": 36,
+        "ticker": null,
+        "company_name": "Ipsen",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Evaluate the Effectiveness and Safety of Dysport® for the Prevention of Episodic Migraine in Adults | approval_p=0.72, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06047457",
+          "approval_probability": 0.72
+        }
+      },
+      {
+        "date_iso": "2026-05-27",
+        "days_until": 36,
+        "ticker": "RGR",
+        "company_name": "",
+        "event_type": "shareholder_meeting",
+        "source": "curated",
+        "candidate_status": "active",
+        "priority": "MEDIUM",
+        "notes": "Beretta Holding has filed a proxy fight AND proposed a $44.80/share partial tender offer (+20% premium) for 20.05% of Sturm Ruger — AGM May 27, 2026; the poison-pill waiver vote is the binary. → Poten",
+        "md_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/candidates/RGR_Beretta_ProxyFight.md"
+      },
+      {
+        "date_iso": "2026-05-29",
+        "days_until": 38,
+        "ticker": null,
+        "company_name": "AstraZeneca",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Assess Efficacy and Safety of Durvalumab Alone or Combined With Bevacizumab in High Risk of Recurrence HCC Patients After Curative Treatment | approval_p=0.62, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT03847428",
+          "approval_probability": 0.62
+        }
+      },
+      {
+        "date_iso": "2026-05-30",
+        "days_until": 39,
+        "ticker": null,
+        "company_name": "Innovent Biologics (Suzhou) Co. Ltd.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Multicenter, Open-label Extension Study Evaluating the Efficacy and Safety of IBI311 in Subjects With Thyroid Eye Disease | approval_p=0.72, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06126783",
+          "approval_probability": 0.72
+        }
+      },
+      {
+        "date_iso": "2026-05-31",
+        "days_until": 40,
+        "ticker": null,
+        "company_name": "Vertex Pharmaceuticals Incorporated",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Evaluation of Safety and Efficacy of CTX001 in Pediatric Participants With Transfusion-Dependent β-Thalassemia (TDT) | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05356195",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-06-02",
+        "days_until": 42,
+        "ticker": null,
+        "company_name": "AstraZeneca",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Study of Durvalumab Versus Placebo in Combination With Definitive Chemoradiation Therapy in Patient With ESCC | approval_p=0.62, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04550260",
+          "approval_probability": 0.62
+        }
+      },
+      {
+        "date_iso": "2026-06-05",
+        "days_until": 45,
+        "ticker": null,
+        "company_name": "Takeda",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study Comparing Zasocitinib (TAK-279) With Deucravacitinib in Adults With Plaque Psoriasis | approval_p=0.76, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06973291",
+          "approval_probability": 0.76
+        }
+      },
+      {
+        "date_iso": "2026-06-07",
+        "days_until": 47,
+        "ticker": null,
+        "company_name": "Innovent Biopharmaceutical Technology (Hangzhou) Co., LTD.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study of Switching to Picankibart in Chinese Patients With Plaque Psoriasis With an Inadequate Response to Interleukin-17 Monoclonal Antibody Therapy | approval_p=0.76, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06945107",
+          "approval_probability": 0.76
+        }
+      },
+      {
+        "date_iso": "2026-06-08",
+        "days_until": 48,
+        "ticker": null,
+        "company_name": "Sanofi",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Investigate Improvement in Pruritus of Lichen Simplex Chronicus With Dupilumab Injections Compared With Placebo in Male and Female Participants Aged at Least 18 Years (STYLE 2) | approval_p",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06687980",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-06-09",
+        "days_until": 49,
+        "ticker": null,
+        "company_name": "Novo Nordisk A/S",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "ZEUS - A Research Study to Look at How Ziltivekimab Works Compared to Placebo in People With Cardiovascular Disease, Chronic Kidney Disease and Inflammation | approval_p=0.6, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05021835",
+          "approval_probability": 0.6
+        }
+      },
+      {
+        "date_iso": "2026-06-11",
+        "days_until": 51,
+        "ticker": null,
+        "company_name": "Bellus Health Inc. - a GSK company",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A 24-Week Study of the Efficacy and Safety of BLU-5937 in Adults With Refractory Chronic Cough | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05600777",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-06-18",
+        "days_until": 58,
+        "ticker": null,
+        "company_name": "AstraZeneca",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Savolitinib Plus Osimertinib Versus Platinum-based Doublet Chemotherapy in Participants With Non-Small Cell Lung Cancer Who Have Progressed on Osimertinib Treatment | approval_p=0.62, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05261399",
+          "approval_probability": 0.62
+        }
+      },
+      {
+        "date_iso": "2026-06-26",
+        "days_until": 66,
+        "ticker": null,
+        "company_name": "Albireo, an Ipsen Company",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Efficacy and Safety of Odevixibat in Children With Biliary Atresia Who Have Undergone a Kasai HPE (BOLD) | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04336722",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-06-29",
+        "days_until": 69,
+        "ticker": null,
+        "company_name": "Novo Nordisk A/S",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Research Study to See if Two Different Formulations of Oral Semaglutide Are Equally Safe and Effective in Reducing the Blood Sugar Level in Japanese People With Type 2 Diabetes | approval_p=0.68, +5",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT07271251",
+          "approval_probability": 0.68
+        }
+      },
+      {
+        "date_iso": "2026-06-30",
+        "days_until": 70,
+        "ticker": null,
+        "company_name": "Astellas Pharma Global Development, Inc.",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Confirm if Fezolinetant Helps Reduce Hot Flashes in Women With Breast Cancer Who Are Having Hormone Therapy | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT06440967",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-06-30",
+        "days_until": 70,
+        "ticker": "VRDN",
+        "company_name": "",
+        "event_type": "PDUFA",
+        "source": "curated",
+        "candidate_status": "active",
+        "priority": "HIGH",
+        "notes": "Viridian's stock crashed 51% on issues unrelated to the drug being reviewed on June 30 (Thyroid Eye Disease). → Potential outcomes: FDA approval with broad label (+36-105%), approval with narrow label",
+        "md_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/candidates/VRDN_veligrotug_PDUFA.md"
+      },
+      {
+        "date_iso": "2026-07-06",
+        "days_until": 76,
+        "ticker": null,
+        "company_name": "Merck Sharp & Dohme LLC",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Study of Pembrolizumab With Concurrent Chemoradiation Therapy Followed by Pembrolizumab With or Without Olaparib in Stage III Non-Small Cell Lung Cancer (NSCLC) (MK-7339-012/KEYLYNK-012) | approval_p=",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04380636",
+          "approval_probability": 0.62
+        }
+      },
+      {
+        "date_iso": "2026-07-07",
+        "days_until": 77,
+        "ticker": "VERA",
+        "company_name": "",
+        "event_type": "PDUFA",
+        "source": "curated",
+        "candidate_status": "active",
+        "priority": "HIGH",
+        "notes": "Small-cap biotech with the best Phase 3 data in IgA Nephropathy, heading into FDA decision July 7. → Potential outcomes: approval + broadest label (+78-113%), approval + competitive label (+37-61%), o",
+        "md_path": "/Users/Pico/Documents/Claude/Projects/Conan/unified_system/unified_system/candidates/VERA_IgAN_PDUFA.md"
+      },
+      {
+        "date_iso": "2026-07-09",
+        "days_until": 79,
+        "ticker": null,
+        "company_name": "Bristol-Myers Squibb",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study of Nivolumab in Combination With Ipilimumab in Participants With Advanced Hepatocellular Carcinoma | approval_p=0.62, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT04039607",
+          "approval_probability": 0.62
+        }
+      },
+      {
+        "date_iso": "2026-07-14",
+        "days_until": 84,
+        "ticker": null,
+        "company_name": "AstraZeneca",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "Efficacy and Safety of Tezepelumab in Patients With Eosinophilic Esophagitis | approval_p=0.58, +50.0% / -35.0%",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05583227",
+          "approval_probability": 0.58
+        }
+      },
+      {
+        "date_iso": "2026-07-18",
+        "days_until": 88,
+        "ticker": null,
+        "company_name": "Bristol-Myers Squibb",
+        "event_type": "trial_readout",
+        "source": "pre_phase3_readout",
+        "candidate_status": "untracked",
+        "priority": "—",
+        "notes": "A Study to Evaluate Mezigdomide in Combination With Carfilzomib and Dexamethasone (MeziKD) Versus Carfilzomib and Dexamethasone (Kd) in Participants With Relapsed or Refractory Multiple Myeloma (SUCCE",
+        "md_path": null,
+        "extra": {
+          "nct_id": "NCT05552976",
+          "approval_probability": 0.73
+        }
+      }
+    ],
+    "90_plus_days": []
+  }
+}

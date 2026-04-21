@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ABDP",
+  "mic": "XLON",
+  "figi": "BBG004LSD1V5",
+  "issuer_figi": "BBG004KFBTH1",
+  "name": "AB DYNAMICS PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

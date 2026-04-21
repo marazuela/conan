@@ -1,0 +1,11 @@
+{
+  "ticker_local": "CBA",
+  "mic": "XASX",
+  "figi": "BBG000BS8LF4",
+  "issuer_figi": "BBG000BS8L64",
+  "name": "COMMONWEALTH BANK OF AUSTRAL",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

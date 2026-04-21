@@ -1,0 +1,21 @@
+{
+  "ticker_local": "BTRW",
+  "mic": "XLON",
+  "ticker_plus_mic": "BTRW.XLON",
+  "company_name_en": "BARRATT REDROW PLC",
+  "company_name_local": null,
+  "figi": "BBG000BD6DG6",
+  "issuer_figi": "BBG000BD6CZ7",
+  "signal_id": "421efdef442264e2b96ec619a4671cad",
+  "signal_type": "trading_update",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "score_total": 23.0,
+  "translation_confidence": "n/a",
+  "market_cap_usd_mm": 4641.61,
+  "source_url": "https://www.investegate.co.uk/announcement/rns/barratt-redrow--btrw/barratt-redrow-third-quarter-trading-update/9520300",
+  "source_date": "2026-04-15T07:00:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "lse_rns",
+  "routing": "watchlist"
+}

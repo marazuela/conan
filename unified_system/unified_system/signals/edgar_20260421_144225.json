@@ -1,0 +1,822 @@
+[
+  {
+    "ticker": "ICMB",
+    "isin": null,
+    "company_name": "Investcorp Credit Management BDC, Inc.  (ICMB)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1578348/000119312526164001",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001578348",
+      "adsh": "0001193125-26-164001",
+      "file_description": "EX-99.1",
+      "company_raw": "Investcorp Credit Management BDC, Inc.  (ICMB)  (CIK 0001578348)"
+    }
+  },
+  {
+    "ticker": "PASG",
+    "isin": null,
+    "company_name": "Passage BIO, Inc.  (PASG)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1787297/000110465926045219",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001787297",
+      "adsh": "0001104659-26-045219",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Passage BIO, Inc.  (PASG)  (CIK 0001787297)"
+    }
+  },
+  {
+    "ticker": "BIRD",
+    "isin": null,
+    "company_name": "Allbirds, Inc.  (BIRD)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1653909/000119312526164338",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001653909",
+      "adsh": "0001193125-26-164338",
+      "file_description": "EX-99.2",
+      "company_raw": "Allbirds, Inc.  (BIRD)  (CIK 0001653909)"
+    }
+  },
+  {
+    "ticker": "GNPX",
+    "isin": null,
+    "company_name": "Genprex, Inc.  (GNPX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1595248/000143774926012879",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001595248",
+      "adsh": "0001437749-26-012879",
+      "file_description": "FORM 8-K",
+      "company_raw": "Genprex, Inc.  (GNPX)  (CIK 0001595248)"
+    }
+  },
+  {
+    "ticker": "ACLX",
+    "isin": null,
+    "company_name": "Arcellx, Inc.  (ACLX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1786205/000110465926045754",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "SC 14D9/A",
+      "cik": "0001786205",
+      "adsh": "0001104659-26-045754",
+      "file_description": "SC 14D9/A",
+      "company_raw": "Arcellx, Inc.  (ACLX)  (CIK 0001786205)"
+    }
+  },
+  {
+    "ticker": "SLNO",
+    "isin": null,
+    "company_name": "SOLENO THERAPEUTICS INC  (SLNO)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1484565/000119312526162853",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "SC 14D9",
+      "cik": "0001484565",
+      "adsh": "0001193125-26-162853",
+      "file_description": "SC 14D9",
+      "company_raw": "SOLENO THERAPEUTICS INC  (SLNO)  (CIK 0001484565)"
+    }
+  },
+  {
+    "ticker": "BLD",
+    "isin": null,
+    "company_name": "TopBuild Corp  (BLD)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1633931/000110465926045245",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "8-K",
+      "cik": "0001633931",
+      "adsh": "0001104659-26-045245",
+      "file_description": "8-K",
+      "company_raw": "TopBuild Corp  (BLD)  (CIK 0001633931)"
+    }
+  },
+  {
+    "ticker": "QXO",
+    "isin": null,
+    "company_name": "QXO, Inc.  (QXO, QXO-PB)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1236275/000110465926045111",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "8-K",
+      "cik": "0001236275",
+      "adsh": "0001104659-26-045111",
+      "file_description": "FORM 8-K",
+      "company_raw": "QXO, Inc.  (QXO, QXO-PB)  (CIK 0001236275)"
+    }
+  },
+  {
+    "ticker": "MEHA",
+    "isin": null,
+    "company_name": "Functional Brands Inc.  (MEHA)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1837254/000121390026045626",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "8-K",
+      "cik": "0001837254",
+      "adsh": "0001213900-26-045626",
+      "file_description": "FORM OF EXECUTIVE EMPLOYMENT AGREEMENT AMENDMENT BETWEEN THE COMPANY AND ERIC GRIPENTROG",
+      "company_raw": "Functional Brands Inc.  (MEHA)  (CIK 0001837254)"
+    }
+  },
+  {
+    "ticker": "CRWD",
+    "isin": null,
+    "company_name": "CrowdStrike Holdings, Inc.  (CRWD)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1535527/000153552726000018",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001535527",
+      "adsh": "0001535527-26-000018",
+      "file_description": "EX-10.1",
+      "company_raw": "CrowdStrike Holdings, Inc.  (CRWD)  (CIK 0001535527)"
+    }
+  },
+  {
+    "ticker": "SMCI",
+    "isin": null,
+    "company_name": "Super Micro Computer, Inc.  (SMCI)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1375365/000137536526000012",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001375365",
+      "adsh": "0001375365-26-000012",
+      "file_description": "EX-10.1",
+      "company_raw": "Super Micro Computer, Inc.  (SMCI)  (CIK 0001375365)"
+    }
+  },
+  {
+    "ticker": "AVEX",
+    "isin": null,
+    "company_name": "AEVEX Corp.  (AVEX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2096300/000119312526164202",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0002096300",
+      "adsh": "0001193125-26-164202",
+      "file_description": "EX-10.6",
+      "company_raw": "AEVEX Corp.  (AVEX)  (CIK 0002096300)"
+    }
+  },
+  {
+    "ticker": "ICMB",
+    "isin": null,
+    "company_name": "Investcorp Credit Management BDC, Inc.  (ICMB)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1578348/000119312526164001",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "8-K",
+      "cik": "0001578348",
+      "adsh": "0001193125-26-164001",
+      "file_description": "EX-99.1",
+      "company_raw": "Investcorp Credit Management BDC, Inc.  (ICMB)  (CIK 0001578348)"
+    }
+  },
+  {
+    "ticker": "AVEX",
+    "isin": null,
+    "company_name": "AEVEX Corp.  (AVEX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2096300/000119312526164202",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "8-K",
+      "cik": "0002096300",
+      "adsh": "0001193125-26-164202",
+      "file_description": "EX-10.6",
+      "company_raw": "AEVEX Corp.  (AVEX)  (CIK 0002096300)"
+    }
+  },
+  {
+    "ticker": "NRC",
+    "isin": null,
+    "company_name": "NRC HEALTH  (NRC)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/70487/000143774926012850",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "special committee",
+      "filing_type": "8-K",
+      "cik": "0000070487",
+      "adsh": "0001437749-26-012850",
+      "file_description": "EXHIBIT 3.2",
+      "company_raw": "NRC HEALTH  (NRC)  (CIK 0000070487)"
+    }
+  },
+  {
+    "ticker": "MNOV",
+    "isin": null,
+    "company_name": "MEDICINOVA INC  (MNOV)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1226616/000119312526164217",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "proxy contest",
+      "filing_type": "PRER14A",
+      "cik": "0001226616",
+      "adsh": "0001193125-26-164217",
+      "file_description": "PRER14A",
+      "company_raw": "MEDICINOVA INC  (MNOV)  (CIK 0001226616)"
+    }
+  },
+  {
+    "ticker": "LUMN",
+    "isin": null,
+    "company_name": "Lumen Technologies, Inc.  (LUMN)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/18926/000119312526162876",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "consent solicitation",
+      "filing_type": "8-K",
+      "cik": "0000018926",
+      "adsh": "0001193125-26-162876",
+      "file_description": "EX-99.1",
+      "company_raw": "Lumen Technologies, Inc.  (LUMN)  (CIK 0000018926)"
+    }
+  },
+  {
+    "ticker": "AVEX",
+    "isin": null,
+    "company_name": "AEVEX Corp.  (AVEX)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2096300/000119312526164202",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "consent solicitation",
+      "filing_type": "8-K",
+      "cik": "0002096300",
+      "adsh": "0001193125-26-164202",
+      "file_description": "EX-3.1",
+      "company_raw": "AEVEX Corp.  (AVEX)  (CIK 0002096300)"
+    }
+  },
+  {
+    "ticker": "HGTXU",
+    "isin": null,
+    "company_name": "HUGOTON ROYALTY TRUST  (HGTXU)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/862022/000119312526163137",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "8-K",
+      "cik": "0000862022",
+      "adsh": "0001193125-26-163137",
+      "file_description": "EX-99.1",
+      "company_raw": "HUGOTON ROYALTY TRUST  (HGTXU)  (CIK 0000862022)"
+    }
+  },
+  {
+    "ticker": "SDST",
+    "isin": null,
+    "company_name": "Stardust Power Inc.  (SDST, SDSTW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1831979/000149315226018020",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "8-K",
+      "cik": "0001831979",
+      "adsh": "0001493152-26-018020",
+      "file_description": "EX-99.1",
+      "company_raw": "Stardust Power Inc.  (SDST, SDSTW)  (CIK 0001831979)"
+    }
+  },
+  {
+    "ticker": "BKHA",
+    "isin": null,
+    "company_name": "Black Hawk Acquisition Corp  (BKHA, BKHAR, BKHAU)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2000775/000182912626003670",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "10-Q",
+      "cik": "0002000775",
+      "adsh": "0001829126-26-003670",
+      "file_description": "10-Q",
+      "company_raw": "Black Hawk Acquisition Corp  (BKHA, BKHAR, BKHAU)  (CIK 0002000775)"
+    }
+  },
+  {
+    "ticker": "CSUI",
+    "isin": null,
+    "company_name": "CANNABIS SUISSE CORP.  (CSUI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1680132/000168013226000006",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "10-Q",
+      "cik": "0001680132",
+      "adsh": "0001680132-26-000006",
+      "file_description": "QUARTERLY REPORT",
+      "company_raw": "CANNABIS SUISSE CORP.  (CSUI)  (CIK 0001680132)"
+    }
+  },
+  {
+    "ticker": "LASE",
+    "isin": null,
+    "company_name": "Laser Photonics Corp  (LASE)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1807887/000149315226018110",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "10-K",
+      "cik": "0001807887",
+      "adsh": "0001493152-26-018110",
+      "file_description": "10-K",
+      "company_raw": "Laser Photonics Corp  (LASE)  (CIK 0001807887)"
+    }
+  },
+  {
+    "ticker": "RDI",
+    "isin": null,
+    "company_name": "READING INTERNATIONAL INC  (RDI, RDIB)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/716634/000071663426000010",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "waiver",
+      "filing_type": "10-K/A",
+      "cik": "0000716634",
+      "adsh": "0000716634-26-000010",
+      "file_description": "10-K/A",
+      "company_raw": "READING INTERNATIONAL INC  (RDI, RDIB)  (CIK 0000716634)"
+    }
+  },
+  {
+    "ticker": "FFAI",
+    "isin": null,
+    "company_name": "FARADAY FUTURE INTELLIGENT ELECTRIC INC.  (FFAI, FFAIW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1805521/000121390026045586",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "waiver",
+      "filing_type": "8-K",
+      "cik": "0001805521",
+      "adsh": "0001213900-26-045586",
+      "file_description": "FORM OF B NOTE",
+      "company_raw": "FARADAY FUTURE INTELLIGENT ELECTRIC INC.  (FFAI, FFAIW)  (CIK 0001805521)"
+    }
+  },
+  {
+    "ticker": "CSUI",
+    "isin": null,
+    "company_name": "CANNABIS SUISSE CORP.  (CSUI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1680132/000168013226000006",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "material weakness",
+      "filing_type": "10-Q",
+      "cik": "0001680132",
+      "adsh": "0001680132-26-000006",
+      "file_description": "QUARTERLY REPORT",
+      "company_raw": "CANNABIS SUISSE CORP.  (CSUI)  (CIK 0001680132)"
+    }
+  },
+  {
+    "ticker": "MIND",
+    "isin": null,
+    "company_name": "MIND TECHNOLOGY, INC  (MIND)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/926423/000143774926012831",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "material weakness",
+      "filing_type": "10-K",
+      "cik": "0000926423",
+      "adsh": "0001437749-26-012831",
+      "file_description": "FORM 10-K",
+      "company_raw": "MIND TECHNOLOGY, INC  (MIND)  (CIK 0000926423)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Blue Chip Capital Group Inc.",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1932213/000149315226017983",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "material weakness",
+      "filing_type": "10-Q",
+      "cik": "0001932213",
+      "adsh": "0001493152-26-017983",
+      "file_description": "10-Q",
+      "company_raw": "Blue Chip Capital Group Inc.  (CIK 0001932213)"
+    }
+  },
+  {
+    "ticker": "SLNG",
+    "isin": null,
+    "company_name": "Stabilis Solutions, Inc.  (SLNG)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1043186/000143774926012703",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "material weakness",
+      "filing_type": "8-K",
+      "cik": "0001043186",
+      "adsh": "0001437749-26-012703",
+      "file_description": "EXHIBIT 1.1",
+      "company_raw": "Stabilis Solutions, Inc.  (SLNG)  (CIK 0001043186)"
+    }
+  },
+  {
+    "ticker": "PRLD",
+    "isin": null,
+    "company_name": "Prelude Therapeutics Inc  (PRLD)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1678660/000119312526164510",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "material weakness",
+      "filing_type": "8-K",
+      "cik": "0001678660",
+      "adsh": "0001193125-26-164510",
+      "file_description": "EX-1.1",
+      "company_raw": "Prelude Therapeutics Inc  (PRLD)  (CIK 0001678660)"
+    }
+  },
+  {
+    "ticker": "SMCI",
+    "isin": null,
+    "company_name": "Super Micro Computer, Inc.  (SMCI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1375365/000137536526000012",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0001375365",
+      "adsh": "0001375365-26-000012",
+      "file_description": "8-K",
+      "company_raw": "Super Micro Computer, Inc.  (SMCI)  (CIK 0001375365)"
+    }
+  },
+  {
+    "ticker": "ALMR",
+    "isin": null,
+    "company_name": "Alamar Biosciences, Inc.  (ALMR)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2104204/000119312526163921",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0002104204",
+      "adsh": "0001193125-26-163921",
+      "file_description": "8-K",
+      "company_raw": "Alamar Biosciences, Inc.  (ALMR)  (CIK 0002104204)"
+    }
+  },
+  {
+    "ticker": "IGC",
+    "isin": null,
+    "company_name": "IGC Pharma, Inc.  (IGC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1326205/000118518526001437",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0001326205",
+      "adsh": "0001185185-26-001437",
+      "file_description": "EXHIBIT 10.2",
+      "company_raw": "IGC Pharma, Inc.  (IGC)  (CIK 0001326205)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "ExchangeRight Income Fund",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1771514/000119312526163165",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0001771514",
+      "adsh": "0001193125-26-163165",
+      "file_description": "EX-10.5",
+      "company_raw": "ExchangeRight Income Fund  (CIK 0001771514)"
+    }
+  },
+  {
+    "ticker": "DAIC",
+    "isin": null,
+    "company_name": "CID Holdco, Inc.  (DAIC, DAICW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2033770/000121390026045664",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0002033770",
+      "adsh": "0001213900-26-045664",
+      "file_description": "FORM OF SENIOR SECURED CONVERTIBLE PROMISSORY NOTE",
+      "company_raw": "CID Holdco, Inc.  (DAIC, DAICW)  (CIK 0002033770)"
+    }
+  },
+  {
+    "ticker": "SDST",
+    "isin": null,
+    "company_name": "Stardust Power Inc.  (SDST, SDSTW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1831979/000149315226018020",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K",
+      "cik": "0001831979",
+      "adsh": "0001493152-26-018020",
+      "file_description": "EX-99.1",
+      "company_raw": "Stardust Power Inc.  (SDST, SDSTW)  (CIK 0001831979)"
+    }
+  },
+  {
+    "ticker": "BKHA",
+    "isin": null,
+    "company_name": "Black Hawk Acquisition Corp  (BKHA, BKHAR, BKHAU)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2000775/000182912626003670",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-Q",
+      "cik": "0002000775",
+      "adsh": "0001829126-26-003670",
+      "file_description": "10-Q",
+      "company_raw": "Black Hawk Acquisition Corp  (BKHA, BKHAR, BKHAU)  (CIK 0002000775)"
+    }
+  },
+  {
+    "ticker": "CSUI",
+    "isin": null,
+    "company_name": "CANNABIS SUISSE CORP.  (CSUI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1680132/000168013226000006",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-Q",
+      "cik": "0001680132",
+      "adsh": "0001680132-26-000006",
+      "file_description": "QUARTERLY REPORT",
+      "company_raw": "CANNABIS SUISSE CORP.  (CSUI)  (CIK 0001680132)"
+    }
+  },
+  {
+    "ticker": "AERA",
+    "isin": null,
+    "company_name": "AI Era Corp.  (AERA)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1605331/000166357726000109",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "8-K",
+      "cik": "0001605331",
+      "adsh": "0001663577-26-000109",
+      "file_description": "FINANCIAL ADVISORY AGREEMENT, DATED APRIL 18, 2026, BY AND BETWEEN AI ERA CORP. AND CRAFT CAPITAL MANAGEMENT LLC",
+      "company_raw": "AI Era Corp.  (AERA)  (CIK 0001605331)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "UBUYHOLDINGS INC",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/787496/000182912626003645",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-Q",
+      "cik": "0000787496",
+      "adsh": "0001829126-26-003645",
+      "file_description": "10-Q",
+      "company_raw": "UBUYHOLDINGS INC  (CIK 0000787496)"
+    }
+  },
+  {
+    "ticker": "LASE",
+    "isin": null,
+    "company_name": "Laser Photonics Corp  (LASE)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1807887/000149315226018110",
+    "source_date": "2026-04-20",
+    "scan_date": "2026-04-21",
+    "raw_data": {
+      "keyword": "substantial doubt",
+      "filing_type": "10-K",
+      "cik": "0001807887",
+      "adsh": "0001493152-26-018110",
+      "file_description": "10-K",
+      "company_raw": "Laser Photonics Corp  (LASE)  (CIK 0001807887)"
+    }
+  }
+]

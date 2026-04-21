@@ -1,0 +1,11 @@
+{
+  "ticker_local": "RTO",
+  "mic": "XLON",
+  "figi": "BBG000BDZZM8",
+  "issuer_figi": "BBG000BDZZ11",
+  "name": "RENTOKIL INITIAL PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

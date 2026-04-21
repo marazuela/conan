@@ -1,0 +1,6 @@
+07:12:21 [run_scanner] INFO: Running fda_pdufa: FDA PDUFA calendar pipeline
+07:12:23 [fda_pdufa_pipeline] INFO: EDGAR PDUFA discovery: 31 unique companies from 43 filings
+07:12:45 [fda_pdufa_pipeline] INFO: PDUFA auto-discovery: 22 future dates, 0 new entries
+07:12:58 [fda_pdufa_pipeline] INFO: Saved 10 signals to /sessions/clever-elegant-ramanujan/mnt/Investment tool/investment_discovery_system/signals/fda_pdufa_20260416_071258.json
+07:12:58 [run_scanner] INFO:   fda_pdufa: 10 signals in 36.8s
+OK: fda_pdufa — 10 signals in 36.8s

@@ -1,0 +1,442 @@
+[
+  {
+    "ticker": "LINC",
+    "isin": null,
+    "company_name": "LINCOLN EDUCATIONAL SERVICES CORP  (LINC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1286613/000114036126014854",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001286613",
+      "adsh": "0001140361-26-014854",
+      "file_description": "EXHIBIT 10.2",
+      "company_raw": "LINCOLN EDUCATIONAL SERVICES CORP  (LINC)  (CIK 0001286613)"
+    }
+  },
+  {
+    "ticker": "QVCD",
+    "isin": null,
+    "company_name": "QVC INC  (QVCC, QVCD)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1254699/000125469926000004",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "10-K",
+      "cik": "0001254699",
+      "adsh": "0001254699-26-000004",
+      "file_description": "10-K",
+      "company_raw": "QVC INC  (QVCC, QVCD)  (CIK 0001254699)"
+    }
+  },
+  {
+    "ticker": "QVCGA",
+    "isin": null,
+    "company_name": "QVC Group, Inc.  (QVCGA, QVCGB, QVCGP)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1355096/000135509626000010",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "10-K",
+      "cik": "0001355096",
+      "adsh": "0001355096-26-000010",
+      "file_description": "10-K",
+      "company_raw": "QVC Group, Inc.  (QVCGA, QVCGB, QVCGP)  (CIK 0001355096)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Keenova Therapeutics plc",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1567892/000162828026025238",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "10-K",
+      "cik": "0001567892",
+      "adsh": "0001628280-26-025238",
+      "file_description": "10-K",
+      "company_raw": "Keenova Therapeutics plc  (CIK 0001567892)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Audax Private Credit Fund, LLC",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2033362/000119312526158197",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0002033362",
+      "adsh": "0001193125-26-158197",
+      "file_description": "EX-10.1",
+      "company_raw": "Audax Private Credit Fund, LLC  (CIK 0002033362)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "SLM Student Loan Trust 2005-5",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1330979/000114036126014824",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001330979",
+      "adsh": "0001140361-26-014824",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "SLM Student Loan Trust 2005-5  (CIK 0001330979)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "SLM Student Loan Trust 2005-7",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1331696/000114036126014829",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001331696",
+      "adsh": "0001140361-26-014829",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "SLM Student Loan Trust 2005-7  (CIK 0001331696)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "SLM Student Loan Trust 2006-5",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1358239/000114036126014833",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001358239",
+      "adsh": "0001140361-26-014833",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "SLM Student Loan Trust 2006-5  (CIK 0001358239)"
+    }
+  },
+  {
+    "ticker": "FRT",
+    "isin": null,
+    "company_name": "FEDERAL REALTY INVESTMENT TRUST  (FRT, FRT-PC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/34903/000119312526156973",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0000034903",
+      "adsh": "0001193125-26-156973",
+      "file_description": "EX-10.3",
+      "company_raw": "FEDERAL REALTY INVESTMENT TRUST  (FRT, FRT-PC)  (CIK 0000034903)"
+    }
+  },
+  {
+    "ticker": "NYC",
+    "isin": null,
+    "company_name": "American Strategic Investment Co.  (NYC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1595527/000162828026025292",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "10-K",
+      "cik": "0001595527",
+      "adsh": "0001628280-26-025292",
+      "file_description": "10-K",
+      "company_raw": "American Strategic Investment Co.  (NYC)  (CIK 0001595527)"
+    }
+  },
+  {
+    "ticker": "FLS",
+    "isin": null,
+    "company_name": "FLOWSERVE CORP  (FLS)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/30625/000119312526156982",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0000030625",
+      "adsh": "0001193125-26-156982",
+      "file_description": "EX-10.1",
+      "company_raw": "FLOWSERVE CORP  (FLS)  (CIK 0000030625)"
+    }
+  },
+  {
+    "ticker": "PENN",
+    "isin": null,
+    "company_name": "PENN Entertainment, Inc.  (PENN)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/921738/000110465926044358",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0000921738",
+      "adsh": "0001104659-26-044358",
+      "file_description": "EXHIBIT 10.1",
+      "company_raw": "PENN Entertainment, Inc.  (PENN)  (CIK 0000921738)"
+    }
+  },
+  {
+    "ticker": "CCLD",
+    "isin": null,
+    "company_name": "CareCloud, Inc.  (CCLD, CCLDO)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1582982/000149315226016464",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0001582982",
+      "adsh": "0001493152-26-016464",
+      "file_description": "EX-10.1",
+      "company_raw": "CareCloud, Inc.  (CCLD, CCLDO)  (CIK 0001582982)"
+    }
+  },
+  {
+    "ticker": "USPH",
+    "isin": null,
+    "company_name": "U S PHYSICAL THERAPY INC /NV  (USPH)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/885978/000088597826000017",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "debtor-in-possession",
+      "filing_type": "8-K",
+      "cik": "0000885978",
+      "adsh": "0000885978-26-000017",
+      "file_description": null,
+      "company_raw": "U S PHYSICAL THERAPY INC /NV  (USPH)  (CIK 0000885978)"
+    }
+  },
+  {
+    "ticker": "KORE",
+    "isin": null,
+    "company_name": "KORE Group Holdings, Inc.  (KORE, KORGW)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1855457/000114036126014631",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "SC 13E3",
+      "cik": "0001855457",
+      "adsh": "0001140361-26-014631",
+      "file_description": "SC 13E3",
+      "company_raw": "KORE Group Holdings, Inc.  (KORE, KORGW)  (CIK 0001855457)"
+    }
+  },
+  {
+    "ticker": "GSAT",
+    "isin": null,
+    "company_name": "Globalstar, Inc.  (GSAT)",
+    "market_cap_mm": 10279.6,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1366868/000114036126014528",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001366868",
+      "adsh": "0001140361-26-014528",
+      "file_description": "8-K",
+      "company_raw": "Globalstar, Inc.  (GSAT)  (CIK 0001366868)"
+    }
+  },
+  {
+    "ticker": "AVNS",
+    "isin": null,
+    "company_name": "AVANOS MEDICAL, INC.  (AVNS)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1606498/000160649826000046",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001606498",
+      "adsh": "0001606498-26-000046",
+      "file_description": "FORM 8-K",
+      "company_raw": "AVANOS MEDICAL, INC.  (AVNS)  (CIK 0001606498)"
+    }
+  },
+  {
+    "ticker": "APLS",
+    "isin": null,
+    "company_name": "Apellis Pharmaceuticals, Inc.  (APLS)",
+    "market_cap_mm": 5224.2,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1492422/000119312526153814",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "SC TO-T",
+      "cik": "0001492422",
+      "adsh": "0001193125-26-153814",
+      "file_description": "OFFER TO PURCHASE",
+      "company_raw": "Apellis Pharmaceuticals, Inc.  (APLS)  (CIK 0001492422)"
+    }
+  },
+  {
+    "ticker": "GRTX",
+    "isin": null,
+    "company_name": "Galera Therapeutics, Inc.  (GRTX)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1563577/000119312526154009",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001563577",
+      "adsh": "0001193125-26-154009",
+      "file_description": "8-K",
+      "company_raw": "Galera Therapeutics, Inc.  (GRTX)  (CIK 0001563577)"
+    }
+  },
+  {
+    "ticker": "SEM",
+    "isin": null,
+    "company_name": "SELECT MEDICAL HOLDINGS CORP  (SEM)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1320414/000110465926043531",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "SC 13E3",
+      "cik": "0001320414",
+      "adsh": "0001104659-26-043531",
+      "file_description": "SC 13E3",
+      "company_raw": "SELECT MEDICAL HOLDINGS CORP  (SEM)  (CIK 0001320414)"
+    }
+  },
+  {
+    "ticker": "HRZN",
+    "isin": null,
+    "company_name": "Horizon Technology Finance Corp  (HRZN, HTFC)",
+    "market_cap_mm": 301.0,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1487428/000114036126014610",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001487428",
+      "adsh": "0001140361-26-014610",
+      "file_description": "8-K",
+      "company_raw": "Horizon Technology Finance Corp  (HRZN, HTFC)  (CIK 0001487428)"
+    }
+  },
+  {
+    "ticker": "MRCC",
+    "isin": null,
+    "company_name": "MONROE CAPITAL Corp  (MRCC)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 5,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1512931/000114036126014615",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "merger agreement",
+      "filing_type": "8-K",
+      "cik": "0001512931",
+      "adsh": "0001140361-26-014615",
+      "file_description": "8-K",
+      "company_raw": "MONROE CAPITAL Corp  (MRCC)  (CIK 0001512931)"
+    }
+  }
+]

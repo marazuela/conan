@@ -1,0 +1,24 @@
+[
+  {
+    "ticker": "SDF.DE",
+    "isin": "DE000KSAG888",
+    "company_name": "K+S Aktiengesellschaft",
+    "market_cap_mm": 2836.9,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Eleva Capital",
+      "position_pct": 0.6,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "DE000KSAG888",
+      "crowded_info": "[{\"holder\": \"Eleva Capital\", \"position_pct\": 0.6, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"BlackRock Financial Management, Inc.\", \"position_pct\": 0.7, \"date\": \"2026-04-01\", \"regulator\": \"BAFIN\"}, {\"holder\": \"BlackRock Investment Management (UK) Limited\", \"position_pct\": 1.28, \"date\": \"2026-03-20\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Centiva Capital, LP\", \"position_pct\": 0.54, \"date\": \"2024-10-11\", \"regulator\": \"BAFIN\"}]"
+    }
+  }
+]

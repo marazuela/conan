@@ -1,0 +1,18 @@
+{
+  "_schema_version": 1,
+  "_description": "Party resolution cache for Tool 3 litigation scanners. Written by tools/party_resolver.py per D-003 and D-009. Key = normalized_name (lowercase, suffix-stripped). Value = resolution record. Cache is write-through on confidence >= 0.85 ONLY. Entries are append-mostly; re-verification rule is 180 days (see D-009). DO NOT hand-edit entries unless correcting a known-bad resolution; prefer re-running the resolver with --force.",
+  "_entry_schema": {
+    "cik": "zero-padded 10-digit SEC CIK string",
+    "ticker": "primary ticker (may be null for private-sub resolutions)",
+    "issuer_figi": "OpenFIGI share-class FIGI; null until ticker->FIGI step completes",
+    "issuer_name": "canonical issuer name as recorded by SEC",
+    "method": "one of: cache_exact, sec_edgar_exact, sec_edgar_fuzzy, exhibit21_direct, exhibit21_indirect, openfigi_name",
+    "confidence": "float in [0,1]; cache admits >= 0.85 only",
+    "resolved_at": "ISO 8601 UTC timestamp when entry was first written",
+    "last_verified_at": "ISO 8601 UTC timestamp when entry was last re-verified (may equal resolved_at)",
+    "source_raw_name": "the raw docket-caption string that produced this entry (for debugging)",
+    "notes": "optional free-text"
+  },
+  "_seed_status": "EMPTY. Seeding deferred to next session when Cowork sandbox is available for live EDGAR + OpenFIGI calls. Target: 20 hand-validated cases covering S&P 500 majors, wholly-owned subs (Exhibit-21 path), and individual/government party classes for negative coverage.",
+  "entries": {}
+}

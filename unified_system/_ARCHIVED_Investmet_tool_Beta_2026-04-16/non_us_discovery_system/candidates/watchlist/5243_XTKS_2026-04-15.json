@@ -1,0 +1,21 @@
+{
+  "ticker_local": "5243",
+  "mic": "XTKS",
+  "ticker_plus_mic": "5243.XTKS",
+  "company_name_en": "note inc.",
+  "company_name_local": "\uff27\uff0d\uff4e\uff4f\uff54\uff45",
+  "figi": "BBG01BJVZKR3",
+  "issuer_figi": "BBG00YGQ38F3",
+  "signal_id": "84042d716fa8e1fa45023e2ff486375b",
+  "signal_type": "equity_fundraise",
+  "signal_category": "shareholder",
+  "thesis_direction": "short",
+  "score_total": 27.0,
+  "translation_confidence": 0.85,
+  "market_cap_usd_mm": 306.62,
+  "source_url": "https://www.release.tdnet.info/inbs/140120260409500790.pdf",
+  "source_date": "2026-04-09T06:30:00+00:00",
+  "scan_date": "2026-04-15",
+  "scanner": "tdnet",
+  "routing": "watchlist"
+}

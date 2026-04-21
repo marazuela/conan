@@ -1,0 +1,262 @@
+[
+  {
+    "ticker": "LSTA",
+    "isin": null,
+    "company_name": "LISATA THERAPEUTICS, INC.  (LSTA)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/320017/000114036126014775",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "tender offer",
+      "filing_type": "8-K",
+      "cik": "0000320017",
+      "adsh": "0001140361-26-014775",
+      "file_description": "8-K",
+      "company_raw": "LISATA THERAPEUTICS, INC.  (LSTA)  (CIK 0000320017)"
+    }
+  },
+  {
+    "ticker": "ACLX",
+    "isin": null,
+    "company_name": "Arcellx, Inc.  (ACLX)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1786205/000110465926044653",
+    "source_date": "2026-04-17",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "tender offer",
+      "filing_type": "SC TO-T/A",
+      "cik": "0001786205",
+      "adsh": "0001104659-26-044653",
+      "file_description": "EXHIBIT 99.(A)(5)(F)",
+      "company_raw": "Arcellx, Inc.  (ACLX)  (CIK 0001786205)"
+    }
+  },
+  {
+    "ticker": "CETI",
+    "isin": null,
+    "company_name": "Cyber Enviro-Tech, Inc.  (CETI)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1935092/000107997326000493",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "fairness opinion",
+      "filing_type": "8-K",
+      "cik": "0001935092",
+      "adsh": "0001079973-26-000493",
+      "file_description": "FORM 8-K",
+      "company_raw": "Cyber Enviro-Tech, Inc.  (CETI)  (CIK 0001935092)"
+    }
+  },
+  {
+    "ticker": "SEM",
+    "isin": null,
+    "company_name": "SELECT MEDICAL HOLDINGS CORP  (SEM)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1320414/000110465926043531",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "fairness opinion",
+      "filing_type": "SC 13E3",
+      "cik": "0001320414",
+      "adsh": "0001104659-26-043531",
+      "file_description": "EXHIBIT 99.(C)(V)",
+      "company_raw": "SELECT MEDICAL HOLDINGS CORP  (SEM)  (CIK 0001320414)"
+    }
+  },
+  {
+    "ticker": "KORE",
+    "isin": null,
+    "company_name": "KORE Group Holdings, Inc.  (KORE, KORGW)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1855457/000114036126014631",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "fairness opinion",
+      "filing_type": "SC 13E3",
+      "cik": "0001855457",
+      "adsh": "0001140361-26-014631",
+      "file_description": "EXHIBIT (C)(II)",
+      "company_raw": "KORE Group Holdings, Inc.  (KORE, KORGW)  (CIK 0001855457)"
+    }
+  },
+  {
+    "ticker": "BIRD",
+    "isin": null,
+    "company_name": "Allbirds, Inc.  (BIRD)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1653909/000119312526155866",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "fairness opinion",
+      "filing_type": "PREM14A",
+      "cik": "0001653909",
+      "adsh": "0001193125-26-155866",
+      "file_description": "PREM14A",
+      "company_raw": "Allbirds, Inc.  (BIRD)  (CIK 0001653909)"
+    }
+  },
+  {
+    "ticker": "MRVL",
+    "isin": null,
+    "company_name": "Marvell Technology, Inc.  (MRVL)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1835632/000119312526157134",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0001835632",
+      "adsh": "0001193125-26-157134",
+      "file_description": "EX-4.1",
+      "company_raw": "Marvell Technology, Inc.  (MRVL)  (CIK 0001835632)"
+    }
+  },
+  {
+    "ticker": "OBDC",
+    "isin": null,
+    "company_name": "Blue Owl Capital Corp  (OBDC)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1655888/000162828026025509",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0001655888",
+      "adsh": "0001628280-26-025509",
+      "file_description": "EX-4.2",
+      "company_raw": "Blue Owl Capital Corp  (OBDC)  (CIK 0001655888)"
+    }
+  },
+  {
+    "ticker": "LION",
+    "isin": null,
+    "company_name": "Lionsgate Studios Corp.  (LION)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2052959/000205295926000037",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0002052959",
+      "adsh": "0002052959-26-000037",
+      "file_description": "EX-10.1 - JON FELTHEIMER FIRST AMENDMENT TO EMPLOYMENT AGREEEMENT",
+      "company_raw": "Lionsgate Studios Corp.  (LION)  (CIK 0002052959)"
+    }
+  },
+  {
+    "ticker": "GIS",
+    "isin": null,
+    "company_name": "GENERAL MILLS INC  (GIS)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/40704/000004070426000004",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0000040704",
+      "adsh": "0000040704-26-000004",
+      "file_description": "EX-4.1",
+      "company_raw": "GENERAL MILLS INC  (GIS)  (CIK 0000040704)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Ionetix Corp / DE /",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2108121/000121390026044239",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0002108121",
+      "adsh": "0001213900-26-044239",
+      "file_description": "2010 AMENDED AND RESTATED EQUITY COMPENSATION PLAN AND FORM OF AWARD AGREEMENTS",
+      "company_raw": "Ionetix Corp / DE /  (CIK 0002108121)"
+    }
+  },
+  {
+    "ticker": "TSNDF",
+    "isin": null,
+    "company_name": "TerrAscend Corp.  (TSNDF)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1778129/000119312526158998",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0001778129",
+      "adsh": "0001193125-26-158998",
+      "file_description": "EX-10.1",
+      "company_raw": "TerrAscend Corp.  (TSNDF)  (CIK 0001778129)"
+    }
+  },
+  {
+    "ticker": "COMP",
+    "isin": null,
+    "company_name": "Compass, Inc.  (COMP)",
+    "market_cap_mm": null,
+    "signal_type": "mna_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 3,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1563190/000156319026000089",
+    "source_date": "2026-04-17",
+    "scan_date": "2026-04-17",
+    "raw_data": {
+      "keyword": "change of control",
+      "filing_type": "8-K",
+      "cik": "0001563190",
+      "adsh": "0001563190-26-000089",
+      "file_description": "EX-10.1",
+      "company_raw": "Compass, Inc.  (COMP)  (CIK 0001563190)"
+    }
+  }
+]

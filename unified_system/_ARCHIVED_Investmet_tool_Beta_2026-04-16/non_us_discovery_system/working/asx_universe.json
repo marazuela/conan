@@ -1,0 +1,3419 @@
+{
+  "as_of": "2026-04-14T16:08:27Z",
+  "source": "https://www.asx.com.au/asx/research/ASXListedCompanies.csv",
+  "total_listed": 1980,
+  "above_floor": 426,
+  "below_floor": 1396,
+  "unresolved": 158,
+  "aud_usd_rate": 0.71349573,
+  "tickers": [
+    {
+      "ticker": "AFT",
+      "name": "AFG 2023-1 TRUST IN RESPECT OF SERIES 2023-1",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1175510307.6,
+      "market_cap_aud_mm": 1647536569.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WFE",
+      "name": "WOLFE ENERGY LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 4529362.9,
+      "market_cap_aud_mm": 6348128.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CBA",
+      "name": "COMMONWEALTH BANK OF AUSTRALIA.",
+      "gics": "Banks",
+      "market_cap_usd_mm": 218949.1,
+      "market_cap_aud_mm": 306868.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BHP",
+      "name": "BHP GROUP LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 203365.3,
+      "market_cap_aud_mm": 285026.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RIO",
+      "name": "RIO TINTO LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 202162.5,
+      "market_cap_aud_mm": 283340.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NEM",
+      "name": "NEWMONT CORPORATION",
+      "gics": "Materials",
+      "market_cap_usd_mm": 129716.3,
+      "market_cap_aud_mm": 181803.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WBC",
+      "name": "WESTPAC BANKING CORPORATION",
+      "gics": "Banks",
+      "market_cap_usd_mm": 101169.9,
+      "market_cap_aud_mm": 141794.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NAB",
+      "name": "NATIONAL AUSTRALIA BANK LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 97430.2,
+      "market_cap_aud_mm": 136553.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ANZ",
+      "name": "ANZ GROUP HOLDINGS LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 81877.3,
+      "market_cap_aud_mm": 114755.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MQG",
+      "name": "MACQUARIE GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 63090.2,
+      "market_cap_aud_mm": 88424.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WES",
+      "name": "WESFARMERS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 60792.0,
+      "market_cap_aud_mm": 85203.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CSL",
+      "name": "CSL LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 47813.4,
+      "market_cap_aud_mm": 67012.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WDS",
+      "name": "WOODSIDE ENERGY GROUP LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 46064.3,
+      "market_cap_aud_mm": 64561.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FMG",
+      "name": "FORTESCUE LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 45254.7,
+      "market_cap_aud_mm": 63426.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TLS",
+      "name": "TELSTRA GROUP LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 43375.7,
+      "market_cap_aud_mm": 60793.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GMG",
+      "name": "GOODMAN GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 40923.6,
+      "market_cap_aud_mm": 57356.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "XYZ",
+      "name": "BLOCK, INC.",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 40450.8,
+      "market_cap_aud_mm": 56693.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RMD",
+      "name": "RESMED INC",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 33479.4,
+      "market_cap_aud_mm": 46923.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WOW",
+      "name": "WOOLWORTHS GROUP LIMITED",
+      "gics": "Consumer Staples Distribution & Retail",
+      "market_cap_usd_mm": 32310.4,
+      "market_cap_aud_mm": 45284.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TCL",
+      "name": "TRANSURBAN GROUP",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 30054.2,
+      "market_cap_aud_mm": 42122.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NST",
+      "name": "NORTHERN STAR RESOURCES LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 24475.8,
+      "market_cap_aud_mm": 34304.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "QBE",
+      "name": "QBE INSURANCE GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 24462.8,
+      "market_cap_aud_mm": 34285.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SIG",
+      "name": "SIGMA HEALTHCARE LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 22320.6,
+      "market_cap_aud_mm": 31283.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "COL",
+      "name": "COLES GROUP LIMITED.",
+      "gics": "Consumer Staples Distribution & Retail",
+      "market_cap_usd_mm": 21821.1,
+      "market_cap_aud_mm": 30583.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BXB",
+      "name": "BRAMBLES LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 21607.4,
+      "market_cap_aud_mm": 30283.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AAI",
+      "name": "ALCOA CORPORATION",
+      "gics": "Materials",
+      "market_cap_usd_mm": 20974.5,
+      "market_cap_aud_mm": 29396.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALL",
+      "name": "ARISTOCRAT LEISURE LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 20248.5,
+      "market_cap_aud_mm": 28379.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EVN",
+      "name": "EVOLUTION MINING LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 19114.6,
+      "market_cap_aud_mm": 26790.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AMC",
+      "name": "AMCOR PLC",
+      "gics": "Materials",
+      "market_cap_usd_mm": 18725.1,
+      "market_cap_aud_mm": 26244.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "STO",
+      "name": "SANTOS LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 18445.5,
+      "market_cap_aud_mm": 25852.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NWS",
+      "name": "NEWS CORPORATION..",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 15951.9,
+      "market_cap_aud_mm": 22357.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LYC",
+      "name": "LYNAS RARE EARTHS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 15849.3,
+      "market_cap_aud_mm": 22213.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ORG",
+      "name": "ORIGIN ENERGY LIMITED",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 15180.3,
+      "market_cap_aud_mm": 21275.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "REA",
+      "name": "REA GROUP LTD",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 15169.3,
+      "market_cap_aud_mm": 21260.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "S32",
+      "name": "SOUTH32 LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 14931.9,
+      "market_cap_aud_mm": 20927.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FPH",
+      "name": "FISHER & PAYKEL HEALTHCARE CORPORATION LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 13156.9,
+      "market_cap_aud_mm": 18440.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SCG",
+      "name": "SCENTRE GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 13154.8,
+      "market_cap_aud_mm": 18437.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SUN",
+      "name": "SUNCORP GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 12618.1,
+      "market_cap_aud_mm": 17684.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PLS",
+      "name": "PLS GROUP LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 12410.1,
+      "market_cap_aud_mm": 17393.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IAG",
+      "name": "INSURANCE AUSTRALIA GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 12404.0,
+      "market_cap_aud_mm": 17384.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CPU",
+      "name": "COMPUTERSHARE LIMITED.",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 12252.4,
+      "market_cap_aud_mm": 17172.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SGH",
+      "name": "SGH LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 12199.3,
+      "market_cap_aud_mm": 17098.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "JHX",
+      "name": "JAMES HARDIE INDUSTRIES PLC",
+      "gics": "Materials",
+      "market_cap_usd_mm": 12157.7,
+      "market_cap_aud_mm": 17039.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SOL",
+      "name": "WASHINGTON H. SOUL PATTINSON AND COMPANY LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 11656.1,
+      "market_cap_aud_mm": 16336.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PME",
+      "name": "PRO MEDICUS LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 9840.6,
+      "market_cap_aud_mm": 13792.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "QAN",
+      "name": "QANTAS AIRWAYS LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 9695.4,
+      "market_cap_aud_mm": 13588.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "APA",
+      "name": "APA GROUP",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 9407.1,
+      "market_cap_aud_mm": 13184.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WTC",
+      "name": "WISETECH GLOBAL LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 9247.2,
+      "market_cap_aud_mm": 12960.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "XRO",
+      "name": "XERO LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 9066.4,
+      "market_cap_aud_mm": 12707.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DPM",
+      "name": "DPM METALS INC.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 9015.4,
+      "market_cap_aud_mm": 12635.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MPL",
+      "name": "MEDIBANK PRIVATE LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 8940.6,
+      "market_cap_aud_mm": 12530.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MEZ",
+      "name": "MERIDIAN ENERGY LIMITED",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 8889.3,
+      "market_cap_aud_mm": 12458.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TLC",
+      "name": "THE LOTTERY CORPORATION LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 8861.5,
+      "market_cap_aud_mm": 12419.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BSL",
+      "name": "BLUESCOPE STEEL LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 8851.9,
+      "market_cap_aud_mm": 12406.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VCX",
+      "name": "VICINITY CENTRES",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 8376.5,
+      "market_cap_aud_mm": 11740.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AIA",
+      "name": "AUCKLAND INTERNATIONAL AIRPORT LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 8212.3,
+      "market_cap_aud_mm": 11509.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MIN",
+      "name": "MINERAL RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 8211.0,
+      "market_cap_aud_mm": 11508.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "COH",
+      "name": "COCHLEAR LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 8168.6,
+      "market_cap_aud_mm": 11448.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ASX",
+      "name": "ASX LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 8166.1,
+      "market_cap_aud_mm": 11445.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALQ",
+      "name": "ALS LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 7934.3,
+      "market_cap_aud_mm": 11120.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NXG",
+      "name": "NEXGEN ENERGY (CANADA) LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 7843.9,
+      "market_cap_aud_mm": 10993.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SGP",
+      "name": "STOCKLAND",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 7373.6,
+      "market_cap_aud_mm": 10334.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IFT",
+      "name": "INFRATIL LIMITED.",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 7128.1,
+      "market_cap_aud_mm": 9990.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SHL",
+      "name": "SONIC HEALTHCARE LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 7084.5,
+      "market_cap_aud_mm": 9929.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LNW",
+      "name": "LIGHT & WONDER INC.",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 7076.1,
+      "market_cap_aud_mm": 9917.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GGP",
+      "name": "GREATLAND RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 6980.9,
+      "market_cap_aud_mm": 9784.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CSC",
+      "name": "CAPSTONE COPPER CORP.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 6898.0,
+      "market_cap_aud_mm": 9667.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ORI",
+      "name": "ORICA LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 6873.3,
+      "market_cap_aud_mm": 9633.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CHC",
+      "name": "CHARTER HALL GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 6840.7,
+      "market_cap_aud_mm": 9587.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "YAL",
+      "name": "YANCOAL AUSTRALIA LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 6811.6,
+      "market_cap_aud_mm": 9546.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TNE",
+      "name": "TECHNOLOGY ONE LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 6542.5,
+      "market_cap_aud_mm": 9169.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RHC",
+      "name": "RAMSAY HEALTH CARE LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 6530.2,
+      "market_cap_aud_mm": 9152.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CAR",
+      "name": "CAR GROUP LIMITED",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 6446.0,
+      "market_cap_aud_mm": 9034.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GPT",
+      "name": "GPT GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 6287.1,
+      "market_cap_aud_mm": 8811.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "QUB",
+      "name": "QUBE HOLDINGS LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 6278.0,
+      "market_cap_aud_mm": 8798.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "REH",
+      "name": "REECE LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 6034.4,
+      "market_cap_aud_mm": 8457.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AFI",
+      "name": "AUSTRALIAN FOUNDATION INVESTMENT COMPANY LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 6025.7,
+      "market_cap_aud_mm": 8445.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NXT",
+      "name": "NEXTDC LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 5998.0,
+      "market_cap_aud_mm": 8406.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TPG",
+      "name": "TPG TELECOM LIMITED.",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 5980.6,
+      "market_cap_aud_mm": 8382.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SFR",
+      "name": "SANDFIRE RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5842.5,
+      "market_cap_aud_mm": 8188.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALD",
+      "name": "AMPOL LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 5772.4,
+      "market_cap_aud_mm": 8090.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AII",
+      "name": "ALMONTY INDUSTRIES INC.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5771.3,
+      "market_cap_aud_mm": 8088.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "JBH",
+      "name": "JB HI-FI LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 5734.5,
+      "market_cap_aud_mm": 8037.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CEN",
+      "name": "CONTACT ENERGY LIMITED",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 5617.6,
+      "market_cap_aud_mm": 7873.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MCY",
+      "name": "MERCURY NZ LIMITED",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 5607.6,
+      "market_cap_aud_mm": 7859.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ATM",
+      "name": "ANEKA TAMBANG (PERSERO) TBK (PT)",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5570.5,
+      "market_cap_aud_mm": 7807.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PRU",
+      "name": "PERSEUS MINING LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5369.9,
+      "market_cap_aud_mm": 7526.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GMD",
+      "name": "GENESIS MINERALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5224.4,
+      "market_cap_aud_mm": 7322.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RMS",
+      "name": "RAMELIUS RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 5146.3,
+      "market_cap_aud_mm": 7212.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HUB",
+      "name": "HUB24 LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 5045.1,
+      "market_cap_aud_mm": 7071.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WHC",
+      "name": "WHITEHAVEN COAL LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 5015.9,
+      "market_cap_aud_mm": 7030.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AZJ",
+      "name": "AURIZON HOLDINGS LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 4924.2,
+      "market_cap_aud_mm": 6901.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MGR",
+      "name": "MIRVAC GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 4912.8,
+      "market_cap_aud_mm": 6885.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ARG",
+      "name": "ARGO INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 4769.9,
+      "market_cap_aud_mm": 6685.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "APE",
+      "name": "EAGERS AUTOMOTIVE LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 4734.4,
+      "market_cap_aud_mm": 6635.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AGL",
+      "name": "AGL ENERGY LIMITED.",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 4680.0,
+      "market_cap_aud_mm": 6559.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BEN",
+      "name": "BENDIGO AND ADELAIDE BANK LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 4599.6,
+      "market_cap_aud_mm": 6446.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DXS",
+      "name": "DEXUS",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 4568.8,
+      "market_cap_aud_mm": 6403.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IGO",
+      "name": "IGO LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 4473.7,
+      "market_cap_aud_mm": 6270.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALX",
+      "name": "ATLAS ARTERIA",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 4441.5,
+      "market_cap_aud_mm": 6224.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CDA",
+      "name": "CODAN LIMITED",
+      "gics": "Technology Hardware & Equipment",
+      "market_cap_usd_mm": 4419.9,
+      "market_cap_aud_mm": 6194.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WGX",
+      "name": "WESTGOLD RESOURCES LIMITED.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 4361.6,
+      "market_cap_aud_mm": 6113.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WOR",
+      "name": "WORLEY LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 4343.3,
+      "market_cap_aud_mm": 6087.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LTR",
+      "name": "LIONTOWN LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 4321.1,
+      "market_cap_aud_mm": 6056.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PDN",
+      "name": "PALADIN ENERGY LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 4232.1,
+      "market_cap_aud_mm": 5931.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EDV",
+      "name": "ENDEAVOUR GROUP LIMITED",
+      "gics": "Consumer Staples Distribution & Retail",
+      "market_cap_usd_mm": 4138.4,
+      "market_cap_aud_mm": 5800.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CGF",
+      "name": "CHALLENGER LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 4110.8,
+      "market_cap_aud_mm": 5761.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HVN",
+      "name": "HARVEY NORMAN HOLDINGS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 4098.4,
+      "market_cap_aud_mm": 5744.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NWL",
+      "name": "NETWEALTH GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 4074.3,
+      "market_cap_aud_mm": 5710.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "A2M",
+      "name": "THE A2 MILK COMPANY LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 4032.0,
+      "market_cap_aud_mm": 5651.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DNL",
+      "name": "DYNO NOBEL LIMITED.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 4008.4,
+      "market_cap_aud_mm": 5617.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RRL",
+      "name": "REGIS RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 3917.1,
+      "market_cap_aud_mm": 5490.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CMM",
+      "name": "CAPRICORN METALS LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 3861.9,
+      "market_cap_aud_mm": 5412.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TLX",
+      "name": "TELIX PHARMACEUTICALS LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 3734.5,
+      "market_cap_aud_mm": 5234.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DOW",
+      "name": "DOWNER EDI LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 3701.1,
+      "market_cap_aud_mm": 5187.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SEK",
+      "name": "SEEK LIMITED",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 3693.1,
+      "market_cap_aud_mm": 5176.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CWY",
+      "name": "CLEANAWAY WASTE MANAGEMENT LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 3628.2,
+      "market_cap_aud_mm": 5085.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GQG",
+      "name": "GQG PARTNERS INC.",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 3620.0,
+      "market_cap_aud_mm": 5073.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "STW",
+      "name": "STATE STREET SPDR S&P/ASX 200 ETF",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 3613.8,
+      "market_cap_aud_mm": 5065.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BOQ",
+      "name": "BANK OF QUEENSLAND LIMITED.",
+      "gics": "Banks",
+      "market_cap_usd_mm": 3471.4,
+      "market_cap_aud_mm": 4865.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SDF",
+      "name": "STEADFAST GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 3364.0,
+      "market_cap_aud_mm": 4714.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VAU",
+      "name": "VAULT MINERALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 3336.5,
+      "market_cap_aud_mm": 4676.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NHC",
+      "name": "NEW HOPE CORPORATION LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 3327.6,
+      "market_cap_aud_mm": 4663.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "360",
+      "name": "LIFE360 INC.",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 3262.2,
+      "market_cap_aud_mm": 4572.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VEA",
+      "name": "VIVA ENERGY GROUP LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 3105.6,
+      "market_cap_aud_mm": 4352.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NIC",
+      "name": "NICKEL INDUSTRIES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 3020.5,
+      "market_cap_aud_mm": 4233.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VNT",
+      "name": "VENTIA SERVICES GROUP LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 2941.2,
+      "market_cap_aud_mm": 4122.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ANN",
+      "name": "ANSELL LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 2922.7,
+      "market_cap_aud_mm": 4096.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EMR",
+      "name": "EMERALD RESOURCES NL",
+      "gics": "Materials",
+      "market_cap_usd_mm": 2894.2,
+      "market_cap_aud_mm": 4056.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BRG",
+      "name": "BREVILLE GROUP LIMITED",
+      "gics": "Consumer Durables & Apparel",
+      "market_cap_usd_mm": 2871.9,
+      "market_cap_aud_mm": 4025.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SGM",
+      "name": "SIMS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 2845.7,
+      "market_cap_aud_mm": 3988.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WAF",
+      "name": "WEST AFRICAN RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 2796.1,
+      "market_cap_aud_mm": 3918.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NSR",
+      "name": "NATIONAL STORAGE REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 2795.0,
+      "market_cap_aud_mm": 3917.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EBO",
+      "name": "EBOS GROUP LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 2673.9,
+      "market_cap_aud_mm": 3747.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BFL",
+      "name": "BSP FINANCIAL GROUP LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 2659.0,
+      "market_cap_aud_mm": 3726.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "4DX",
+      "name": "4DMEDICAL LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 2653.4,
+      "market_cap_aud_mm": 3718.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AMP",
+      "name": "AMP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 2510.9,
+      "market_cap_aud_mm": 3519.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CNU",
+      "name": "CHORUS LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 2419.8,
+      "market_cap_aud_mm": 3391.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SPK",
+      "name": "SPARK NEW ZEALAND LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 2407.2,
+      "market_cap_aud_mm": 3373.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PNI",
+      "name": "PINNACLE INVESTMENT MANAGEMENT GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 2393.5,
+      "market_cap_aud_mm": 3354.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MTS",
+      "name": "METCASH LIMITED",
+      "gics": "Consumer Staples Distribution & Retail",
+      "market_cap_usd_mm": 2369.6,
+      "market_cap_aud_mm": 3321.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NHF",
+      "name": "NIB HOLDINGS LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 2333.7,
+      "market_cap_aud_mm": 3270.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ILU",
+      "name": "ILUKA RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 2332.0,
+      "market_cap_aud_mm": 3268.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TUA",
+      "name": "TUAS LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 2332.0,
+      "market_cap_aud_mm": 3268.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AUB",
+      "name": "AUB GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 2297.7,
+      "market_cap_aud_mm": 3220.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IFL",
+      "name": "INSIGNIA FINANCIAL LTD",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 2292.3,
+      "market_cap_aud_mm": 3212.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DRO",
+      "name": "DRONESHIELD LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 2245.9,
+      "market_cap_aud_mm": 3147.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TWE",
+      "name": "TREASURY WINE ESTATES LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 2241.0,
+      "market_cap_aud_mm": 3140.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RSG",
+      "name": "RESOLUTE MINING LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 2211.3,
+      "market_cap_aud_mm": 3099.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MND",
+      "name": "MONADELPHOUS GROUP LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 2059.6,
+      "market_cap_aud_mm": 2886.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BPT",
+      "name": "BEACH ENERGY LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 2059.1,
+      "market_cap_aud_mm": 2885.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SUL",
+      "name": "SUPER RETAIL GROUP LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 2017.3,
+      "market_cap_aud_mm": 2827.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MFF",
+      "name": "MFF CAPITAL INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1975.8,
+      "market_cap_aud_mm": 2769.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NWH",
+      "name": "NRW HOLDINGS LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1960.4,
+      "market_cap_aud_mm": 2747.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BWP",
+      "name": "BWP GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1959.8,
+      "market_cap_aud_mm": 2746.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CIA",
+      "name": "CHAMPION IRON LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1959.4,
+      "market_cap_aud_mm": 2746.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "L1G",
+      "name": "L1 GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 1947.5,
+      "market_cap_aud_mm": 2729.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FBU",
+      "name": "FLETCHER BUILDING LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1910.9,
+      "market_cap_aud_mm": 2678.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SX2",
+      "name": "SOUTHERN CROSS GOLD CONSOLIDATED LTD.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1910.7,
+      "market_cap_aud_mm": 2677.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RGN",
+      "name": "REGION GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1869.5,
+      "market_cap_aud_mm": 2620.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LSF",
+      "name": "L1 LONG SHORT FUND LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1854.2,
+      "market_cap_aud_mm": 2598.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MSB",
+      "name": "MESOBLAST LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 1847.9,
+      "market_cap_aud_mm": 2589.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DBI",
+      "name": "DALRYMPLE BAY INFRASTRUCTURE LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 1835.8,
+      "market_cap_aud_mm": 2573.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BGL",
+      "name": "BELLEVUE GOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1834.7,
+      "market_cap_aud_mm": 2571.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HDN",
+      "name": "HOMECO DAILY NEEDS REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1811.2,
+      "market_cap_aud_mm": 2538.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LOV",
+      "name": "LOVISA HOLDINGS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 1801.5,
+      "market_cap_aud_mm": 2524.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PDI",
+      "name": "PREDICTIVE DISCOVERY LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1781.7,
+      "market_cap_aud_mm": 2497.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALK",
+      "name": "ALKANE RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1779.0,
+      "market_cap_aud_mm": 2493.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CLW",
+      "name": "CHARTER HALL LONG WALE REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1756.6,
+      "market_cap_aud_mm": 2462.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OBM",
+      "name": "ORA BANDA MINING LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1725.7,
+      "market_cap_aud_mm": 2418.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MXT",
+      "name": "METRICS MASTER INCOME TRUST",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1695.5,
+      "market_cap_aud_mm": 2376.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FLT",
+      "name": "FLIGHT CENTRE TRAVEL GROUP LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 1678.9,
+      "market_cap_aud_mm": 2353.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CTD",
+      "name": "CORPORATE TRAVEL MANAGEMENT LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 1677.8,
+      "market_cap_aud_mm": 2351.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RWC",
+      "name": "RELIANCE WORLDWIDE CORPORATION LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1664.1,
+      "market_cap_aud_mm": 2332.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SMR",
+      "name": "STANMORE RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1652.9,
+      "market_cap_aud_mm": 2316.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ZIP",
+      "name": "ZIP CO LIMITED..",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 1604.7,
+      "market_cap_aud_mm": 2249.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DRR",
+      "name": "DETERRA ROYALTIES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1579.1,
+      "market_cap_aud_mm": 2213.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CQR",
+      "name": "CHARTER HALL RETAIL REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1571.7,
+      "market_cap_aud_mm": 2202.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LLC",
+      "name": "LENDLEASE GROUP",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 1557.7,
+      "market_cap_aud_mm": 2183.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EVT",
+      "name": "EVT LIMITED",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 1550.4,
+      "market_cap_aud_mm": 2172.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TAH",
+      "name": "TABCORP HOLDINGS LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 1545.8,
+      "market_cap_aud_mm": 2166.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RXR",
+      "name": "ROBEX RESOURCES INC.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1498.8,
+      "market_cap_aud_mm": 2100.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PXA",
+      "name": "PEXA GROUP LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 1496.3,
+      "market_cap_aud_mm": 2097.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GNE",
+      "name": "GENESIS ENERGY LIMITED",
+      "gics": "Utilities",
+      "market_cap_usd_mm": 1490.5,
+      "market_cap_aud_mm": 2089.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GYG",
+      "name": "GUZMAN Y GOMEZ LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 1458.6,
+      "market_cap_aud_mm": 2044.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PMV",
+      "name": "PREMIER INVESTMENTS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 1444.2,
+      "market_cap_aud_mm": 2024.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IMD",
+      "name": "IMDEX LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1409.7,
+      "market_cap_aud_mm": 1975.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ASB",
+      "name": "AUSTAL LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1406.3,
+      "market_cap_aud_mm": 1971.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WAM",
+      "name": "WAM CAPITAL LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1389.2,
+      "market_cap_aud_mm": 1947.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ZIM",
+      "name": "ZIMPLATS HOLDINGS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1380.8,
+      "market_cap_aud_mm": 1935.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PRN",
+      "name": "PERENTI LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1379.4,
+      "market_cap_aud_mm": 1933.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WLE",
+      "name": "WAM LEADERS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1375.3,
+      "market_cap_aud_mm": 1927.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FRW",
+      "name": "FREIGHTWAYS GROUP LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 1352.0,
+      "market_cap_aud_mm": 1894.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DYL",
+      "name": "DEEP YELLOW LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 1343.4,
+      "market_cap_aud_mm": 1882.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EOS",
+      "name": "ELECTRO OPTIC SYSTEMS HOLDINGS LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1338.2,
+      "market_cap_aud_mm": 1875.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PPT",
+      "name": "PERPETUAL LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 1324.4,
+      "market_cap_aud_mm": 1856.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MAH",
+      "name": "MACMAHON HOLDINGS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1322.3,
+      "market_cap_aud_mm": 1853.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VGN",
+      "name": "VIRGIN AUSTRALIA HOLDINGS LIMITED.",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 1314.9,
+      "market_cap_aud_mm": 1842.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CIP",
+      "name": "CENTURIA INDUSTRIAL REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1309.8,
+      "market_cap_aud_mm": 1835.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BGA",
+      "name": "BEGA CHEESE LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 1308.1,
+      "market_cap_aud_mm": 1833.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "REG",
+      "name": "REGIS HEALTHCARE LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 1298.7,
+      "market_cap_aud_mm": 1820.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RDX",
+      "name": "REDOX LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1292.5,
+      "market_cap_aud_mm": 1811.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DVP",
+      "name": "DEVELOP GLOBAL LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1285.5,
+      "market_cap_aud_mm": 1801.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ASK",
+      "name": "ABACUS STORAGE KING",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1275.1,
+      "market_cap_aud_mm": 1787.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CYL",
+      "name": "CATALYST METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1254.9,
+      "market_cap_aud_mm": 1758.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SNZ",
+      "name": "SUMMERSET GROUP HOLDINGS LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 1249.1,
+      "market_cap_aud_mm": 1750.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MFG",
+      "name": "MAGELLAN FINANCIAL GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 1240.6,
+      "market_cap_aud_mm": 1738.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RYM",
+      "name": "RYMAN HEALTHCARE LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 1232.0,
+      "market_cap_aud_mm": 1726.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MAQ",
+      "name": "MACQUARIE TECHNOLOGY GROUP LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 1231.4,
+      "market_cap_aud_mm": 1725.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CBO",
+      "name": "COBRAM ESTATE OLIVES LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 1223.0,
+      "market_cap_aud_mm": 1714.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ORE",
+      "name": "OREZONE GOLD CORPORATION",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1222.7,
+      "market_cap_aud_mm": 1713.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ARB",
+      "name": "ARB CORPORATION LIMITED.",
+      "gics": "Automobiles & Components",
+      "market_cap_usd_mm": 1214.1,
+      "market_cap_aud_mm": 1701.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VUL",
+      "name": "VULCAN ENERGY RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1213.9,
+      "market_cap_aud_mm": 1701.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MI6",
+      "name": "MINERALS 260 LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1211.3,
+      "market_cap_aud_mm": 1697.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EQR",
+      "name": "EQ RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1209.6,
+      "market_cap_aud_mm": 1695.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ORA",
+      "name": "ORORA LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1206.5,
+      "market_cap_aud_mm": 1691.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SRG",
+      "name": "SRG GLOBAL LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1198.1,
+      "market_cap_aud_mm": 1679.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SLC",
+      "name": "SUPERLOOP LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 1197.2,
+      "market_cap_aud_mm": 1678.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GDG",
+      "name": "GENERATION DEVELOPMENT GROUP LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 1195.6,
+      "market_cap_aud_mm": 1675.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "JDO",
+      "name": "JUDO CAPITAL HOLDINGS LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 1192.0,
+      "market_cap_aud_mm": 1670.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DMP",
+      "name": "DOMINO'S PIZZA ENTERPRISES LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 1188.7,
+      "market_cap_aud_mm": 1666.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SRL",
+      "name": "SUNRISE ENERGY METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1181.8,
+      "market_cap_aud_mm": 1656.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "INA",
+      "name": "INGENIA COMMUNITIES GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1177.8,
+      "market_cap_aud_mm": 1650.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GLF",
+      "name": "GEMLIFE COMMUNITIES GROUP",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 1174.9,
+      "market_cap_aud_mm": 1646.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IPX",
+      "name": "IPERIONX LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1169.6,
+      "market_cap_aud_mm": 1639.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ERA",
+      "name": "ENERGY RESOURCES OF AUSTRALIA LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 1157.0,
+      "market_cap_aud_mm": 1621.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ELD",
+      "name": "ELDERS LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 1155.4,
+      "market_cap_aud_mm": 1619.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MAD",
+      "name": "MADER GROUP LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 1154.1,
+      "market_cap_aud_mm": 1617.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GOZ",
+      "name": "GROWTHPOINT PROPERTIES AUSTRALIA",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1151.7,
+      "market_cap_aud_mm": 1614.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SLX",
+      "name": "SILEX SYSTEMS LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1143.8,
+      "market_cap_aud_mm": 1603.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DDR",
+      "name": "DICKER DATA LIMITED",
+      "gics": "Technology Hardware & Equipment",
+      "market_cap_usd_mm": 1139.3,
+      "market_cap_aud_mm": 1596.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NEC",
+      "name": "NINE ENTERTAINMENT CO. HOLDINGS LIMITED",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 1137.1,
+      "market_cap_aud_mm": 1593.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FFM",
+      "name": "FIREFLY METALS LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1135.4,
+      "market_cap_aud_mm": 1591.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WPR",
+      "name": "WAYPOINT REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 1132.3,
+      "market_cap_aud_mm": 1587.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NEU",
+      "name": "NEUREN PHARMACEUTICALS LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 1115.6,
+      "market_cap_aud_mm": 1563.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "KAR",
+      "name": "KAROON ENERGY LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 1104.6,
+      "market_cap_aud_mm": 1548.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MGH",
+      "name": "MAAS GROUP HOLDINGS LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1093.1,
+      "market_cap_aud_mm": 1532.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DTR",
+      "name": "DATELINE RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1076.6,
+      "market_cap_aud_mm": 1508.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LIN",
+      "name": "LINDIAN RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1074.6,
+      "market_cap_aud_mm": 1506.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ELV",
+      "name": "ELEVRA LITHIUM LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1074.1,
+      "market_cap_aud_mm": 1505.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ABB",
+      "name": "AUSSIE BROADBAND LIMITED",
+      "gics": "Telecommunication Services",
+      "market_cap_usd_mm": 1063.4,
+      "market_cap_aud_mm": 1490.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PNR",
+      "name": "PANTORO GOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1049.1,
+      "market_cap_aud_mm": 1470.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ELS",
+      "name": "ELSIGHT LIMITED",
+      "gics": "Technology Hardware & Equipment",
+      "market_cap_usd_mm": 1044.6,
+      "market_cap_aud_mm": 1464.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GNC",
+      "name": "GRAINCORP LIMITED",
+      "gics": "Consumer Staples Distribution & Retail",
+      "market_cap_usd_mm": 1043.7,
+      "market_cap_aud_mm": 1462.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HLI",
+      "name": "HELIA GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 1040.7,
+      "market_cap_aud_mm": 1458.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ARU",
+      "name": "ARAFURA RARE EARTHS LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1035.2,
+      "market_cap_aud_mm": 1450.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GNP",
+      "name": "GENUSPLUS GROUP LTD",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 1031.0,
+      "market_cap_aud_mm": 1444.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "KCN",
+      "name": "KINGSGATE CONSOLIDATED LIMITED.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 1025.8,
+      "market_cap_aud_mm": 1437.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SNL",
+      "name": "SUPPLY NETWORK LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 1011.8,
+      "market_cap_aud_mm": 1418.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PGF",
+      "name": "PM CAPITAL GLOBAL OPPORTUNITIES FUND LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 1010.2,
+      "market_cap_aud_mm": 1415.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TBN",
+      "name": "TAMBORAN RESOURCES CORPORATION",
+      "gics": "Energy",
+      "market_cap_usd_mm": 1008.3,
+      "market_cap_aud_mm": 1413.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BKI",
+      "name": "BKI INVESTMENT COMPANY LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 996.3,
+      "market_cap_aud_mm": 1396.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ARF",
+      "name": "ARENA REIT.",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 988.6,
+      "market_cap_aud_mm": 1385.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MAF",
+      "name": "MA FINANCIAL GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 981.8,
+      "market_cap_aud_mm": 1376.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NCK",
+      "name": "NICK SCALI LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 970.3,
+      "market_cap_aud_mm": 1359.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AUI",
+      "name": "AUSTRALIAN UNITED INVESTMENT COMPANY LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 966.0,
+      "market_cap_aud_mm": 1353.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MP1",
+      "name": "MEGAPORT LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 940.8,
+      "market_cap_aud_mm": 1318.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CNI",
+      "name": "CENTURIA CAPITAL GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 938.5,
+      "market_cap_aud_mm": 1315.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BRE",
+      "name": "BRAZILIAN RARE EARTHS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 932.0,
+      "market_cap_aud_mm": 1306.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MLX",
+      "name": "METALS X LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 917.0,
+      "market_cap_aud_mm": 1285.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GCI",
+      "name": "GRYPHON CAPITAL INCOME TRUST",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 916.6,
+      "market_cap_aud_mm": 1284.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IRE",
+      "name": "IRESS LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 911.6,
+      "market_cap_aud_mm": 1277.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TEA",
+      "name": "TASMEA LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 906.1,
+      "market_cap_aud_mm": 1270.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "UOS",
+      "name": "UNITED OVERSEAS AUSTRALIA LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 900.2,
+      "market_cap_aud_mm": 1261.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SSM",
+      "name": "SERVICE STREAM LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 860.4,
+      "market_cap_aud_mm": 1205.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MC2",
+      "name": "MARIMACA COPPER CORP.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 837.4,
+      "market_cap_aud_mm": 1173.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SIQ",
+      "name": "SMARTGROUP CORPORATION LTD",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 837.2,
+      "market_cap_aud_mm": 1173.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AIZ",
+      "name": "AIR NEW ZEALAND LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 830.6,
+      "market_cap_aud_mm": 1164.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BCI",
+      "name": "BCI MINERALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 806.9,
+      "market_cap_aud_mm": 1131.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PYC",
+      "name": "PYC THERAPEUTICS LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 806.8,
+      "market_cap_aud_mm": 1130.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "APZ",
+      "name": "ASPEN GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 779.7,
+      "market_cap_aud_mm": 1092.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DUI",
+      "name": "DIVERSIFIED UNITED INVESTMENT LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 777.1,
+      "market_cap_aud_mm": 1089.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NAN",
+      "name": "NANOSONICS LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 775.0,
+      "market_cap_aud_mm": 1086.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CU6",
+      "name": "CLARITY PHARMACEUTICALS LTD",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 772.9,
+      "market_cap_aud_mm": 1083.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OCL",
+      "name": "OBJECTIVE CORPORATION LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 766.4,
+      "market_cap_aud_mm": 1074.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "KLS",
+      "name": "KELSIAN GROUP LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 765.4,
+      "market_cap_aud_mm": 1072.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MMS",
+      "name": "MCMILLAN SHAKESPEARE LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 757.3,
+      "market_cap_aud_mm": 1061.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NGI",
+      "name": "NAVIGATOR GLOBAL INVESTMENTS LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 753.4,
+      "market_cap_aud_mm": 1055.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WA1",
+      "name": "WA1 RESOURCES LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 752.6,
+      "market_cap_aud_mm": 1054.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LFG",
+      "name": "LIBERTY FINANCIAL GROUP",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 747.3,
+      "market_cap_aud_mm": 1047.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DTL",
+      "name": "DATA#3 LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 746.9,
+      "market_cap_aud_mm": 1046.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CHI",
+      "name": "CHANNEL INFRASTRUCTURE NZ LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 729.1,
+      "market_cap_aud_mm": 1021.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CKF",
+      "name": "COLLINS FOODS LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 725.7,
+      "market_cap_aud_mm": 1017.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DGT",
+      "name": "DIGICO INFRASTRUCTURE REIT",
+      "gics": "Class Pend",
+      "market_cap_usd_mm": 724.7,
+      "market_cap_aud_mm": 1015.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CMW",
+      "name": "CROMWELL PROPERTY GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 719.4,
+      "market_cap_aud_mm": 1008.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PL8",
+      "name": "PLATO INCOME MAXIMISER LIMITED.",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 718.4,
+      "market_cap_aud_mm": 1006.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IEL",
+      "name": "IDP EDUCATION LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 712.9,
+      "market_cap_aud_mm": 999.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RIC",
+      "name": "RIDLEY CORPORATION LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 708.8,
+      "market_cap_aud_mm": 993.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GLS",
+      "name": "L1 GLOBAL LONG SHORT FUND LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 706.7,
+      "market_cap_aud_mm": 990.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HGH",
+      "name": "HEARTLAND GROUP HOLDINGS LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 702.0,
+      "market_cap_aud_mm": 983.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PMT",
+      "name": "PMET RESOURCES INC.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 700.9,
+      "market_cap_aud_mm": 982.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "QRI",
+      "name": "QUALITAS REAL ESTATE INCOME FUND",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 693.4,
+      "market_cap_aud_mm": 971.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HMC",
+      "name": "HMC CAPITAL LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 691.8,
+      "market_cap_aud_mm": 969.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RPL",
+      "name": "REGAL PARTNERS LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 690.1,
+      "market_cap_aud_mm": 967.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LFS",
+      "name": "LATITUDE GROUP HOLDINGS LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 689.9,
+      "market_cap_aud_mm": 967.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CQE",
+      "name": "CHARTER HALL SOCIAL INFRASTRUCTURE REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 688.4,
+      "market_cap_aud_mm": 964.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WEB",
+      "name": "WEB TRAVEL GROUP LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 686.9,
+      "market_cap_aud_mm": 962.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CAT",
+      "name": "CATAPULT SPORTS LTD",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 685.8,
+      "market_cap_aud_mm": 961.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CIN",
+      "name": "CARLTON INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 675.5,
+      "market_cap_aud_mm": 946.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HSN",
+      "name": "HANSEN TECHNOLOGIES LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 661.9,
+      "market_cap_aud_mm": 927.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AOV",
+      "name": "AMOTIV LIMITED",
+      "gics": "Automobiles & Components",
+      "market_cap_usd_mm": 655.1,
+      "market_cap_aud_mm": 918.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BC8",
+      "name": "BLACK CAT SYNDICATE LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 650.0,
+      "market_cap_aud_mm": 911.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PPC",
+      "name": "PEET LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 649.7,
+      "market_cap_aud_mm": 910.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WBT",
+      "name": "WEEBIT NANO LTD",
+      "gics": "Semiconductors & Semiconductor Equipment",
+      "market_cap_usd_mm": 647.4,
+      "market_cap_aud_mm": 907.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BVS",
+      "name": "BRAVURA SOLUTIONS LIMITED.",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 642.9,
+      "market_cap_aud_mm": 901.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PWH",
+      "name": "PWR HOLDINGS LIMITED",
+      "gics": "Automobiles & Components",
+      "market_cap_usd_mm": 641.5,
+      "market_cap_aud_mm": 899.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IPH",
+      "name": "IPH LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 638.7,
+      "market_cap_aud_mm": 895.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CXO",
+      "name": "CORE LITHIUM LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 634.7,
+      "market_cap_aud_mm": 889.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BGP",
+      "name": "BRISCOE GROUP AUSTRALASIA LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 632.7,
+      "market_cap_aud_mm": 886.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "A4N",
+      "name": "ALPHA HPA LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 631.9,
+      "market_cap_aud_mm": 885.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SXE",
+      "name": "SOUTHERN CROSS ELECTRICAL ENGINEERING LTD",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 626.2,
+      "market_cap_aud_mm": 877.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SBM",
+      "name": "ST BARBARA LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 625.8,
+      "market_cap_aud_mm": 877.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ABG",
+      "name": "ABACUS GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 612.1,
+      "market_cap_aud_mm": 857.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WGN",
+      "name": "WAGNERS HOLDING COMPANY LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 609.9,
+      "market_cap_aud_mm": 854.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NUF",
+      "name": "NUFARM LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 608.5,
+      "market_cap_aud_mm": 852.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "C79",
+      "name": "CHRYSOS CORPORATION LIMITED",
+      "gics": "Commercial & Professional Services",
+      "market_cap_usd_mm": 605.9,
+      "market_cap_aud_mm": 849.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AVR",
+      "name": "ANTERIS TECHNOLOGIES GLOBAL CORP.",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 603.2,
+      "market_cap_aud_mm": 845.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SDR",
+      "name": "SITEMINDER LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 602.6,
+      "market_cap_aud_mm": 844.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BMN",
+      "name": "BANNERMAN ENERGY LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 601.8,
+      "market_cap_aud_mm": 843.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BNZ",
+      "name": "BENZ MINING CORP.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 600.3,
+      "market_cap_aud_mm": 841.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IDX",
+      "name": "INTEGRAL DIAGNOSTICS LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 598.9,
+      "market_cap_aud_mm": 839.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OPT",
+      "name": "OPTHEA LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 585.6,
+      "market_cap_aud_mm": 820.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TPW",
+      "name": "TEMPLE & WEBSTER GROUP LTD",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 582.7,
+      "market_cap_aud_mm": 816.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TVN",
+      "name": "TIVAN LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 582.5,
+      "market_cap_aud_mm": 816.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CCL",
+      "name": "CUSCAL LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 575.4,
+      "market_cap_aud_mm": 806.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PPM",
+      "name": "PEPPER MONEY LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 575.3,
+      "market_cap_aud_mm": 806.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AAC",
+      "name": "AUSTRALIAN AGRICULTURAL COMPANY LIMITED.",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 574.1,
+      "market_cap_aud_mm": 804.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "VSL",
+      "name": "VULCAN STEEL LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 568.7,
+      "market_cap_aud_mm": 797.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MYS",
+      "name": "MYSTATE LIMITED",
+      "gics": "Banks",
+      "market_cap_usd_mm": 563.0,
+      "market_cap_aud_mm": 789.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RFF",
+      "name": "RURAL FUNDS GROUP",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 561.7,
+      "market_cap_aud_mm": 787.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WGB",
+      "name": "WAM GLOBAL LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 552.7,
+      "market_cap_aud_mm": 774.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SGR",
+      "name": "THE STAR ENTERTAINMENT GROUP LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 544.5,
+      "market_cap_aud_mm": 763.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FML",
+      "name": "FOCUS MINERALS LTD",
+      "gics": "Materials",
+      "market_cap_usd_mm": 543.9,
+      "market_cap_aud_mm": 762.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DXI",
+      "name": "DEXUS INDUSTRIA REIT.",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 538.8,
+      "market_cap_aud_mm": 755.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DJW",
+      "name": "DJERRIWARRH INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 536.4,
+      "market_cap_aud_mm": 751.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ING",
+      "name": "INGHAMS GROUP LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 535.7,
+      "market_cap_aud_mm": 750.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FCL",
+      "name": "FINEOS CORPORATION HOLDINGS PLC",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 533.9,
+      "market_cap_aud_mm": 748.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BMC",
+      "name": "BMC MINERALS LTD.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 523.2,
+      "market_cap_aud_mm": 733.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CCP",
+      "name": "CREDIT CORP GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 519.2,
+      "market_cap_aud_mm": 727.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CVL",
+      "name": "CIVMEC LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 514.5,
+      "market_cap_aud_mm": 721.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "QAL",
+      "name": "QUALITAS LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 514.0,
+      "market_cap_aud_mm": 720.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BOE",
+      "name": "BOSS ENERGY LTD",
+      "gics": "Energy",
+      "market_cap_usd_mm": 510.9,
+      "market_cap_aud_mm": 716.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PNV",
+      "name": "POLYNOVO LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 507.7,
+      "market_cap_aud_mm": 711.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GNG",
+      "name": "GR ENGINEERING SERVICES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 500.5,
+      "market_cap_aud_mm": 701.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "DUR",
+      "name": "DURATEC LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 491.2,
+      "market_cap_aud_mm": 688.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TCG",
+      "name": "TURACO GOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 485.0,
+      "market_cap_aud_mm": 679.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TRA",
+      "name": "TURNERS AUTOMOTIVE GROUP LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 483.8,
+      "market_cap_aud_mm": 678.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WTN",
+      "name": "WINTON LAND LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 480.4,
+      "market_cap_aud_mm": 673.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WIA",
+      "name": "WIA GOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 479.5,
+      "market_cap_aud_mm": 672.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SRV",
+      "name": "SERVCORP LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 477.2,
+      "market_cap_aud_mm": 668.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SMI",
+      "name": "SANTANA MINERALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 471.2,
+      "market_cap_aud_mm": 660.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "29M",
+      "name": "29METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 468.3,
+      "market_cap_aud_mm": 656.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "HM1",
+      "name": "HEARTS AND MINDS INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 462.4,
+      "market_cap_aud_mm": 648.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RXL",
+      "name": "ROX RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 460.9,
+      "market_cap_aud_mm": 646.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FGG",
+      "name": "FUTURE GENERATION GLOBAL LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 454.9,
+      "market_cap_aud_mm": 637.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EHL",
+      "name": "EMECO HOLDINGS LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 451.2,
+      "market_cap_aud_mm": 632.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SKC",
+      "name": "SKYCITY ENTERTAINMENT GROUP LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 449.0,
+      "market_cap_aud_mm": 629.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CWP",
+      "name": "CEDAR WOODS PROPERTIES LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 448.0,
+      "market_cap_aud_mm": 627.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CHN",
+      "name": "CHALICE MINING LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 446.0,
+      "market_cap_aud_mm": 625.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AYA",
+      "name": "ARTRYA LIMITED",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 439.8,
+      "market_cap_aud_mm": 616.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SKS",
+      "name": "SKS TECHNOLOGIES GROUP LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 436.1,
+      "market_cap_aud_mm": 611.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LRV",
+      "name": "LARVOTTO RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 434.4,
+      "market_cap_aud_mm": 608.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IMR",
+      "name": "IMRICOR MEDICAL SYSTEMS INC.",
+      "gics": "Health Care Equipment & Services",
+      "market_cap_usd_mm": 429.4,
+      "market_cap_aud_mm": 601.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WHF",
+      "name": "WHITEFIELD INDUSTRIALS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 429.4,
+      "market_cap_aud_mm": 601.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EIQ",
+      "name": "ECHOIQ LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 424.4,
+      "market_cap_aud_mm": 594.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "STK",
+      "name": "STRICKLAND METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 422.5,
+      "market_cap_aud_mm": 592.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MIR",
+      "name": "MIRRABOOKA INVESTMENTS LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 420.1,
+      "market_cap_aud_mm": 588.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "KSC",
+      "name": "K & S CORPORATION LIMITED",
+      "gics": "Transportation",
+      "market_cap_usd_mm": 416.5,
+      "market_cap_aud_mm": 583.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GTK",
+      "name": "GENTRACK GROUP LIMITED",
+      "gics": "Software & Services",
+      "market_cap_usd_mm": 413.2,
+      "market_cap_aud_mm": 579.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MAU",
+      "name": "MAGNETIC RESOURCES NL",
+      "gics": "Materials",
+      "market_cap_usd_mm": 413.2,
+      "market_cap_aud_mm": 579.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "A1G",
+      "name": "AFRICAN GOLD LTD.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 412.4,
+      "market_cap_aud_mm": 578.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OPH",
+      "name": "OPHIR HIGH CONVICTION FUND",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 411.4,
+      "market_cap_aud_mm": 576.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MOT",
+      "name": "METRICS INCOME OPPORTUNITIES TRUST",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 404.7,
+      "market_cap_aud_mm": 567.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AEF",
+      "name": "AUSTRALIAN ETHICAL INVESTMENT LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 404.5,
+      "market_cap_aud_mm": 566.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TWR",
+      "name": "TOWER LIMITED",
+      "gics": "Insurance",
+      "market_cap_usd_mm": 403.1,
+      "market_cap_aud_mm": 564.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "COF",
+      "name": "CENTURIA OFFICE REIT",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 402.8,
+      "market_cap_aud_mm": 564.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FGX",
+      "name": "FUTURE GENERATION AUSTRALIA LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 400.2,
+      "market_cap_aud_mm": 560.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "UNI",
+      "name": "UNIVERSAL STORE HOLDINGS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 399.6,
+      "market_cap_aud_mm": 560.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SHA",
+      "name": "SHAPE AUSTRALIA CORPORATION LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 395.5,
+      "market_cap_aud_mm": 554.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "JMS",
+      "name": "JUPITER MINES LIMITED.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 392.7,
+      "market_cap_aud_mm": 550.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GWA",
+      "name": "GWA GROUP LIMITED.",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 391.7,
+      "market_cap_aud_mm": 549.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AEL",
+      "name": "AMPLITUDE ENERGY LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 391.6,
+      "market_cap_aud_mm": 548.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LIC",
+      "name": "LIFESTYLE COMMUNITIES LIMITED",
+      "gics": "Real Estate Management & Development",
+      "market_cap_usd_mm": 390.9,
+      "market_cap_aud_mm": 547.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "GLN",
+      "name": "GALAN LITHIUM LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 389.1,
+      "market_cap_aud_mm": 545.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CRN",
+      "name": "CORONADO GLOBAL RESOURCES INC.",
+      "gics": "Materials",
+      "market_cap_usd_mm": 388.6,
+      "market_cap_aud_mm": 544.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MA1",
+      "name": "MA CREDIT INCOME TRUST",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 387.8,
+      "market_cap_aud_mm": 543.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SLF",
+      "name": "STATE STREET SPDR S&P/ASX 200 LISTED PROPERTY ETF",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 384.5,
+      "market_cap_aud_mm": 538.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SYL",
+      "name": "SYMAL GROUP LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 383.9,
+      "market_cap_aud_mm": 538.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AUC",
+      "name": "AUSGOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 381.1,
+      "market_cap_aud_mm": 534.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "EQT",
+      "name": "EQT HOLDINGS LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 380.6,
+      "market_cap_aud_mm": 533.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PFP",
+      "name": "PROPEL FUNERAL PARTNERS LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 378.0,
+      "market_cap_aud_mm": 529.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FRS",
+      "name": "FORRESTANIA RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 377.4,
+      "market_cap_aud_mm": 528.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SHV",
+      "name": "SELECT HARVESTS LIMITED",
+      "gics": "Food, Beverage & Tobacco",
+      "market_cap_usd_mm": 374.1,
+      "market_cap_aud_mm": 524.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "NMG",
+      "name": "NEW MURCHISON GOLD LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 372.1,
+      "market_cap_aud_mm": 521.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "LYL",
+      "name": "LYCOPODIUM LIMITED",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 368.3,
+      "market_cap_aud_mm": 516.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WC8",
+      "name": "WILDCAT RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 367.9,
+      "market_cap_aud_mm": 515.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "FPR",
+      "name": "FLEETPARTNERS GROUP LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 366.7,
+      "market_cap_aud_mm": 514.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "IPG",
+      "name": "IPD GROUP LTD",
+      "gics": "Capital Goods",
+      "market_cap_usd_mm": 366.5,
+      "market_cap_aud_mm": 513.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "RAC",
+      "name": "RACURA ONCOLOGY LTD",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 365.7,
+      "market_cap_aud_mm": 512.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ASG",
+      "name": "AUTOSPORTS GROUP LIMITED.",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 363.3,
+      "market_cap_aud_mm": 509.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OML",
+      "name": "OOH!MEDIA LIMITED",
+      "gics": "Media & Entertainment",
+      "market_cap_usd_mm": 361.6,
+      "market_cap_aud_mm": 506.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AFG",
+      "name": "AUSTRALIAN FINANCE GROUP LTD",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 355.8,
+      "market_cap_aud_mm": 498.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "JIN",
+      "name": "JUMBO INTERACTIVE LIMITED",
+      "gics": "Consumer Services",
+      "market_cap_usd_mm": 352.4,
+      "market_cap_aud_mm": 494.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SGQ",
+      "name": "ST GEORGE MINING LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 350.2,
+      "market_cap_aud_mm": 490.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "OBL",
+      "name": "OMNI BRIDGEWAY LIMITED",
+      "gics": "Financial Services",
+      "market_cap_usd_mm": 349.3,
+      "market_cap_aud_mm": 489.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WQG",
+      "name": "WCM GLOBAL GROWTH LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 344.7,
+      "market_cap_aud_mm": 483.2,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MTM",
+      "name": "METALLIUM LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 341.7,
+      "market_cap_aud_mm": 478.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MGX",
+      "name": "MGX RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 341.1,
+      "market_cap_aud_mm": 478.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MYR",
+      "name": "MYER HOLDINGS LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 339.6,
+      "market_cap_aud_mm": 476.0,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MEK",
+      "name": "MEEKA METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 336.3,
+      "market_cap_aud_mm": 471.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "TRE",
+      "name": "TOUBANI RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 330.9,
+      "market_cap_aud_mm": 463.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "MEI",
+      "name": "METEORIC RESOURCES NL",
+      "gics": "Materials",
+      "market_cap_usd_mm": 330.4,
+      "market_cap_aud_mm": 463.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AIS",
+      "name": "AERIS RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 328.9,
+      "market_cap_aud_mm": 460.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CUV",
+      "name": "CLINUVEL PHARMACEUTICALS LIMITED",
+      "gics": "Pharmaceuticals, Biotechnology & Life Sciences",
+      "market_cap_usd_mm": 328.5,
+      "market_cap_aud_mm": 460.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PIC",
+      "name": "PERPETUAL EQUITY INVESTMENT COMPANY LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 324.4,
+      "market_cap_aud_mm": 454.6,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "PE1",
+      "name": "PENGANA PRIVATE EQUITY TRUST",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 321.8,
+      "market_cap_aud_mm": 451.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "WMI",
+      "name": "WAM MICROCAP LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 320.9,
+      "market_cap_aud_mm": 449.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "AMI",
+      "name": "AURELIA METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 320.2,
+      "market_cap_aud_mm": 448.8,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "A1M",
+      "name": "AIC MINES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 318.7,
+      "market_cap_aud_mm": 446.7,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "SVM",
+      "name": "SOVEREIGN METALS LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 318.5,
+      "market_cap_aud_mm": 446.4,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "CDP",
+      "name": "CARINDALE PROPERTY TRUST",
+      "gics": "Equity Real Estate Investment Trusts (REITs)",
+      "market_cap_usd_mm": 317.0,
+      "market_cap_aud_mm": 444.3,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BTR",
+      "name": "BRIGHTSTAR RESOURCES LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 313.3,
+      "market_cap_aud_mm": 439.1,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ALI",
+      "name": "ARGO GLOBAL LISTED INFRASTRUCTURE LIMITED",
+      "gics": "Not Applic",
+      "market_cap_usd_mm": 310.0,
+      "market_cap_aud_mm": 434.5,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "BAP",
+      "name": "BAPCOR LIMITED",
+      "gics": "Consumer Discretionary Distribution & Retail",
+      "market_cap_usd_mm": 309.6,
+      "market_cap_aud_mm": 433.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "STX",
+      "name": "STRIKE ENERGY LIMITED",
+      "gics": "Energy",
+      "market_cap_usd_mm": 308.2,
+      "market_cap_aud_mm": 431.9,
+      "currency": "AUD"
+    },
+    {
+      "ticker": "ASL",
+      "name": "ANDEAN SILVER LIMITED",
+      "gics": "Materials",
+      "market_cap_usd_mm": 306.4,
+      "market_cap_aud_mm": 429.4,
+      "currency": "AUD"
+    }
+  ]
+}

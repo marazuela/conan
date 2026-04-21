@@ -1,0 +1,336 @@
+{
+  "name": "congressional",
+  "success": true,
+  "signal_count": 12,
+  "duration_s": 44.9,
+  "error": null,
+  "signals": [
+    {
+      "ticker": "UHAL",
+      "isin": null,
+      "company_name": "Amerco",
+      "market_cap_mm": 9892.1,
+      "signal_type": "congressional_unusual_size",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-03-13",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "August Pfluger",
+        "party": "Republican",
+        "house": "House",
+        "state": "TX",
+        "transaction": "buy",
+        "range": "15K\u201350K",
+        "amount_midpoint": 32500.0,
+        "transaction_date": "2026-03-13",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": [
+          "unusual_size"
+        ]
+      }
+    },
+    {
+      "ticker": "B",
+      "isin": null,
+      "company_name": "Berkshire Hathaway IncBRK/",
+      "market_cap_mm": 71875.8,
+      "signal_type": "congressional_unusual_size+timing_cluster:2_members",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-03-13",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "August Pfluger",
+        "party": "Republican",
+        "house": "House",
+        "state": "TX",
+        "transaction": "buy",
+        "range": "15K\u201350K",
+        "amount_midpoint": 32500.0,
+        "transaction_date": "2026-03-13",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 2,
+        "signal_flags": [
+          "unusual_size",
+          "timing_cluster:2_members"
+        ]
+      }
+    },
+    {
+      "ticker": "PDMLP",
+      "isin": null,
+      "company_name": "Dorchester Minerals",
+      "market_cap_mm": null,
+      "signal_type": "congressional_unusual_size",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-03-13",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "August Pfluger",
+        "party": "Republican",
+        "house": "House",
+        "state": "TX",
+        "transaction": "buy",
+        "range": "15K\u201350K",
+        "amount_midpoint": 32500.0,
+        "transaction_date": "2026-03-13",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": [
+          "unusual_size"
+        ]
+      }
+    },
+    {
+      "ticker": "LPEPD",
+      "isin": null,
+      "company_name": "Enterprise Products Partners",
+      "market_cap_mm": null,
+      "signal_type": "congressional_unusual_size",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-03-13",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "August Pfluger",
+        "party": "Republican",
+        "house": "House",
+        "state": "TX",
+        "transaction": "buy",
+        "range": "15K\u201350K",
+        "amount_midpoint": 32500.0,
+        "transaction_date": "2026-03-13",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": [
+          "unusual_size"
+        ]
+      }
+    },
+    {
+      "ticker": "AXP",
+      "isin": null,
+      "company_name": "American Express Co",
+      "market_cap_mm": 224955.3,
+      "signal_type": "congressional_timing_cluster:2_members",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "sell",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 2,
+        "signal_flags": [
+          "timing_cluster:2_members"
+        ]
+      }
+    },
+    {
+      "ticker": "AWK",
+      "isin": null,
+      "company_name": "American Water Works Company Inc",
+      "market_cap_mm": 25421.6,
+      "signal_type": "congressional_trade",
+      "signal_category": "congressional",
+      "strength_estimate": 2,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "sell",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": []
+      }
+    },
+    {
+      "ticker": "BR",
+      "isin": null,
+      "company_name": "Broadridge Financial Solutions Inc",
+      "market_cap_mm": 19194.7,
+      "signal_type": "congressional_trade",
+      "signal_category": "congressional",
+      "strength_estimate": 2,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "sell",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": []
+      }
+    },
+    {
+      "ticker": "CARR",
+      "isin": null,
+      "company_name": "Carrier Global Corp",
+      "market_cap_mm": 49841.4,
+      "signal_type": "congressional_timing_cluster:2_members",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "buy",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 2,
+        "signal_flags": [
+          "timing_cluster:2_members"
+        ]
+      }
+    },
+    {
+      "ticker": "CASY",
+      "isin": null,
+      "company_name": "Casey's General Stores Inc.",
+      "market_cap_mm": 27309.8,
+      "signal_type": "congressional_trade",
+      "signal_category": "congressional",
+      "strength_estimate": 2,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "buy",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": []
+      }
+    },
+    {
+      "ticker": "NEE",
+      "isin": null,
+      "company_name": "NextEra Energy Inc",
+      "market_cap_mm": 189846.0,
+      "signal_type": "congressional_trade",
+      "signal_category": "congressional",
+      "strength_estimate": 2,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "buy",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": []
+      }
+    },
+    {
+      "ticker": "PAYX",
+      "isin": null,
+      "company_name": "Paychex Inc",
+      "market_cap_mm": 33149.1,
+      "signal_type": "congressional_timing_cluster:2_members",
+      "signal_category": "congressional",
+      "strength_estimate": 3,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "sell",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 2,
+        "signal_flags": [
+          "timing_cluster:2_members"
+        ]
+      }
+    },
+    {
+      "ticker": "WAB",
+      "isin": null,
+      "company_name": "Westinghouse Air Brake Technologies Corp",
+      "market_cap_mm": 43753.9,
+      "signal_type": "congressional_trade",
+      "signal_category": "congressional",
+      "strength_estimate": 2,
+      "source_url": "https://www.capitoltrades.com/trades",
+      "source_date": "2026-04-07",
+      "scan_date": "2026-04-16",
+      "raw_data": {
+        "representative": "Rick Larsen",
+        "party": "Democrat",
+        "house": "House",
+        "state": "WA",
+        "transaction": "buy",
+        "range": "1K\u201315K",
+        "amount_midpoint": 8000.0,
+        "transaction_date": "2026-04-07",
+        "owner": "Undisclosed",
+        "committee_alignment": null,
+        "cluster_count": 1,
+        "signal_flags": []
+      }
+    }
+  ]
+}

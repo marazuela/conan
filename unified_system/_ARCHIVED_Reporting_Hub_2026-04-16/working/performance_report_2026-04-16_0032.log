@@ -1,0 +1,40 @@
+=== Reporting Hub Performance Report Run Log ===
+Session: reporting-hub-performance-2026-04-16T0032
+Started: 2026-04-16T00:32:50Z
+
+[Phase 0] Hub lock acquired — prior state UNLOCKED (last session: reporting-hub-deep-dives-2026-04-15T2238, released 2026-04-15T22:47:30Z).
+[Phase 1] Orienting — read REPORTING_INSTRUCTIONS.md and SOURCES.md.
+
+[Phase 1 availability map]
+  investment_tool: operational (folder present, SESSION_STATE present, SESSION_LOCK UNLOCKED, candidates=8 .md, signals=237 files, 258 mtime<7d)
+  non_us:          operational (folder present, SESSION_STATE present, SESSION_LOCK UNLOCKED, candidates=21 .md, signals=9 files, 14 mtime<7d)
+  litigation:      operational (folder present, SESSION_STATE present, SESSION_LOCK UNLOCKED, candidates/ has subdirs but 0 .md files; signals/ empty; pipeline cold — Phase 2 PARTIAL)
+  silence:         pre-launch  (SOURCES path Investment tool Gamma/silence_tool_bootstrap MISSING; build-script path Investment tool Gamma/project set up template/silence_tool_bootstrap exists with bootstrap files only, no SESSION_STATE) → placeholder PDF
+
+[Phase 2] Reading producer state (read-only).
+  investment_tool: SESSION_STATE S63 at 2026-04-15 22:25 UTC. 5 active candidates (AXSM, RPAY, RGR, VERA, AVNS). Watchlist 5. Delivered/archived: 1 (TVTX approved 2026-04-13).
+  non_us:          SESSION_STATE 2026-04-16T22:46Z maintenance pass. Active candidates (per state): WBC_XASX 30.0, PTSB_XLON 33.0, 9601_XTKS 31.0, 2972_XTKS 35.0, 6058_XTKS 31.0, CCL_XASX, +15 prior XTKS. Total candidates/ .md = 21.
+  litigation:      SESSION_STATE S4 2026-04-14. Current Phase 2 PARTIAL. No active work units, no candidates, no signals. Phase 3+ scanner builds blocked pending Phase 2 live data.
+
+[Phase 3] Generating per-tool PDFs via Reporting Hub/working/build_scripts/render_per_tool_performance.py (atomic .tmp + os.replace).
+  write: Reporting Hub/Performance/per_tool/investment_tool/2026-04-16_performance.pdf  (15970 B, ok, operational)
+  write: Reporting Hub/Performance/per_tool/non_us/2026-04-16_performance.pdf           (11093 B, ok, operational)
+  write: Reporting Hub/Performance/per_tool/litigation/2026-04-16_performance.pdf       (10880 B, ok, operational)
+  write: Reporting Hub/Performance/per_tool/silence/2026-04-16_performance.pdf          (2196 B, ok, pre-launch placeholder)
+
+[Phase 4] Archived prior master to Reporting Hub/archive/performance_master/2026-04-16T0036_ALL_TOOLS_PERFORMANCE.pdf before overwrite.
+[Phase 4] Ran Reporting Hub/working/build_scripts/render_all_tools_performance.py.
+  write: Reporting Hub/Performance/ALL_TOOLS_PERFORMANCE.pdf (2843 B, mtime 2026-04-16 00:36 UTC)
+  write: Reporting Hub/Performance/ALL_TOOLS_PERFORMANCE.md  (391 B)
+
+[Phase 5] No registry writes (performance task does not own candidates_index.json).
+
+[Phase 6] Self-audit:
+  - grep for writes outside Reporting Hub/: NONE — all 6 writes under Reporting Hub/.
+  - retired-path regression check (performance_reports/, investment_theses/, non_us_candidates/, litigation_briefs/, silence_reports/): 0 hits each.
+  - all 4 per-tool PDFs exist and are non-zero-byte (15970 / 11093 / 10880 / 2196).
+  - Performance/ALL_TOOLS_PERFORMANCE.pdf mtime 2026-04-16 00:36:14Z — within the last 10 min.
+SELF_AUDIT: OK — all writes within Reporting Hub/
+
+[Phase 7] Releasing hub lock.
+Completed: 2026-04-16T00:36:42Z

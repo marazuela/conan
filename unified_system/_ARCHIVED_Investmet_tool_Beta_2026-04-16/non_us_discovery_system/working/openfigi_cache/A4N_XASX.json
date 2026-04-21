@@ -1,0 +1,11 @@
+{
+  "ticker_local": "A4N",
+  "mic": "XASX",
+  "figi": "BBG000F2BHT7",
+  "issuer_figi": "BBG000F2BH17",
+  "name": "ALPHA HPA LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

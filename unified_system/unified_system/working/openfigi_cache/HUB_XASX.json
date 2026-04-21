@@ -1,0 +1,11 @@
+{
+  "ticker_local": "HUB",
+  "mic": "XASX",
+  "figi": "BBG000RHKB78",
+  "issuer_figi": "BBG000RHK9T9",
+  "name": "HUB24 LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

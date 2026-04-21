@@ -1,0 +1,11 @@
+{
+  "ticker_local": "MP1",
+  "mic": "XASX",
+  "figi": "BBG00BK2TJ78",
+  "issuer_figi": "BBG00BK2TJ50",
+  "name": "MEGAPORT LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

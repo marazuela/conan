@@ -1,0 +1,11 @@
+{
+  "ticker_local": "WBC",
+  "mic": "XASX",
+  "figi": "BBG000D0JD87",
+  "issuer_figi": "BBG000D0JD23",
+  "name": "WESTPAC BANKING CORP",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

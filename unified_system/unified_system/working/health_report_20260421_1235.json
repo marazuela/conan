@@ -1,0 +1,284 @@
+{
+  "ran_at_utc": "2026-04-21T12:35:57.551053Z",
+  "max_severity": "red",
+  "counts": {
+    "red": 5,
+    "yellow": 2,
+    "green": 29,
+    "info": 6
+  },
+  "by_family": {
+    "registry": [
+      {
+        "severity": "red",
+        "family": "registry",
+        "scanner": "edgar_filing_monitor",
+        "msg": "stale: last run 23.6h ago, cadence=180min, allowed 2x=6.0h"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "esma_short_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "red",
+        "family": "registry",
+        "scanner": "fda_pdufa_pipeline",
+        "msg": "stale: last run 23.6h ago, cadence=180min, allowed 2x=6.0h"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "congressional_trading",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "red",
+        "family": "registry",
+        "scanner": "lse_rns_scanner",
+        "msg": "stale: last run 23.6h ago, cadence=180min, allowed 2x=6.0h"
+      },
+      {
+        "severity": "red",
+        "family": "registry",
+        "scanner": "tdnet_scanner",
+        "msg": "stale: last run 23.6h ago, cadence=180min, allowed 2x=6.0h"
+      },
+      {
+        "severity": "red",
+        "family": "registry",
+        "scanner": "asx_scanner",
+        "msg": "stale: last run 23.6h ago, cadence=180min, allowed 2x=6.0h"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "sedar_plus_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "hkex_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "kind_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "bse_nse_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "cvm_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "bmv_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "courtlistener_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "sec_enforcement_scanner",
+        "msg": "fresh: 27.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "takeover_candidate_scanner",
+        "msg": "fresh: 23.6h ago"
+      },
+      {
+        "severity": "green",
+        "family": "registry",
+        "scanner": "pre_phase3_readout_scanner",
+        "msg": "fresh: 24.5h ago"
+      }
+    ],
+    "schema": [
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "bmv_scanner_output.json",
+        "msg": "n=8"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "bse_nse_scanner_output.json",
+        "msg": "n=44"
+      },
+      {
+        "severity": "info",
+        "family": "schema",
+        "file": "courtlistener_scanner_output.json",
+        "msg": "0 records (scanner reports status='auth_required')"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "cvm_scanner_output.json",
+        "msg": "n=76"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "hkex_scanner_output.json",
+        "msg": "n=4"
+      },
+      {
+        "severity": "info",
+        "family": "schema",
+        "file": "kind_scanner_output.json",
+        "msg": "0 records (scanner reports status='auth_required')"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "pre_phase3_readout_scanner_output.json",
+        "msg": "n=115"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "sec_enforcement_scanner_output.json",
+        "msg": "n=30"
+      },
+      {
+        "severity": "info",
+        "family": "schema",
+        "file": "sedar_plus_scanner_output.json",
+        "msg": "0 records (scanner reports status='error')"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "takeover_candidate_scanner_output.json",
+        "msg": "n=85"
+      },
+      {
+        "severity": "green",
+        "family": "schema",
+        "file": "tdnet_scanner_output.json",
+        "msg": "n=42"
+      }
+    ],
+    "drift": [
+      {
+        "severity": "info",
+        "family": "drift",
+        "msg": "no prior history yet — first snapshot written"
+      }
+    ],
+    "signal_log": [
+      {
+        "severity": "info",
+        "family": "signal_log",
+        "msg": "734 total, 565 without score_total (77%)"
+      }
+    ],
+    "curated": [
+      {
+        "severity": "info",
+        "family": "curated",
+        "msg": "5 active, 4 archived"
+      }
+    ],
+    "validation": [
+      {
+        "severity": "yellow",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "scoring_profile",
+        "msg": "206/734 (28.1%) missing scoring_profile"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "ticker/ticker_plus_mic/ticker_local",
+        "msg": "2/482 (0.4%) missing ticker/ticker_plus_mic/ticker_local (ticker-less-by-design scanners excluded: ['courtlistener_scanner', 'cvm_scanner', 'pre_phase3_readout_scanner', 'sec_enforcement_scanner'])"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "any issuer identifier (ticker/figi/cik/cvm/name)",
+        "msg": "0/734 (0.0%) missing any issuer identifier (ticker/figi/cik/cvm/name)"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "source_date",
+        "msg": "0/734 (0.0%) missing source_date"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "scan_date",
+        "msg": "0/734 (0.0%) missing scan_date"
+      },
+      {
+        "severity": "yellow",
+        "family": "validation",
+        "check": "null_rate",
+        "file": "upstream_scanner/scanner/scanner_source",
+        "msg": "37/734 (5.0%) missing upstream_scanner/scanner/scanner_source"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "ticker_mic_shape",
+        "file": "ticker_mic_shape",
+        "msg": "all ticker_plus_mic values match SYMBOL.MIC4 shape"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "ticker_mic_disagree",
+        "file": "ticker_mic_disagree",
+        "msg": "ticker and ticker_plus_mic prefix agree on all records"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "convergence_freshness",
+        "file": "convergence_freshness",
+        "msg": "latest convergence report: convergence_report_2026-04-20.json (1.0d old)"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "convergence_groups_stale",
+        "file": "convergence_groups_stale",
+        "msg": "all 75 convergence groups have fresh members"
+      },
+      {
+        "severity": "green",
+        "family": "validation",
+        "check": "orphan_scanner",
+        "file": "orphan_scanner",
+        "msg": "every signal's upstream_scanner is known"
+      }
+    ]
+  }
+}

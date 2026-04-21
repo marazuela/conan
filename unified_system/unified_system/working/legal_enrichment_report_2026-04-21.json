@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-04-21T14:16:29.354598+00:00",
+  "framework": "legal:legal-risk-assessment + legal:compliance-check",
+  "total_litigation_signals": 46,
+  "enriched": 46,
+  "by_color": {
+    "GREEN": 0,
+    "YELLOW": 15,
+    "ORANGE": 18,
+    "RED": 13
+  },
+  "top_red_signals": [
+    {
+      "signal_id": "d7af506f82c378999d5d98cdac3fde6d",
+      "ticker": null,
+      "headline": "LR-26528: Spartan Trading Company, LLC; Estate of Richard Myre; and Estate of Dale Dahmen",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "38c6035468385f4a2baa9f0b91d7f97b",
+      "ticker": null,
+      "headline": "LR-26525: Backswing Ventures GP LLC and Kyle James Asman",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "949149339aff80524e169b33721024c9",
+      "ticker": null,
+      "headline": "LR-26523: Mark D. Anderson; BBFY USA, Inc.; and Captain Drake, LLC",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "cd43f7865cef3b005a3f75be69ded34e",
+      "ticker": null,
+      "headline": "LR-26522: Gianoplus Consortia LLC; Michael Peter Gianoplus; Traci Leigh Bransford-Marquis",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "8b3043f64c182c4d18dafd51280563f3",
+      "ticker": null,
+      "headline": "LR-26520: Vincent J. Camarda, James E. McArthur, and A.G. Morgan Financial Advisors, LLC",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "5e4e09f6f90d6c0e62cb465deeadb8dc",
+      "ticker": null,
+      "headline": "LR-26519: The Estate of John R. Brodacki, III and Castle Hill Financial Group, LLC",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "8a925a3e1dd18bb49cb43c271ff06214",
+      "ticker": null,
+      "headline": "LR-26515: Eliseo Prisno and P/E Capital Investment Management Partners",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "78db36251a60fbdd9666a217816411be",
+      "ticker": null,
+      "headline": "LR-26512: Titanium Capital LLC; Henry Abdo",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "9d1c9cad754d4bb5e2930f7953725bd5",
+      "ticker": null,
+      "headline": "LR-26511: John Olsen; ARCPE 1, LLC; ARCPE Holding, LLC; Gemini 1, LLC; Tamiwest, LLC; Harbor Realty Investment Corp.; and Sunset Harbor Holdings, LLC",
+      "risk_score": 20,
+      "color": "RED"
+    },
+    {
+      "signal_id": "827ea65234ed1a248684d275c7946285",
+      "ticker": null,
+      "headline": "LR-26510: FAT Brands, Inc. , Andrew Wiederhorn, Ron Roe, Rebecca Hershinger",
+      "risk_score": 20,
+      "color": "RED"
+    }
+  ]
+}

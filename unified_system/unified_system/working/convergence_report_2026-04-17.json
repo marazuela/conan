@@ -1,0 +1,832 @@
+{
+  "generated_at": "2026-04-17T22:06:48.715431Z",
+  "groups": [
+    {
+      "issuer_key": "figi:BBG00N8WCM62",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "0a0a435d3e45f0713571eda0d1a1f9ff",
+        "f17cc614aaad0cf0eaedb3e981a8ba49",
+        "82e86a8ac81b2ae7afc1a1256de5495d"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG001CDQF12",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "debc5a16b885ac50abf36f507a383f5f",
+        "0c5f6a8678f6829551e75d1e291071a4"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG0015PXBL2",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "98ebc2dc6036ce77334bccbdb827981b",
+        "45aee85aebfe0fc27b07e7c27c89f6c4"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BL6VJ5",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "ba4dd8ea760cf581b98d2e331e4352fa",
+        "e171e50010a8277448b871d08eaa3461"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000GYHHY4",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "4466322c80abc4b1b20ab06ff56a2ce1",
+        "0f1fd0a00627d50e4b314d77a841e1e8"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000P5Q6C5",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "3d12b882c7a38e9a1e28285f76ae315f",
+        "b8f7ef2ade1f530401c33e3da4b72b9a"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG0017X3YM5",
+      "signal_count": 4,
+      "raw_signal_count_pre_dedup": 4,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "03e5fefb974002b0bc845a5994575b37",
+        "f6bfdc8ffdd9f409f3aa4b8702c77b11",
+        "ce7db1502b3daf760ba9a1ad45afc6bf",
+        "0439e1303980b984c488d19b31a5229a"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG01TS0MST7",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "0b8c3f823ae6b87d70f33558406652d2",
+        "eaa29049047acc2d501fa3a8f87b7b41",
+        "540017047d31c953f139f17ced303819"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG004P6F673",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "cf153ba12d72b6927d49d9b7aee02166",
+        "8cdb34cceb178e27b08e237cb719bd0f",
+        "6e0bfe78d61f8e4a2eb28b9438f4f7ca"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BB4K21",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "79610475def8c9c501996aa821c1a4e8",
+        "fa5c892f6f74bfd5cc397eb0acf01f66",
+        "d20030f8a624c06323543fde81b25388"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000N80D34",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "5258afc49bc2ab23497938af8ee54136",
+        "0c92f56aee3a50db54858354054a1ae8"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BWC1X4",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "56b4f3168e242de56ec3584c5d0818ac",
+        "0385012385c6e8c192abef55f8899244"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000DP09M5",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "11360b81cff50ffb1ed64f146274b60d",
+        "fd70edf4ee5e6b7fff4fe27ea3f5ea15"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BTKL40",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "cd873141fb0553aa0ae03375e4318945",
+        "60c2a72d01649c39e72af008d75e56e8"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BD53L3",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "06df53aa3c35f232be80f279cbc65138",
+        "85170e3064744fcda934ad10744d6313"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000DJ1YL4",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "c8f50f69eb5f4b4a2535fa5799e7d3de",
+        "ddc0441969c02c688b9366ef0acaeb7c"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG00MNLXLW1",
+      "signal_count": 5,
+      "raw_signal_count_pre_dedup": 5,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "607ab0a8cd48582114ab43e232cb8b24",
+        "d31591e39e1992b7d1afb021afc77799",
+        "2ec605dc01816932cfb306ca2ceae2c9",
+        "0378ff14329d3707e10c6284ffef42d0",
+        "fccf0a41a033f615024145a481c53ee4"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000D9L3W0",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "758bc73d07b76107543bac7b9525ea57",
+        "d0175731827b3fbeca24c49039a1425d",
+        "52c36d90dd51433b1d2caffde1fa6564"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG012VLB073",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "59b0e9e2850ae92e9e24638306bcdafc",
+        "16d08b45305a9119defeea3828aa87d3"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG011PF19M0",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "9f8ab2bb4b41c37a05dd62f529544fb7",
+        "2e762b3b44c1fb4f39409552d6cdd1d6"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000JXTF38",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "5d8a1dc37016276a5ea4e38590994984",
+        "24e7b05c5e5600ae400f8d3109e51b96"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BN0FD8",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "b789ac16eb8d344248d72d1538cbcd40",
+        "340f9fef654c51e2ec31ddb83d6e8b61"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000B9WJ55",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "794d2a6fd72254274844927f496cffb1",
+        "3fd118000aaf1c50db9a802d9015532c"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG00BGK7648",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "550feb1b10d6e0ac41a404efddbf697f",
+        "f71138cdc30df65ce72c74fbc2aea6b6",
+        "0e74a7a04cc4e5f4a1b64bf91809fd50"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "figi:BBG000BF46K3",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [],
+      "profiles": [],
+      "directions": [],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "503a70d2354e8ce04b1af4b6de17f78a",
+        "be30687ac6f93c436ec7f99eaec42f7c"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "tkr:MOLYMET:XMEX",
+      "signal_count": 4,
+      "raw_signal_count_pre_dedup": 4,
+      "scanners": [
+        "bmv_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "unknown"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "07ccdee0857e267b71bb8a77dc66d5e0",
+        "dd5b5c7327609f6dab6507b9d49f291f",
+        "21cce1bd99770dbacd2f199d2bebb136",
+        "296d12b8b9a49df6de635ad504ef37d7"
+      ],
+      "tickers_seen": [
+        "MOLYMET"
+      ]
+    },
+    {
+      "issuer_key": "tkr:HR:XMEX",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bmv_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "short"
+      ],
+      "convergence_type": "same_direction",
+      "bonus": 5,
+      "signal_ids": [
+        "42adf66aff99b23192de1d835b366ddb",
+        "2cfa82c9050d7b4a5eab6a3173480add"
+      ],
+      "tickers_seen": [
+        "HR"
+      ]
+    },
+    {
+      "issuer_key": "tkr:MANAKALUCO:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "db14a71fa0e05335393c713e2c6e69a3",
+        "c889d4ed0ef1a3951bc192714897d4c6"
+      ],
+      "tickers_seen": [
+        "MANAKALUCO"
+      ]
+    },
+    {
+      "issuer_key": "tkr:ZUARIIND:XNSE",
+      "signal_count": 4,
+      "raw_signal_count_pre_dedup": 4,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "dd5466ca8b722d5f8fe60a314af78896",
+        "f819b0f7e7fd2156c87a30e2990447f9",
+        "0c088d1035dd89e24755811a4acb7265",
+        "937b1cafd0c5660280d0148b39229974"
+      ],
+      "tickers_seen": [
+        "ZUARIIND"
+      ]
+    },
+    {
+      "issuer_key": "tkr:JSFB:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "56befbdf6a055c06d0129a267ef81f4c",
+        "87619543b234679838b9e4db531060c4"
+      ],
+      "tickers_seen": [
+        "JSFB"
+      ]
+    },
+    {
+      "issuer_key": "tkr:KAYNES:XNSE",
+      "signal_count": 3,
+      "raw_signal_count_pre_dedup": 3,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "2197970bb092963c9651461c3a64d057",
+        "7a7676334719f3c9dcf4662a3c6b7848",
+        "7ed8801ab9e89c62e7224dcdd4108d56"
+      ],
+      "tickers_seen": [
+        "KAYNES"
+      ]
+    },
+    {
+      "issuer_key": "tkr:CHAMBLFERT:XNSE",
+      "signal_count": 4,
+      "raw_signal_count_pre_dedup": 4,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "bac48e0535243ceda2efbb01f0de5e33",
+        "c18deb70a9902a59c883c2269ea5ecbe",
+        "dcdac9ba143e05f42986e782676cf329",
+        "c3b9c7f5928d8e63e83df27559e3b1da"
+      ],
+      "tickers_seen": [
+        "CHAMBLFERT"
+      ]
+    },
+    {
+      "issuer_key": "tkr:SHAREINDIA:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "merger_arb"
+      ],
+      "directions": [
+        "unknown"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "30c620eaf8e5ea95089c462328e63b45",
+        "25a2b53cfcc5fdb053c63b13f5a063bf"
+      ],
+      "tickers_seen": [
+        "SHAREINDIA"
+      ]
+    },
+    {
+      "issuer_key": "tkr:AYMSYNTEX:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "merger_arb"
+      ],
+      "directions": [
+        "unknown"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "c4521c5fffdc17552a5299b2e02287bd",
+        "1e84d3b01edfe0132154f845156d7f31"
+      ],
+      "tickers_seen": [
+        "AYMSYNTEX"
+      ]
+    },
+    {
+      "issuer_key": "tkr:ZUARI:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "409496d0e04b571f588c2060a535f545",
+        "202a2157727da581fc6829ebe08e7d50"
+      ],
+      "tickers_seen": [
+        "ZUARI"
+      ]
+    },
+    {
+      "issuer_key": "tkr:ROUTE:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "be3a431a6dc088bbfa0857d1f2eaa927",
+        "748c0d805070b13a0690dad0fa39c8fa"
+      ],
+      "tickers_seen": [
+        "ROUTE"
+      ]
+    },
+    {
+      "issuer_key": "tkr:JYOTICNC:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "52846a03a7ce0d7c6978517ae9173fd7",
+        "8ef4013d6a6aa1282e92a50526c18021"
+      ],
+      "tickers_seen": [
+        "JYOTICNC"
+      ]
+    },
+    {
+      "issuer_key": "tkr:MMFL:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "97878fd310227670b0ef8ca176c53e48",
+        "b48609b3a44fafd062ba119931968e5d"
+      ],
+      "tickers_seen": [
+        "MMFL"
+      ]
+    },
+    {
+      "issuer_key": "tkr:SOLEX:XNSE",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "bse_nse_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "neutral"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "55aacf0bff412d3a1ad627dd659a02a8",
+        "433cc780be7ba93b47d78efe3103c3a5"
+      ],
+      "tickers_seen": [
+        "SOLEX"
+      ]
+    },
+    {
+      "issuer_key": "cvm:15539",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "cvm_scanner"
+      ],
+      "profiles": [
+        "activist_governance",
+        "merger_arb"
+      ],
+      "directions": [
+        "long",
+        "unknown"
+      ],
+      "convergence_type": "orthogonal",
+      "bonus": 5,
+      "signal_ids": [
+        "d558b67f3d2a8da188a7a2e3ee6e6dd7",
+        "d43ef3526260e67339de2a5380cd21ef"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "cvm:23396",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "cvm_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "unknown"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "0554a53fac7c2b2441eb7d7c1735f578",
+        "430cdc4b0fe01c0c0857ad100a75a6e0"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "cvm:25399",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "cvm_scanner"
+      ],
+      "profiles": [
+        "activist_governance",
+        "merger_arb"
+      ],
+      "directions": [
+        "long",
+        "unknown"
+      ],
+      "convergence_type": "orthogonal",
+      "bonus": 5,
+      "signal_ids": [
+        "6ef82fa4fafec8676277c616fc86bc1d",
+        "e93f51bf9d2e7066174c74f1ed2ee1c4"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "cvm:24058",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "cvm_scanner"
+      ],
+      "profiles": [
+        "activist_governance"
+      ],
+      "directions": [
+        "unknown"
+      ],
+      "convergence_type": "unknown_direction",
+      "bonus": 0,
+      "signal_ids": [
+        "65b0cb27c400522223d925519903f1c3",
+        "bec4cf0387ccc81463de81fe4e3e3fe6"
+      ],
+      "tickers_seen": []
+    },
+    {
+      "issuer_key": "tkr:02427:XHKG",
+      "signal_count": 2,
+      "raw_signal_count_pre_dedup": 2,
+      "scanners": [
+        "hkex_scanner"
+      ],
+      "profiles": [
+        "merger_arb"
+      ],
+      "directions": [
+        "long"
+      ],
+      "convergence_type": "same_direction",
+      "bonus": 5,
+      "signal_ids": [
+        "cb2c012c9bb94cc0f6e0123fdccd6c4b",
+        "3c33f01609727d4fa0924c2ad0279002"
+      ],
+      "tickers_seen": [
+        "02427"
+      ]
+    }
+  ],
+  "n_groups": 44
+}

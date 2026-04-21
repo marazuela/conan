@@ -1,0 +1,11 @@
+{
+  "ticker_local": "APZ",
+  "mic": "XASX",
+  "figi": "BBG000BFZNZ6",
+  "issuer_figi": "BBG000BFZND0",
+  "name": "ASPEN GROUP",
+  "security_type": "REIT",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

@@ -1,0 +1,11 @@
+{
+  "ticker_local": "8001",
+  "mic": "XTKS",
+  "figi": "BBG000B9WJN5",
+  "issuer_figi": "BBG000B9WJ55",
+  "name": "ITOCHU CORP",
+  "security_type": "Common Stock",
+  "exchange_code": "JT",
+  "resolved": true,
+  "error": null
+}

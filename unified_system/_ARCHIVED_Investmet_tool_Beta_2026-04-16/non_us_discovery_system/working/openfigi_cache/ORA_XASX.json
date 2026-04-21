@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ORA",
+  "mic": "XASX",
+  "figi": "BBG005KXGCW4",
+  "issuer_figi": "BBG005J6H657",
+  "name": "ORORA LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

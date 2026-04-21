@@ -1,0 +1,47 @@
+{
+  "edgar_filing_monitor": {
+    "status": "not_due"
+  },
+  "esma_short_scanner": {
+    "status": "not_due"
+  },
+  "fda_pdufa_pipeline": {
+    "status": "not_due"
+  },
+  "congressional_trading": {
+    "status": "not_due"
+  },
+  "lse_rns_scanner": {
+    "status": "not_due"
+  },
+  "tdnet_scanner": {
+    "status": "not_due"
+  },
+  "asx_scanner": {
+    "status": "not_due"
+  },
+  "sedar_plus_scanner": {
+    "status": "not_due"
+  },
+  "hkex_scanner": {
+    "status": "not_due"
+  },
+  "kind_scanner": {
+    "status": "not_due"
+  },
+  "bse_nse_scanner": {
+    "status": "not_due"
+  },
+  "cvm_scanner": {
+    "status": "not_due"
+  },
+  "bmv_scanner": {
+    "status": "not_due"
+  },
+  "courtlistener_scanner": {
+    "status": "not_due"
+  },
+  "sec_enforcement_scanner": {
+    "status": "not_due"
+  }
+}

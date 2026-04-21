@@ -1,0 +1,27 @@
+{
+  "ticker_local": "TWR",
+  "mic": "XASX",
+  "ticker_plus_mic": "TWR.XASX",
+  "company_name_en": "TOWER LIMITED",
+  "signal_type": "half_year_report",
+  "signal_category": "results",
+  "thesis_direction": "unknown",
+  "market_cap_usd_mm": 403.1,
+  "score": 24.5,
+  "source_date": "2026-04-15",
+  "scan_date": "2026-04-15",
+  "signal_id": "9a51ea124afedd96047453e76b3c6480",
+  "source_content_hash": "7b422c8d804c98457ad8df38f1fad9feee799a14",
+  "headline": "Tower Half Year 2026 Results Date",
+  "rubric_scores": {
+    "signal_strength": 3,
+    "catalyst_clarity": 3,
+    "info_asymmetry": 3,
+    "risk_reward": 3,
+    "edge_decay": 3,
+    "liquidity": 4,
+    "catalyst_timeline": 3
+  },
+  "scanner": "asx",
+  "routing_decision": "watchlist"
+}

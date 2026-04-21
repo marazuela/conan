@@ -1,0 +1,11 @@
+{
+  "ticker_local": "INA",
+  "mic": "XASX",
+  "figi": "BBG000BJ33T4",
+  "issuer_figi": "BBG000BJ32Z9",
+  "name": "INGENIA COMMUNITIES GROUP",
+  "security_type": "REIT",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

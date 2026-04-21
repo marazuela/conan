@@ -1,0 +1,11 @@
+{
+  "ticker_local": "PTSB",
+  "mic": "XLON",
+  "figi": "BBG000DJ30N4",
+  "issuer_figi": "BBG000DJ1YL4",
+  "name": "PERMANENT TSB GROUP HOLDINGS",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

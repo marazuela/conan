@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ALX",
+  "mic": "XASX",
+  "figi": "BBG000BCT516",
+  "issuer_figi": "BBG000BCT4P3",
+  "name": "ATLAS ARTERIA",
+  "security_type": "Unit",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

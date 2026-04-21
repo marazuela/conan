@@ -1,0 +1,11 @@
+{
+  "ticker_local": "IRE",
+  "mic": "XASX",
+  "figi": "BBG000DP0B04",
+  "issuer_figi": "BBG000DP09M5",
+  "name": "IRESS LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

@@ -1,0 +1,11 @@
+{
+  "ticker_local": "BTRW",
+  "mic": "XLON",
+  "figi": "BBG000BD6DG6",
+  "issuer_figi": "BBG000BD6CZ7",
+  "name": "BARRATT REDROW PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

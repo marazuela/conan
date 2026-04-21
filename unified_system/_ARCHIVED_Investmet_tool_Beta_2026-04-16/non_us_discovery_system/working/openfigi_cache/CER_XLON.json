@@ -1,0 +1,11 @@
+{
+  "ticker_local": "CER",
+  "mic": "XLON",
+  "figi": "BBG00CGCHDG5",
+  "issuer_figi": "BBG00CGCHC31",
+  "name": "CERILLION PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

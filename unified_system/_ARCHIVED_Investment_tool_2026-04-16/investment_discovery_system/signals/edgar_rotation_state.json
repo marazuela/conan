@@ -1,0 +1,11 @@
+{
+  "rotation_index": 0,
+  "scan_history": {
+    "activist": "2026-04-16T16:09:23Z",
+    "mna": "2026-04-16T01:18:29Z",
+    "distress": "2026-04-16T07:15:07Z",
+    "governance": "2026-04-16T10:10:02Z"
+  },
+  "last_category": "activist",
+  "last_scan_ts": "2026-04-16T16:09:23Z"
+}

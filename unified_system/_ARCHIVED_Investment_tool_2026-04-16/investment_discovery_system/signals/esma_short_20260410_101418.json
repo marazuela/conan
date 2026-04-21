@@ -1,0 +1,24 @@
+[
+  {
+    "ticker": "ZAL.DE",
+    "isin": "DE000ZAL1111",
+    "company_name": "Zalando SE",
+    "market_cap_mm": 5746.5,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-10",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Marshall Wace LLP",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "DE000ZAL1111",
+      "crowded_info": "[{\"holder\": \"Marshall Wace LLP\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 0.57, \"date\": \"2026-04-08\", \"regulator\": \"BAFIN\"}, {\"holder\": \"D. E. Shaw & Co., L.P.\", \"position_pct\": 0.99, \"date\": \"2026-04-08\", \"regulator\": \"BAFIN\"}, {\"holder\": \"GLG Partners LP\", \"position_pct\": 0.61, \"date\": \"2026-04-07\", \"regulator\": \"BAFIN\"}, {\"holder\": \"PDT Partners, LLC\", \"position_pct\": 1.01, \"date\": \"2026-04-01\", \"regulator\": \"BAFIN\"}, {\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 1.93, \"date\": \"2026-03-30\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Caledonia (Private) Investments Pty Limited\", \"position_pct\": 0.83, \"date\": \"2017-03-01\", \"regulator\": \"BAFIN\"}]"
+    }
+  }
+]

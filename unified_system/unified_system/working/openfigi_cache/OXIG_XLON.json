@@ -1,0 +1,11 @@
+{
+  "ticker_local": "OXIG",
+  "mic": "XLON",
+  "figi": "BBG000BDWZZ7",
+  "issuer_figi": "BBG000BDWZ69",
+  "name": "OXFORD INSTRUMENTS PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}

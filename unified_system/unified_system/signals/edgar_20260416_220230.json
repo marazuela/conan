@@ -1,0 +1,522 @@
+[
+  {
+    "ticker": "ESE",
+    "isin": null,
+    "company_name": "ESCO TECHNOLOGIES INC  (ESE)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/866706/000110465926044425",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "8-K",
+      "cik": "0000866706",
+      "adsh": "0001104659-26-044425",
+      "file_description": "FORM 8-K",
+      "company_raw": "ESCO TECHNOLOGIES INC  (ESE)  (CIK 0000866706)"
+    }
+  },
+  {
+    "ticker": "NTHI",
+    "isin": null,
+    "company_name": "NEONC TECHNOLOGIES HOLDINGS, INC.  (NTHI)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1979414/000182912626003566",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "8-K",
+      "cik": "0001979414",
+      "adsh": "0001829126-26-003566",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "NEONC TECHNOLOGIES HOLDINGS, INC.  (NTHI)  (CIK 0001979414)"
+    }
+  },
+  {
+    "ticker": "PWR",
+    "isin": null,
+    "company_name": "QUANTA SERVICES, INC.  (PWR)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1050915/000119312526159117",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001050915",
+      "adsh": "0001193125-26-159117",
+      "file_description": "EX-10.1",
+      "company_raw": "QUANTA SERVICES, INC.  (PWR)  (CIK 0001050915)"
+    }
+  },
+  {
+    "ticker": "AGPU",
+    "isin": null,
+    "company_name": "Axe Compute Inc.  (AGPU)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1446159/000117184326002517",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001446159",
+      "adsh": "0001171843-26-002517",
+      "file_description": "EXHIBIT 10.2",
+      "company_raw": "Axe Compute Inc.  (AGPU)  (CIK 0001446159)"
+    }
+  },
+  {
+    "ticker": "FMNB",
+    "isin": null,
+    "company_name": "FARMERS NATIONAL BANC CORP /OH/  (FMNB)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/709337/000143774926012568",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0000709337",
+      "adsh": "0001437749-26-012568",
+      "file_description": "FARMERS NATIONAL BANC CORP. 2026 EQUITY INCENTIVE PLAN",
+      "company_raw": "FARMERS NATIONAL BANC CORP /OH/  (FMNB)  (CIK 0000709337)"
+    }
+  },
+  {
+    "ticker": "CRBP",
+    "isin": null,
+    "company_name": "Corbus Pharmaceuticals Holdings, Inc.  (CRBP)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1595097/000119312526159062",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001595097",
+      "adsh": "0001193125-26-159062",
+      "file_description": "8-K",
+      "company_raw": "Corbus Pharmaceuticals Holdings, Inc.  (CRBP)  (CIK 0001595097)"
+    }
+  },
+  {
+    "ticker": "WSBC",
+    "isin": null,
+    "company_name": "WESBANCO INC  (WSBC, WSBCO)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/203596/000119312526159175",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0000203596",
+      "adsh": "0001193125-26-159175",
+      "file_description": "EX-10.1",
+      "company_raw": "WESBANCO INC  (WSBC, WSBCO)  (CIK 0000203596)"
+    }
+  },
+  {
+    "ticker": "ACHV",
+    "isin": null,
+    "company_name": "ACHIEVE LIFE SCIENCES, INC.  (ACHV)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/949858/000119312526159189",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "consent solicitation",
+      "filing_type": "8-K",
+      "cik": "0000949858",
+      "adsh": "0001193125-26-159189",
+      "file_description": "EX-10.1",
+      "company_raw": "ACHIEVE LIFE SCIENCES, INC.  (ACHV)  (CIK 0000949858)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Synera Studio Inc",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2076167/000147793226002332",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "going concern",
+      "filing_type": "10-Q",
+      "cik": "0002076167",
+      "adsh": "0001477932-26-002332",
+      "file_description": "FORM 10-Q",
+      "company_raw": "Synera Studio Inc  (CIK 0002076167)"
+    }
+  },
+  {
+    "ticker": "CBIH",
+    "isin": null,
+    "company_name": "Cannabis Bioscience International Holdings, Inc.  (CBIH)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1411057/000168316826003012",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "covenant breach",
+      "filing_type": "10-Q",
+      "cik": "0001411057",
+      "adsh": "0001683168-26-003012",
+      "file_description": "FORM 10-Q FEB 2026",
+      "company_raw": "Cannabis Bioscience International Holdings, Inc.  (CBIH)  (CIK 0001411057)"
+    }
+  },
+  {
+    "ticker": "IPST",
+    "isin": null,
+    "company_name": "IP STRATEGY HOLDINGS, INC.  (IPST)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1788230/000178823026000046",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001788230",
+      "adsh": "0001788230-26-000046",
+      "file_description": "EX-97",
+      "company_raw": "IP STRATEGY HOLDINGS, INC.  (IPST)  (CIK 0001788230)"
+    }
+  },
+  {
+    "ticker": "BBW",
+    "isin": null,
+    "company_name": "BUILD-A-BEAR WORKSHOP INC  (BBW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1113809/000143774926012501",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001113809",
+      "adsh": "0001437749-26-012501",
+      "file_description": "EXHIBIT 97.1",
+      "company_raw": "BUILD-A-BEAR WORKSHOP INC  (BBW)  (CIK 0001113809)"
+    }
+  },
+  {
+    "ticker": "ARAI",
+    "isin": null,
+    "company_name": "Arrive AI Inc.  (ARAI)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1818274/000149315226016808",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001818274",
+      "adsh": "0001493152-26-016808",
+      "file_description": "EX-97.1",
+      "company_raw": "Arrive AI Inc.  (ARAI)  (CIK 0001818274)"
+    }
+  },
+  {
+    "ticker": "FJET",
+    "isin": null,
+    "company_name": "Starfighters Space, Inc.  (FJET)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1947016/000106299326002001",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001947016",
+      "adsh": "0001062993-26-002001",
+      "file_description": "EXHIBIT 97.1",
+      "company_raw": "Starfighters Space, Inc.  (FJET)  (CIK 0001947016)"
+    }
+  },
+  {
+    "ticker": "VNCE",
+    "isin": null,
+    "company_name": "VINCE HOLDING CORP.  (VNCE)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1579157/000119312526158986",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001579157",
+      "adsh": "0001193125-26-158986",
+      "file_description": "EX-97.1",
+      "company_raw": "VINCE HOLDING CORP.  (VNCE)  (CIK 0001579157)"
+    }
+  },
+  {
+    "ticker": "GLOO",
+    "isin": null,
+    "company_name": "Gloo Holdings, Inc.  (GLOO)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2069785/000119312526156999",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0002069785",
+      "adsh": "0001193125-26-156999",
+      "file_description": "EX-97.1",
+      "company_raw": "Gloo Holdings, Inc.  (GLOO)  (CIK 0002069785)"
+    }
+  },
+  {
+    "ticker": "BLUW",
+    "isin": null,
+    "company_name": "Blue Water Acquisition Corp. III  (BLUW, BLUWU, BLUWW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2050501/000110465926043320",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0002050501",
+      "adsh": "0001104659-26-043320",
+      "file_description": "EX-97.1",
+      "company_raw": "Blue Water Acquisition Corp. III  (BLUW, BLUWU, BLUWW)  (CIK 0002050501)"
+    }
+  },
+  {
+    "ticker": "DMII",
+    "isin": null,
+    "company_name": "Drugs Made In America Acquisition II Corp.  (DMII, DMIIR, DMIIU)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2040475/000121390026044055",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0002040475",
+      "adsh": "0001213900-26-044055",
+      "file_description": "CLAWBACK POLICY",
+      "company_raw": "Drugs Made In America Acquisition II Corp.  (DMII, DMIIR, DMIIU)  (CIK 0002040475)"
+    }
+  },
+  {
+    "ticker": "PFSA",
+    "isin": null,
+    "company_name": "Profusa, Inc.  (PFSA, NVACW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1859807/000121390026044046",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001859807",
+      "adsh": "0001213900-26-044046",
+      "file_description": "CLAWBACK POLICY",
+      "company_raw": "Profusa, Inc.  (PFSA, NVACW)  (CIK 0001859807)"
+    }
+  },
+  {
+    "ticker": "TVA",
+    "isin": null,
+    "company_name": "Texas Ventures Acquisition III Corp  (TVA, TVACU, TVACW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2033991/000110465926043863",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0002033991",
+      "adsh": "0001104659-26-043863",
+      "file_description": "EX-97.1",
+      "company_raw": "Texas Ventures Acquisition III Corp  (TVA, TVACU, TVACW)  (CIK 0002033991)"
+    }
+  },
+  {
+    "ticker": "HCAC",
+    "isin": null,
+    "company_name": "Hall Chadwick Acquisition Corp  (HCAC, HCACR, HCACU)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2079013/000182912626003527",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0002079013",
+      "adsh": "0001829126-26-003527",
+      "file_description": "EXHIBIT 97",
+      "company_raw": "Hall Chadwick Acquisition Corp  (HCAC, HCACR, HCACU)  (CIK 0002079013)"
+    }
+  },
+  {
+    "ticker": "TAAG",
+    "isin": null,
+    "company_name": "Awareness Group, Inc.  (TAAG)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1386044/000147793226002310",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001386044",
+      "adsh": "0001477932-26-002310",
+      "file_description": "FORM 10-K",
+      "company_raw": "Awareness Group, Inc.  (TAAG)  (CIK 0001386044)"
+    }
+  },
+  {
+    "ticker": "BGLC",
+    "isin": null,
+    "company_name": "BioNexus Gene Lab Corp  (BGLC)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1737523/000147793226002218",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "10-K",
+      "cik": "0001737523",
+      "adsh": "0001477932-26-002218",
+      "file_description": "POLICY RELATING",
+      "company_raw": "BioNexus Gene Lab Corp  (BGLC)  (CIK 0001737523)"
+    }
+  },
+  {
+    "ticker": "OPFI",
+    "isin": null,
+    "company_name": "OppFi Inc.  (OPFI, OPFI-WT)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1818502/000181850226000023",
+    "source_date": "2026-04-16",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0001818502",
+      "adsh": "0001818502-26-000023",
+      "file_description": "EX-10.1",
+      "company_raw": "OppFi Inc.  (OPFI, OPFI-WT)  (CIK 0001818502)"
+    }
+  },
+  {
+    "ticker": "RAIN",
+    "isin": null,
+    "company_name": "Rain Enhancement Technologies Holdco, Inc.  (RAIN, RAINW)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2028293/000121390026043544",
+    "source_date": "2026-04-14",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0002028293",
+      "adsh": "0001213900-26-043544",
+      "file_description": "CURRENT REPORT",
+      "company_raw": "Rain Enhancement Technologies Holdco, Inc.  (RAIN, RAINW)  (CIK 0002028293)"
+    }
+  },
+  {
+    "ticker": "OTTR",
+    "isin": null,
+    "company_name": "Otter Tail Corp  (OTTR)",
+    "market_cap_mm": null,
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1466593/000146659326000040",
+    "source_date": "2026-04-15",
+    "scan_date": "2026-04-16",
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0001466593",
+      "adsh": "0001466593-26-000040",
+      "file_description": "8-K",
+      "company_raw": "Otter Tail Corp  (OTTR)  (CIK 0001466593)"
+    }
+  }
+]

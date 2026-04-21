@@ -1,0 +1,89 @@
+[
+  {
+    "ticker": "AFR0.PA",
+    "isin": "FR001400J770",
+    "company_name": "AIR FRANCE-KLM",
+    "market_cap_mm": null,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://bdif.amf-france.org/fr?typesInformation=VAD",
+    "source_date": "2026-04-02",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "AMF",
+      "holder_name": "CAPITAL FUND MANAGEMENT",
+      "position_pct": 0.86,
+      "previous_position_pct": 0.86,
+      "change_pct": 0.0,
+      "position_date": "2026-04-02",
+      "isin": "FR001400J770",
+      "crowded_info": "[{\"holder\": \"CAPITAL FUND MANAGEMENT\", \"position_pct\": 0.86, \"date\": \"2026-04-02\", \"regulator\": \"AMF\"}, {\"holder\": \"DAVIDSON KEMPNER EUROPEAN PARTNERS, LLP\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 1.1, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}]"
+    }
+  },
+  {
+    "ticker": "PLX.AS",
+    "isin": "NL0015001W49",
+    "company_name": "PLUXEE N.V.",
+    "market_cap_mm": null,
+    "signal_type": "short_new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://bdif.amf-france.org/fr?typesInformation=VAD",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "AMF",
+      "holder_name": "CITADEL ADVISORS LLC",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "NL0015001W49"
+    }
+  },
+  {
+    "ticker": "AFR0.PA",
+    "isin": "FR001400J770",
+    "company_name": "AIR FRANCE-KLM",
+    "market_cap_mm": null,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://bdif.amf-france.org/fr?typesInformation=VAD",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "AMF",
+      "holder_name": "DAVIDSON KEMPNER EUROPEAN PARTNERS, LLP",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-09",
+      "isin": "FR001400J770",
+      "crowded_info": "[{\"holder\": \"CAPITAL FUND MANAGEMENT\", \"position_pct\": 0.86, \"date\": \"2026-04-02\", \"regulator\": \"AMF\"}, {\"holder\": \"DAVIDSON KEMPNER EUROPEAN PARTNERS, LLP\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 1.1, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}]"
+    }
+  },
+  {
+    "ticker": "AFR0.PA",
+    "isin": "FR001400J770",
+    "company_name": "AIR FRANCE-KLM",
+    "market_cap_mm": null,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://bdif.amf-france.org/fr?typesInformation=VAD",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "AMF",
+      "holder_name": "Walleye Capital LLC",
+      "position_pct": 1.1,
+      "previous_position_pct": 1.2,
+      "change_pct": -0.1,
+      "position_date": "2026-04-09",
+      "isin": "FR001400J770",
+      "crowded_info": "[{\"holder\": \"CAPITAL FUND MANAGEMENT\", \"position_pct\": 0.86, \"date\": \"2026-04-02\", \"regulator\": \"AMF\"}, {\"holder\": \"DAVIDSON KEMPNER EUROPEAN PARTNERS, LLP\", \"position_pct\": 0.5, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 1.1, \"date\": \"2026-04-09\", \"regulator\": \"AMF\"}]"
+    }
+  }
+]

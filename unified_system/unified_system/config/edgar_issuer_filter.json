@@ -1,0 +1,42 @@
+{
+  "_schema_version": 1,
+  "_description": "Issuer-level SPAC/shell blocker for the EDGAR scanner. Applied after form-level filters and before novelty/ticker/mcap work so active blank-check issuers do not generate pipeline signals through otherwise allowed forms like 8-K or SC 13D.",
+  "_last_updated": "2026-04-21",
+  "_source_note": "Seeded from Q-010 in docs/OPEN_QUESTIONS.md and real issuers observed in local EDGAR output history. Allowlist entries protect known operating ex-SPAC companies from broad name-pattern filters.",
+  "blocked_ciks": [
+    "0001889983",
+    "0001900679",
+    "0001865248",
+    "0001970509",
+    "0002000775",
+    "0002028516",
+    "0002050501",
+    "0002079013",
+    "0002080087",
+    "0002112446"
+  ],
+  "name_patterns_ci": [
+    "\\bspac\\b",
+    "\\bspecial\\s+purpose\\s+acquisition\\b",
+    "\\bacquisition\\s+corp(?:oration)?\\b",
+    "\\bacquisition\\s+co\\.?\\b",
+    "\\bholdings\\s+trust\\b",
+    "\\bblank\\s+check\\b"
+  ],
+  "description_patterns_ci": [
+    "\\bshell\\s+company\\b",
+    "\\bblank\\s+check\\s+company\\b",
+    "\\bspecial\\s+purpose\\s+acquisition\\s+company\\b",
+    "formed\\s+for\\s+the\\s+purpose\\s+of\\s+effecting\\s+a\\s+merger",
+    "formed\\s+for\\s+the\\s+purpose\\s+of\\s+effecting\\s+a\\s+share\\s+exchange",
+    "formed\\s+for\\s+the\\s+purpose\\s+of\\s+effecting\\s+a\\s+business\\s+combination",
+    "\\bconsummation\\s+of\\s+the\\s+initial\\s+business\\s+combination\\b",
+    "\\btrust\\s+account\\b"
+  ],
+  "allowlist_tickers": [
+    "RPAY"
+  ],
+  "allowlist_ciks": [
+    "0001720592"
+  ]
+}

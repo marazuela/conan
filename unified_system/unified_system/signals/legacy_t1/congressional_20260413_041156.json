@@ -1,0 +1,30 @@
+[
+  {
+    "ticker": "MA",
+    "isin": null,
+    "company_name": "Mastercard Inc",
+    "market_cap_mm": 445023.0,
+    "signal_type": "congressional_timing_cluster:2_members",
+    "signal_category": "congressional",
+    "strength_estimate": 3,
+    "source_url": "https://www.capitoltrades.com/trades",
+    "source_date": "2026-03-28",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "representative": "Shelley Moore Capito",
+      "party": "Republican",
+      "house": "Senate",
+      "state": "WV",
+      "transaction": "buy",
+      "range": "1K\u201315K",
+      "amount_midpoint": 8000.0,
+      "transaction_date": "2026-03-28",
+      "owner": "Spouse",
+      "committee_alignment": null,
+      "cluster_count": 2,
+      "signal_flags": [
+        "timing_cluster:2_members"
+      ]
+    }
+  }
+]

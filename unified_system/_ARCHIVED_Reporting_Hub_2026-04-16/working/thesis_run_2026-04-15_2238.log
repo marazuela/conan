@@ -1,0 +1,8 @@
+[2026-04-15T22:38:17Z] LOCK_ACQUIRED reporting-hub-deep-dives-2026-04-15T2238
+[2026-04-15T22:47:20Z] PHASE_2_SCAN: investment_tool=8 candidates (1 NEW: RGR; 7 SAME-md5), non_us=21 candidates (all SAME-md5), litigation=pre-launch SKIP, silence=pre-launch SKIP
+[2026-04-15T22:47:20Z] PHASE_2a_DECISION: 1 REGENERATE (RGR rule a/first-time), 27 SKIP (no md5 change, no freshness trigger, no backfill), 1 not eligible (TVTX delivered)
+[2026-04-15T22:47:20Z] PHASE_3_THESIS: RGR generated — Candidates/deep_dives/docx/RGR_Investment_Thesis_2026-04-15.docx (46278 bytes) and Candidates/deep_dives/pdf/RGR_Investment_Thesis_2026-04-15.pdf (150647 bytes); word_count=2767
+[2026-04-15T22:47:20Z] PHASE_4_REGISTRY: Candidates/candidates_index.json updated atomically (29 theses, 8 run_history entries)
+[2026-04-15T22:47:20Z] PHASE_5_MASTERS: Candidates/ALL_CANDIDATES.pdf and Candidates/per_tool/{investment_tool,non_us,litigation,silence}_candidates.pdf rendered
+[2026-04-15T22:47:20Z] SELF_AUDIT: OK
+[2026-04-15T22:47:30Z] LOCK_RELEASED

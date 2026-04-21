@@ -1,0 +1,11 @@
+{
+  "ticker_local": "TVN",
+  "mic": "XASX",
+  "figi": "BBG000BS4FT6",
+  "issuer_figi": "BBG000BS4FG0",
+  "name": "TIVAN LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

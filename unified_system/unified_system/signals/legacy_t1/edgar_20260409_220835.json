@@ -1,0 +1,22 @@
+[
+  {
+    "ticker": "XNDU",
+    "isin": null,
+    "company_name": "Xanadu Quantum Technologies Ltd  (XNDU)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2097163/000121390026042080",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "20-F",
+      "cik": "0002097163",
+      "adsh": "0001213900-26-042080",
+      "file_description": "ANNUAL REPORT",
+      "company_raw": "Xanadu Quantum Technologies Ltd  (XNDU)  (CIK 0002097163)"
+    }
+  }
+]

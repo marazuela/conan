@@ -1,0 +1,11 @@
+{
+  "ticker_local": "PLS",
+  "mic": "XASX",
+  "figi": "BBG000RLN5X0",
+  "issuer_figi": "BBG000RLN524",
+  "name": "PLS GROUP LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

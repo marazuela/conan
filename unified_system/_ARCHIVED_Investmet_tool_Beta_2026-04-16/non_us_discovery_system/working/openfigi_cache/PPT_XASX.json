@@ -1,0 +1,11 @@
+{
+  "ticker_local": "PPT",
+  "mic": "XASX",
+  "figi": "BBG000BB4KF7",
+  "issuer_figi": "BBG000BB4K21",
+  "name": "PERPETUAL LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

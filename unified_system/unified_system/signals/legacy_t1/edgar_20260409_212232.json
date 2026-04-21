@@ -1,0 +1,1422 @@
+[
+  {
+    "ticker": "PXED",
+    "isin": null,
+    "company_name": "Phoenix Education Partners, Inc.  (PXED)",
+    "market_cap_mm": 1043.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1600222/000119312526145546",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "10-Q",
+      "cik": "0001600222",
+      "adsh": "0001193125-26-145546",
+      "file_description": "10-Q",
+      "company_raw": "Phoenix Education Partners, Inc.  (PXED)  (CIK 0001600222)"
+    }
+  },
+  {
+    "ticker": "XPOF",
+    "isin": null,
+    "company_name": "Xponential Fitness, Inc.  (XPOF)",
+    "market_cap_mm": 386.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1802156/000119312526144263",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001802156",
+      "adsh": "0001193125-26-144263",
+      "file_description": "EX-99.1",
+      "company_raw": "Xponential Fitness, Inc.  (XPOF)  (CIK 0001802156)"
+    }
+  },
+  {
+    "ticker": "TDS",
+    "isin": null,
+    "company_name": "TELEPHONE & DATA SYSTEMS INC /DE/  (TDS, TDS-PU, TDS-PV)",
+    "market_cap_mm": 5191.5,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1051512/000105151226000026",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "ARS",
+      "cik": "0001051512",
+      "adsh": "0001051512-26-000026",
+      "file_description": "ARS",
+      "company_raw": "TELEPHONE & DATA SYSTEMS INC /DE/  (TDS, TDS-PU, TDS-PV)  (CIK 0001051512)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "HARBOR DIVERSIFIED, INC.",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/899394/000089939426000011",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "10-K",
+      "cik": "0000899394",
+      "adsh": "0000899394-26-000011",
+      "file_description": "10-K",
+      "company_raw": "HARBOR DIVERSIFIED, INC.  (CIK 0000899394)"
+    }
+  },
+  {
+    "ticker": "AD",
+    "isin": null,
+    "company_name": "ARRAY DIGITAL INFRASTRUCTURE, INC.  (AD, UZD, UZE, UZF)",
+    "market_cap_mm": 4266.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/821130/000082113026000027",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "ARS",
+      "cik": "0000821130",
+      "adsh": "0000821130-26-000027",
+      "file_description": "ARS",
+      "company_raw": "ARRAY DIGITAL INFRASTRUCTURE, INC.  (AD, UZD, UZE, UZF)  (CIK 0000821130)"
+    }
+  },
+  {
+    "ticker": "BCML",
+    "isin": null,
+    "company_name": "BayCom Corp  (BCML)",
+    "market_cap_mm": 356.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1730984/000173098426000019",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "8-K",
+      "cik": "0001730984",
+      "adsh": "0001730984-26-000019",
+      "file_description": "EX-99.1",
+      "company_raw": "BayCom Corp  (BCML)  (CIK 0001730984)"
+    }
+  },
+  {
+    "ticker": "KVUE",
+    "isin": null,
+    "company_name": "Kenvue Inc.  (KVUE)",
+    "market_cap_mm": 33408.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1944048/000194404826000085",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "DEF 14A",
+      "cik": "0001944048",
+      "adsh": "0001944048-26-000085",
+      "file_description": "DEF 14A",
+      "company_raw": "Kenvue Inc.  (KVUE)  (CIK 0001944048)"
+    }
+  },
+  {
+    "ticker": "TALK",
+    "isin": null,
+    "company_name": "Talkspace, Inc.  (TALK, TALKW)",
+    "market_cap_mm": 862.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1803901/000119312526144257",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "PREM14A",
+      "cik": "0001803901",
+      "adsh": "0001193125-26-144257",
+      "file_description": "PREM14A",
+      "company_raw": "Talkspace, Inc.  (TALK, TALKW)  (CIK 0001803901)"
+    }
+  },
+  {
+    "ticker": "LEVI",
+    "isin": null,
+    "company_name": "LEVI STRAUSS & CO  (LEVI)",
+    "market_cap_mm": 8753.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/94845/000009484526000020",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "10-Q",
+      "cik": "0000094845",
+      "adsh": "0000094845-26-000020",
+      "file_description": "10-Q",
+      "company_raw": "LEVI STRAUSS & CO  (LEVI)  (CIK 0000094845)"
+    }
+  },
+  {
+    "ticker": "WSR",
+    "isin": null,
+    "company_name": "Whitestone REIT  (WSR)",
+    "market_cap_mm": 984.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1175535/000143774926011741",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "DEFC14A",
+      "cik": "0001175535",
+      "adsh": "0001437749-26-011741",
+      "file_description": "FORM DEFC14A",
+      "company_raw": "Whitestone REIT  (WSR)  (CIK 0001175535)"
+    }
+  },
+  {
+    "ticker": "ED",
+    "isin": null,
+    "company_name": "CONSOLIDATED EDISON INC  (ED)",
+    "market_cap_mm": 41542.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1047862/000104786226000078",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "DEF 14A",
+      "cik": "0001047862",
+      "adsh": "0001047862-26-000078",
+      "file_description": "DEF 14A",
+      "company_raw": "CONSOLIDATED EDISON INC  (ED)  (CIK 0001047862)"
+    }
+  },
+  {
+    "ticker": "CWAN",
+    "isin": null,
+    "company_name": "Clearwater Analytics Holdings, Inc.  (CWAN)",
+    "market_cap_mm": 7132.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1866368/000119312526146364",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "SC 13E3/A",
+      "cik": "0001866368",
+      "adsh": "0001193125-26-146364",
+      "file_description": "SC 13E3/A",
+      "company_raw": "Clearwater Analytics Holdings, Inc.  (CWAN)  (CIK 0001866368)"
+    }
+  },
+  {
+    "ticker": "TERN",
+    "isin": null,
+    "company_name": "Terns Pharmaceuticals, Inc.  (TERN)",
+    "market_cap_mm": 6066.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1831363/000119312526144549",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "SC 14D9",
+      "cik": "0001831363",
+      "adsh": "0001193125-26-144549",
+      "file_description": "SC 14D9",
+      "company_raw": "Terns Pharmaceuticals, Inc.  (TERN)  (CIK 0001831363)"
+    }
+  },
+  {
+    "ticker": "AMT",
+    "isin": null,
+    "company_name": "AMERICAN TOWER CORP /MA/  (AMT)",
+    "market_cap_mm": 84233.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1053507/000119312526146429",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "strategic alternatives",
+      "filing_type": "ARS",
+      "cik": "0001053507",
+      "adsh": "0001193125-26-146429",
+      "file_description": "ARS",
+      "company_raw": "AMERICAN TOWER CORP /MA/  (AMT)  (CIK 0001053507)"
+    }
+  },
+  {
+    "ticker": "TPC",
+    "isin": null,
+    "company_name": "TUTOR PERINI CORP  (TPC)",
+    "market_cap_mm": 4302.5,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/77543/000007754326000090",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "ARS",
+      "cik": "0000077543",
+      "adsh": "0000077543-26-000090",
+      "file_description": "ARS",
+      "company_raw": "TUTOR PERINI CORP  (TPC)  (CIK 0000077543)"
+    }
+  },
+  {
+    "ticker": "BSRR",
+    "isin": null,
+    "company_name": "SIERRA BANCORP  (BSRR)",
+    "market_cap_mm": 482.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1130144/000110465926040182",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "DEF 14A",
+      "cik": "0001130144",
+      "adsh": "0001104659-26-040182",
+      "file_description": "DEF 14A",
+      "company_raw": "SIERRA BANCORP  (BSRR)  (CIK 0001130144)"
+    }
+  },
+  {
+    "ticker": "DNN",
+    "isin": null,
+    "company_name": "DENISON MINES CORP.  (DNN)",
+    "market_cap_mm": 3178.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1063259/000110465926040781",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "6-K",
+      "cik": "0001063259",
+      "adsh": "0001104659-26-040781",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "DENISON MINES CORP.  (DNN)  (CIK 0001063259)"
+    }
+  },
+  {
+    "ticker": "ROP",
+    "isin": null,
+    "company_name": "ROPER TECHNOLOGIES INC  (ROP)",
+    "market_cap_mm": 36012.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/882835/000119312526145516",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "ARS",
+      "cik": "0000882835",
+      "adsh": "0001193125-26-145516",
+      "file_description": "ARS",
+      "company_raw": "ROPER TECHNOLOGIES INC  (ROP)  (CIK 0000882835)"
+    }
+  },
+  {
+    "ticker": "KRC",
+    "isin": null,
+    "company_name": "KILROY REALTY CORP  (KRC)",
+    "market_cap_mm": 3316.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1025996/000119312526149755",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "ARS",
+      "cik": "0001025996",
+      "adsh": "0001193125-26-149755",
+      "file_description": "ARS",
+      "company_raw": "KILROY REALTY CORP  (KRC)  (CIK 0001025996)"
+    }
+  },
+  {
+    "ticker": "KODK",
+    "isin": null,
+    "company_name": "EASTMAN KODAK CO  (KODK)",
+    "market_cap_mm": 1197.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/31235/000114036126013930",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "ARS",
+      "cik": "0000031235",
+      "adsh": "0001140361-26-013930",
+      "file_description": "ARS",
+      "company_raw": "EASTMAN KODAK CO  (KODK)  (CIK 0000031235)"
+    }
+  },
+  {
+    "ticker": "EVO",
+    "isin": null,
+    "company_name": "Evotec SE  (EVO, EVOTF)",
+    "market_cap_mm": 938.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1412558/000110465926040767",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "20-F",
+      "cik": "0001412558",
+      "adsh": "0001104659-26-040767",
+      "file_description": "FORM 20-F",
+      "company_raw": "Evotec SE  (EVO, EVOTF)  (CIK 0001412558)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "VanEck ETF Trust",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1137360/000113736026000367",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "497",
+      "cik": "0001137360",
+      "adsh": "0001137360-26-000367",
+      "file_description": "497E CONSOLIDATED SAI",
+      "company_raw": "VanEck ETF Trust  (CIK 0001137360)"
+    }
+  },
+  {
+    "ticker": "CWAN",
+    "isin": null,
+    "company_name": "Clearwater Analytics Holdings, Inc.  (CWAN)",
+    "market_cap_mm": 7132.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1866368/000119312526146311",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "board representation",
+      "filing_type": "DEFM14A",
+      "cik": "0001866368",
+      "adsh": "0001193125-26-146311",
+      "file_description": "DEFM14A",
+      "company_raw": "Clearwater Analytics Holdings, Inc.  (CWAN)  (CIK 0001866368)"
+    }
+  },
+  {
+    "ticker": "XPOF",
+    "isin": null,
+    "company_name": "Xponential Fitness, Inc.  (XPOF)",
+    "market_cap_mm": 386.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1802156/000119312526144263",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "8-K",
+      "cik": "0001802156",
+      "adsh": "0001193125-26-144263",
+      "file_description": "EX-99.1",
+      "company_raw": "Xponential Fitness, Inc.  (XPOF)  (CIK 0001802156)"
+    }
+  },
+  {
+    "ticker": "IRD",
+    "isin": null,
+    "company_name": "Opus Genetics, Inc.  (IRD)",
+    "market_cap_mm": 391.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1228627/000114036126013394",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "8-K",
+      "cik": "0001228627",
+      "adsh": "0001140361-26-013394",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Opus Genetics, Inc.  (IRD)  (CIK 0001228627)"
+    }
+  },
+  {
+    "ticker": "RGR",
+    "isin": null,
+    "company_name": "STURM RUGER & CO INC  (RGR)",
+    "market_cap_mm": 655.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/95029/000092189526000939",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "PREC14A",
+      "cik": "0000095029",
+      "adsh": "0000921895-26-000939",
+      "file_description": null,
+      "company_raw": "STURM RUGER & CO INC  (RGR)  (CIK 0000095029)"
+    }
+  },
+  {
+    "ticker": "MLR",
+    "isin": null,
+    "company_name": "MILLER INDUSTRIES INC /TN/  (MLR)",
+    "market_cap_mm": 553.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/924822/000110465926040895",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0000924822",
+      "adsh": "0001104659-26-040895",
+      "file_description": "DEF 14A",
+      "company_raw": "MILLER INDUSTRIES INC /TN/  (MLR)  (CIK 0000924822)"
+    }
+  },
+  {
+    "ticker": "WSR",
+    "isin": null,
+    "company_name": "Whitestone REIT  (WSR)",
+    "market_cap_mm": 984.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1175535/000143774926011741",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEFC14A",
+      "cik": "0001175535",
+      "adsh": "0001437749-26-011741",
+      "file_description": "FORM DEFC14A",
+      "company_raw": "Whitestone REIT  (WSR)  (CIK 0001175535)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "NORTHERN LIGHTS FUND TRUST II",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1518042/000158064226002399",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "497",
+      "cik": "0001518042",
+      "adsh": "0001580642-26-002399",
+      "file_description": "497",
+      "company_raw": "NORTHERN LIGHTS FUND TRUST II  (CIK 0001518042)"
+    }
+  },
+  {
+    "ticker": "BFST",
+    "isin": null,
+    "company_name": "Business First Bancshares, Inc.  (BFST)",
+    "market_cap_mm": 943.7,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1624322/000143774926011695",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0001624322",
+      "adsh": "0001437749-26-011695",
+      "file_description": "FORM DEF 14A",
+      "company_raw": "Business First Bancshares, Inc.  (BFST)  (CIK 0001624322)"
+    }
+  },
+  {
+    "ticker": "CGAU",
+    "isin": null,
+    "company_name": "Centerra Gold Inc.  (CGAU)",
+    "market_cap_mm": 3836.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1854640/000095014226001080",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "6-K",
+      "cik": "0001854640",
+      "adsh": "0000950142-26-001080",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "Centerra Gold Inc.  (CGAU)  (CIK 0001854640)"
+    }
+  },
+  {
+    "ticker": "XOM",
+    "isin": null,
+    "company_name": "EXXON MOBIL CORP  (XOM)",
+    "market_cap_mm": 646015.0,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/34088/000119312526147614",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0000034088",
+      "adsh": "0001193125-26-147614",
+      "file_description": "DEF 14A",
+      "company_raw": "EXXON MOBIL CORP  (XOM)  (CIK 0000034088)"
+    }
+  },
+  {
+    "ticker": "VNO",
+    "isin": null,
+    "company_name": "VORNADO REALTY TRUST  (VNO, VNORP, VNO-PL, VNO-PM, VNO-PN, VNO-PO)",
+    "market_cap_mm": 5555.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/899689/000110465926040386",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0000899689",
+      "adsh": "0001104659-26-040386",
+      "file_description": "DEF 14A",
+      "company_raw": "VORNADO REALTY TRUST  (VNO, VNORP, VNO-PL, VNO-PM, VNO-PN, VNO-PO)  (CIK 0000899689)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "FIRST TRUST EXCHANGE-TRADED FUND VIII",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1667919/000144554626002620",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "497",
+      "cik": "0001667919",
+      "adsh": "0001445546-26-002620",
+      "file_description": "DEFINITIVE MATERIALS",
+      "company_raw": "FIRST TRUST EXCHANGE-TRADED FUND VIII  (CIK 0001667919)"
+    }
+  },
+  {
+    "ticker": "CLS",
+    "isin": null,
+    "company_name": "CELESTICA INC  (CLS)",
+    "market_cap_mm": 37820.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1030894/000103089426000018",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "DEF 14A",
+      "cik": "0001030894",
+      "adsh": "0001030894-26-000018",
+      "file_description": "DEF 14A",
+      "company_raw": "CELESTICA INC  (CLS)  (CIK 0001030894)"
+    }
+  },
+  {
+    "ticker": "SBAC",
+    "isin": null,
+    "company_name": "SBA COMMUNICATIONS CORP  (SBAC)",
+    "market_cap_mm": 23081.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1034054/000119312526149691",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "ARS",
+      "cik": "0001034054",
+      "adsh": "0001193125-26-149691",
+      "file_description": "ARS",
+      "company_raw": "SBA COMMUNICATIONS CORP  (SBAC)  (CIK 0001034054)"
+    }
+  },
+  {
+    "ticker": "DBI",
+    "isin": null,
+    "company_name": "Designer Brands Inc.  (DBI)",
+    "market_cap_mm": 326.5,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1319947/000131994726000026",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "PRE 14A",
+      "cik": "0001319947",
+      "adsh": "0001319947-26-000026",
+      "file_description": "PRE 14A",
+      "company_raw": "Designer Brands Inc.  (DBI)  (CIK 0001319947)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "FundVantage Trust",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1388485/000182912626003230",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "485APOS",
+      "cik": "0001388485",
+      "adsh": "0001829126-26-003230",
+      "file_description": "485APOS",
+      "company_raw": "FundVantage Trust  (CIK 0001388485)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Evernorth Holdings Inc.",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2092592/000119312526145587",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "maximize shareholder value",
+      "filing_type": "S-4/A",
+      "cik": "0002092592",
+      "adsh": "0001193125-26-145587",
+      "file_description": "S-4/A",
+      "company_raw": "Evernorth Holdings Inc.  (CIK 0002092592)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "LORD ABBETT SERIES FUND INC",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/855396/000093041326001028",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "497K",
+      "cik": "0000855396",
+      "adsh": "0000930413-26-001028",
+      "file_description": "SUMMARY PROSPECTUS PURSUANT TO SECURITIES ACT RULE 497 (K)",
+      "company_raw": "LORD ABBETT SERIES FUND INC  (CIK 0000855396)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Wedbush Series Trust",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2055464/000121390026041213",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "497K",
+      "cik": "0002055464",
+      "adsh": "0001213900-26-041213",
+      "file_description": "497K",
+      "company_raw": "Wedbush Series Trust  (CIK 0002055464)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "PRINCIPAL FUNDS, INC.",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/898745/000089874526000486",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "497K",
+      "cik": "0000898745",
+      "adsh": "0000898745-26-000486",
+      "file_description": "SP 2026 108.1 GLOBAL REAL ESTATE SECURITIES 040826",
+      "company_raw": "PRINCIPAL FUNDS, INC.  (CIK 0000898745)"
+    }
+  },
+  {
+    "ticker": "SRTA",
+    "isin": null,
+    "company_name": "Strata Critical Medical, Inc.  (SRTA, SRTAW)",
+    "market_cap_mm": 352.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1779128/000212669126000001",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "SCHEDULE 13D",
+      "cik": "0001779128",
+      "adsh": "0002126691-26-000001",
+      "file_description": null,
+      "company_raw": "Strata Critical Medical, Inc.  (SRTA, SRTAW)  (CIK 0001779128)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "John Hancock Exchange-Traded Fund Trust",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1478482/000119312526145790",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "497K",
+      "cik": "0001478482",
+      "adsh": "0001193125-26-145790",
+      "file_description": "JOHN HANCOCK EXCHANGE-TRADED FUND TRUST",
+      "company_raw": "John Hancock Exchange-Traded Fund Trust  (CIK 0001478482)"
+    }
+  },
+  {
+    "ticker": "KMX",
+    "isin": null,
+    "company_name": "CARMAX INC  (KMX)",
+    "market_cap_mm": 6655.0,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1170010/000110465926041539",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "8-K",
+      "cik": "0001170010",
+      "adsh": "0001104659-26-041539",
+      "file_description": "EXHIBIT 99.1",
+      "company_raw": "CARMAX INC  (KMX)  (CIK 0001170010)"
+    }
+  },
+  {
+    "ticker": "GNK",
+    "isin": null,
+    "company_name": "GENCO SHIPPING & TRADING LTD  (GNK)",
+    "market_cap_mm": 998.0,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1326200/000114036126013672",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "DEFA14A",
+      "cik": "0001326200",
+      "adsh": "0001140361-26-013672",
+      "file_description": "DEFA14A",
+      "company_raw": "GENCO SHIPPING & TRADING LTD  (GNK)  (CIK 0001326200)"
+    }
+  },
+  {
+    "ticker": "NAK",
+    "isin": null,
+    "company_name": "NORTHERN DYNASTY MINERALS LTD  (NAK)",
+    "market_cap_mm": 963.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 4,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1164771/000093041326000983",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "SCHEDULE 13D/A",
+      "cik": "0001164771",
+      "adsh": "0000930413-26-000983",
+      "file_description": null,
+      "company_raw": "NORTHERN DYNASTY MINERALS LTD  (NAK)  (CIK 0001164771)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "LAZARD RETIREMENT SERIES INC",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1033669/000093041326001019",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "485BPOS",
+      "cik": "0001033669",
+      "adsh": "0000930413-26-001019",
+      "file_description": null,
+      "company_raw": "LAZARD RETIREMENT SERIES INC  (CIK 0001033669)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Brighthouse Life Insurance Co (RILA MVA)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2041679/000119312526145835",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "485BPOS",
+      "cik": "0002041679",
+      "adsh": "0001193125-26-145835",
+      "file_description": "FORM OF INITIAL SUMMARY PROSPECTUS (GOLD TRACK AND GOLD TRACK SELECT)",
+      "company_raw": "Brighthouse Life Insurance Co (RILA MVA)  (CIK 0002041679)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Brighthouse Separate Account Eleven for Variable Annuities",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1209404/000119312526145832",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "485BPOS",
+      "cik": "0001209404",
+      "adsh": "0001193125-26-145832",
+      "file_description": "FORM OF INITIAL SUMMARY PROSPECTUS (GOLD TRACK AND GOLD TRACK SELECT)",
+      "company_raw": "Brighthouse Separate Account Eleven for Variable Annuities  (CIK 0001209404)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Brighthouse Separate Account QPN for Variable Annuities",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1298892/000119312526146981",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "485BPOS",
+      "cik": "0001298892",
+      "adsh": "0001193125-26-146981",
+      "file_description": "FORM OF INITIAL SUMMARY PROSPECTUS",
+      "company_raw": "Brighthouse Separate Account QPN for Variable Annuities  (CIK 0001298892)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "Muzinich Aviation Income Fund (mAIR)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2107262/000089418926011950",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "N-2",
+      "cik": "0002107262",
+      "adsh": "0000894189-26-011950",
+      "file_description": "N-2",
+      "company_raw": "Muzinich Aviation Income Fund (mAIR)  (CIK 0002107262)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "BlackRock Private Credit Fund",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1902649/000119312526149778",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "undervalued",
+      "filing_type": "ARS",
+      "cik": "0001902649",
+      "adsh": "0001193125-26-149778",
+      "file_description": "ARS",
+      "company_raw": "BlackRock Private Credit Fund  (CIK 0001902649)"
+    }
+  },
+  {
+    "ticker": "CHE",
+    "isin": null,
+    "company_name": "CHEMED CORP  (CHE)",
+    "market_cap_mm": 5712.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/19584/000156276226000052",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEFR14A",
+      "cik": "0000019584",
+      "adsh": "0001562762-26-000052",
+      "file_description": "DEFR14A",
+      "company_raw": "CHEMED CORP  (CHE)  (CIK 0000019584)"
+    }
+  },
+  {
+    "ticker": "DAL",
+    "isin": null,
+    "company_name": "DELTA AIR LINES, INC.  (DAL)",
+    "market_cap_mm": 44301.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790426000022",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "10-Q",
+      "cik": "0000027904",
+      "adsh": "0000027904-26-000022",
+      "file_description": "EXHIBIT 10.1",
+      "company_raw": "DELTA AIR LINES, INC.  (DAL)  (CIK 0000027904)"
+    }
+  },
+  {
+    "ticker": "CFFN",
+    "isin": null,
+    "company_name": "Capitol Federal Financial, Inc.  (CFFN)",
+    "market_cap_mm": 1006.8,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1490906/000149090626000013",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "S-8",
+      "cik": "0001490906",
+      "adsh": "0001490906-26-000013",
+      "file_description": "EXHIBIT 99.3 CFFN NQSO AWARD AGREEMENT",
+      "company_raw": "Capitol Federal Financial, Inc.  (CFFN)  (CIK 0001490906)"
+    }
+  },
+  {
+    "ticker": "HTB",
+    "isin": null,
+    "company_name": "HomeTrust Bancshares, Inc.  (HTB)",
+    "market_cap_mm": 780.6,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1538263/000153826326000032",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001538263",
+      "adsh": "0001538263-26-000032",
+      "file_description": "DEF 14A",
+      "company_raw": "HomeTrust Bancshares, Inc.  (HTB)  (CIK 0001538263)"
+    }
+  },
+  {
+    "ticker": "FUN",
+    "isin": null,
+    "company_name": "Six Flags Entertainment Corporation/NEW  (FUN)",
+    "market_cap_mm": 2009.9,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1999001/000119312526149736",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001999001",
+      "adsh": "0001193125-26-149736",
+      "file_description": "DEF 14A",
+      "company_raw": "Six Flags Entertainment Corporation/NEW  (FUN)  (CIK 0001999001)"
+    }
+  },
+  {
+    "ticker": "OCTV",
+    "isin": null,
+    "company_name": "Octave Intelligence plc  (OCTV)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2083632/000162828026024528",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "10-12B/A",
+      "cik": "0002083632",
+      "adsh": "0001628280-26-024528",
+      "file_description": "EX-10.9",
+      "company_raw": "Octave Intelligence plc  (OCTV)  (CIK 0002083632)"
+    }
+  },
+  {
+    "ticker": "URSB",
+    "isin": null,
+    "company_name": "URSB Bancorp, Inc.  (URSB)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2084261/000110465926041445",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "10-K",
+      "cik": "0002084261",
+      "adsh": "0001104659-26-041445",
+      "file_description": "EX-10.1",
+      "company_raw": "URSB Bancorp, Inc.  (URSB)  (CIK 0002084261)"
+    }
+  },
+  {
+    "ticker": "",
+    "isin": null,
+    "company_name": "AMASS BRANDS",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1851491/000157587226000239",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "S-1",
+      "cik": "0001851491",
+      "adsh": "0001575872-26-000239",
+      "file_description": "EXHIBIT 10.35",
+      "company_raw": "AMASS BRANDS  (CIK 0001851491)"
+    }
+  },
+  {
+    "ticker": "PRLB",
+    "isin": null,
+    "company_name": "Proto Labs Inc  (PRLB)",
+    "market_cap_mm": 1464.1,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1443669/000144366926000017",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001443669",
+      "adsh": "0001443669-26-000017",
+      "file_description": "DEF 14A",
+      "company_raw": "Proto Labs Inc  (PRLB)  (CIK 0001443669)"
+    }
+  },
+  {
+    "ticker": "CNOB",
+    "isin": null,
+    "company_name": "ConnectOne Bancorp, Inc.  (CNOB, CNOBP)",
+    "market_cap_mm": 1420.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/712771/000143774926011892",
+    "source_date": "2026-04-09",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0000712771",
+      "adsh": "0001437749-26-011892",
+      "file_description": "FORM DEF 14A",
+      "company_raw": "ConnectOne Bancorp, Inc.  (CNOB, CNOBP)  (CIK 0000712771)"
+    }
+  },
+  {
+    "ticker": "REXR",
+    "isin": null,
+    "company_name": "Rexford Industrial Realty, Inc.  (REXR, REXR-PB, REXR-PC)",
+    "market_cap_mm": 8174.7,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1571283/000157128326000012",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001571283",
+      "adsh": "0001571283-26-000012",
+      "file_description": "DEF 14A",
+      "company_raw": "Rexford Industrial Realty, Inc.  (REXR, REXR-PB, REXR-PC)  (CIK 0001571283)"
+    }
+  },
+  {
+    "ticker": "TDOC",
+    "isin": null,
+    "company_name": "Teladoc Health, Inc.  (TDOC)",
+    "market_cap_mm": 947.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1477449/000147744926000020",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001477449",
+      "adsh": "0001477449-26-000020",
+      "file_description": "DEF 14A",
+      "company_raw": "Teladoc Health, Inc.  (TDOC)  (CIK 0001477449)"
+    }
+  },
+  {
+    "ticker": "IRD",
+    "isin": null,
+    "company_name": "Opus Genetics, Inc.  (IRD)",
+    "market_cap_mm": 391.3,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1228627/000114036126013481",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "8-K",
+      "cik": "0001228627",
+      "adsh": "0001140361-26-013481",
+      "file_description": "8-K",
+      "company_raw": "Opus Genetics, Inc.  (IRD)  (CIK 0001228627)"
+    }
+  },
+  {
+    "ticker": "SHBI",
+    "isin": null,
+    "company_name": "SHORE BANCSHARES INC  (SHBI)",
+    "market_cap_mm": 655.2,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1035092/000103509226000019",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001035092",
+      "adsh": "0001035092-26-000019",
+      "file_description": "DEF 14A",
+      "company_raw": "SHORE BANCSHARES INC  (SHBI)  (CIK 0001035092)"
+    }
+  },
+  {
+    "ticker": "ARXS",
+    "isin": null,
+    "company_name": "Arxis, Inc.  (ARXS)",
+    "market_cap_mm": null,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2093536/000119312526146309",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "S-1/A",
+      "cik": "0002093536",
+      "adsh": "0001193125-26-146309",
+      "file_description": "EX-10.9",
+      "company_raw": "Arxis, Inc.  (ARXS)  (CIK 0002093536)"
+    }
+  },
+  {
+    "ticker": "PFS",
+    "isin": null,
+    "company_name": "PROVIDENT FINANCIAL SERVICES INC  (PFS)",
+    "market_cap_mm": 2935.4,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1178970/000130817926000226",
+    "source_date": "2026-04-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0001178970",
+      "adsh": "0001308179-26-000226",
+      "file_description": "DEFINITIVE PROXY STATEMENT",
+      "company_raw": "PROVIDENT FINANCIAL SERVICES INC  (PFS)  (CIK 0001178970)"
+    }
+  },
+  {
+    "ticker": "GBX",
+    "isin": null,
+    "company_name": "GREENBRIER COMPANIES INC  (GBX)",
+    "market_cap_mm": 1659.5,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/923120/000119312526145619",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "10-Q",
+      "cik": "0000923120",
+      "adsh": "0001193125-26-145619",
+      "file_description": "EX-10.1",
+      "company_raw": "GREENBRIER COMPANIES INC  (GBX)  (CIK 0000923120)"
+    }
+  },
+  {
+    "ticker": "ROST",
+    "isin": null,
+    "company_name": "ROSS STORES, INC.  (ROST)",
+    "market_cap_mm": 72746.0,
+    "signal_type": "activist_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/745732/000074573226000013",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "keyword": "change in control",
+      "filing_type": "DEF 14A",
+      "cik": "0000745732",
+      "adsh": "0000745732-26-000013",
+      "file_description": "DEF 14A",
+      "company_raw": "ROSS STORES, INC.  (ROST)  (CIK 0000745732)"
+    }
+  }
+]

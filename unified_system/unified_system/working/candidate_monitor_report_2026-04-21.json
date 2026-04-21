@@ -1,0 +1,91 @@
+{
+  "ran_at_utc": "2026-04-21T14:16:21.901369Z",
+  "tickers_checked": [
+    "RPAY",
+    "VRDN",
+    "AXSM",
+    "VERA",
+    "RGR"
+  ],
+  "per_ticker": {
+    "RPAY": {
+      "archetype": "activist",
+      "catalyst_date": "2026-05-01",
+      "cik": "0001720592",
+      "decision": "noop",
+      "triggers": [],
+      "price_snapshot": {
+        "max_abs_move_pct": null,
+        "recent_close": null,
+        "recent_close_date": null
+      },
+      "edgar_status": "error",
+      "news_matches": 0,
+      "rule_firings": []
+    },
+    "VRDN": {
+      "archetype": "pdufa",
+      "catalyst_date": "2026-06-30",
+      "cik": null,
+      "decision": "noop",
+      "triggers": [],
+      "price_snapshot": {
+        "max_abs_move_pct": null,
+        "recent_close": null,
+        "recent_close_date": null
+      },
+      "edgar_status": "no_cik",
+      "news_matches": 0,
+      "rule_firings": []
+    },
+    "AXSM": {
+      "archetype": "pdufa",
+      "catalyst_date": "2026-04-30",
+      "cik": "0001579428",
+      "decision": "noop",
+      "triggers": [],
+      "price_snapshot": {
+        "max_abs_move_pct": null,
+        "recent_close": null,
+        "recent_close_date": null
+      },
+      "edgar_status": "error",
+      "news_matches": 0,
+      "rule_firings": []
+    },
+    "VERA": {
+      "archetype": "pdufa",
+      "catalyst_date": "2026-07-07",
+      "cik": "0001831828",
+      "decision": "noop",
+      "triggers": [],
+      "price_snapshot": {
+        "max_abs_move_pct": null,
+        "recent_close": null,
+        "recent_close_date": null
+      },
+      "edgar_status": "error",
+      "news_matches": 0,
+      "rule_firings": []
+    },
+    "RGR": {
+      "archetype": "activist",
+      "catalyst_date": "2026-05-27",
+      "cik": "0000095029",
+      "decision": "noop",
+      "triggers": [],
+      "price_snapshot": {
+        "max_abs_move_pct": null,
+        "recent_close": null,
+        "recent_close_date": null
+      },
+      "edgar_status": "error",
+      "news_matches": 0,
+      "rule_firings": []
+    }
+  },
+  "archived": [],
+  "reviews": [],
+  "errors": [],
+  "dry_run": true
+}

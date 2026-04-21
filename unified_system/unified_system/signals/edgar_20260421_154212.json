@@ -1,0 +1,30 @@
+[
+  {
+    "signal_id": "e20e999bbf0b25011fee20eedeb6fae9",
+    "source_content_hash": "9c14573388a895e0",
+    "scanner_source": "edgar_filing_monitor",
+    "upstream_scanner": "edgar_filing_monitor",
+    "scoring_profile": "activist_governance",
+    "ticker": "MLSS",
+    "isin": null,
+    "company_name_en": "MILESTONE SCIENTIFIC INC.  (MLSS)",
+    "headline": "EX-10.1",
+    "summary": "EX-10.1",
+    "signal_type": "distress_keyword",
+    "signal_category": "edgar",
+    "strength_estimate": 2,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/855683/000149315226018231",
+    "filing_url": "https://www.sec.gov/Archives/edgar/data/855683/000149315226018231",
+    "source_date": "2026-04-21",
+    "scan_date": "2026-04-21",
+    "market_cap_mm": null,
+    "raw_data": {
+      "keyword": "restatement",
+      "filing_type": "8-K",
+      "cik": "0000855683",
+      "adsh": "0001493152-26-018231",
+      "file_description": "EX-10.1",
+      "company_raw": "MILESTONE SCIENTIFIC INC.  (MLSS)  (CIK 0000855683)"
+    }
+  }
+]

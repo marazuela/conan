@@ -1,0 +1,44 @@
+02:01:35 [run_scanner] INFO: Running esma_short: FCA/ESMA short position aggregation
+02:01:35 [esma_short_scanner] INFO: FCA: Downloaded XLSX: 3,011,512 bytes
+02:01:36 [esma_short_scanner] INFO: FCA: Parsed 579 current positions
+02:01:36 [esma_short_scanner] INFO: FCA: 579 positions fetched
+02:01:37 [esma_short_scanner] INFO: AMF: Parsed 188 active positions
+02:01:37 [esma_short_scanner] INFO: AMF: 188 positions fetched
+02:01:37 [esma_short_scanner] INFO: AFM: Parsed 956 current positions
+02:01:37 [esma_short_scanner] INFO: AFM: 956 positions fetched
+02:01:40 [esma_short_scanner] INFO: BaFin: Parsed 473 current positions
+02:01:40 [esma_short_scanner] INFO: BAFIN: 473 positions fetched
+02:01:40 [esma_short_scanner] INFO: Total positions across all regulators: 2196
+02:01:40 [esma_short_scanner] INFO: Loaded prior snapshot for FCA: 579 positions
+02:01:40 [esma_short_scanner] INFO: Loaded prior snapshot for AMF: 188 positions
+02:01:40 [esma_short_scanner] INFO: Loaded prior snapshot for AFM: 1007 positions
+02:01:40 [esma_short_scanner] INFO: Loaded prior snapshot for BAFIN: 480 positions
+02:01:40 [esma_short_scanner] INFO: Saved snapshot: /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/fca_snapshot_20260412.json (579 positions)
+02:01:40 [esma_short_scanner] INFO: Saved snapshot: /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/amf_snapshot_20260412.json (188 positions)
+02:01:40 [esma_short_scanner] INFO: Saved snapshot: /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/afm_snapshot_20260412.json (956 positions)
+02:01:40 [esma_short_scanner] INFO: Saved snapshot: /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/esma_snapshots/bafin_snapshot_20260412.json (473 positions)
+02:01:40 [esma_short_scanner] INFO: Crowded shorts (>=3 holders): 173 ISINs
+02:01:40 [esma_short_scanner] INFO: Loaded 235 cached ISIN->ticker mappings
+02:01:43 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: IQX.DE"}}}
+02:01:44 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: IQX.DE"}}}
+02:01:45 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: IQX.DE"}}}
+02:01:46 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: MTLN"}}}
+02:01:48 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: AOMFF.PA"}}}
+02:01:49 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: AOMFF.PA"}}}
+02:02:02 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: SOH1.PA"}}}
+02:02:03 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: AOMFF.PA"}}}
+02:02:08 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: CDMGF.PA"}}}
+02:02:09 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: SOH1.PA"}}}
+02:02:10 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: CDMGF.PA"}}}
+02:02:11 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: SOH1.PA"}}}
+02:02:12 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: CDMGF.PA"}}}
+02:02:16 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: ADG.AS"}}}
+02:02:24 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: DSFIR.SW"}}}
+02:02:26 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: OEMA.AS"}}}
+02:02:32 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: NRDXF.DE"}}}
+02:02:52 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: NRDXF.DE"}}}
+02:02:53 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: NRDXF.DE"}}}
+02:02:55 [esma_short_scanner] INFO: Saved 260 ISIN->ticker mappings to cache
+02:02:55 [esma_short_scanner] INFO: Saved 137 signals to /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/esma_short_20260412_020255.json
+02:02:55 [run_scanner] INFO:   esma_short: 137 signals in 80.3s
+OK: esma_short — 137 signals in 80.3s

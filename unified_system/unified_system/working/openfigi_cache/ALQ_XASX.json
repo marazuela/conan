@@ -1,0 +1,11 @@
+{
+  "ticker_local": "ALQ",
+  "mic": "XASX",
+  "figi": "BBG000BRV2M4",
+  "issuer_figi": "BBG000BRV2C5",
+  "name": "ALS LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

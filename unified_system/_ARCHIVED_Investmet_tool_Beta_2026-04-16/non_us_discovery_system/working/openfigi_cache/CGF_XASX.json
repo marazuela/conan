@@ -1,0 +1,11 @@
+{
+  "ticker_local": "CGF",
+  "mic": "XASX",
+  "figi": "BBG000DY1213",
+  "issuer_figi": "BBG000DY11K4",
+  "name": "CHALLENGER LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

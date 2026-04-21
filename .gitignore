@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Session state
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# Node (should not appear at this level, but guard)
+node_modules/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Vercel / Next build artifacts (dashboard is its own repo, but guard)
+.vercel/
+.next/
+out/
+
+# Dashboard lives in its own repo (marazuela/conan-dashboard)
+dashboard/

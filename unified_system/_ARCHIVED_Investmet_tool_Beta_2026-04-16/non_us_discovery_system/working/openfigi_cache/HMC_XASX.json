@@ -1,0 +1,11 @@
+{
+  "ticker_local": "HMC",
+  "mic": "XASX",
+  "figi": "BBG013KLVRD5",
+  "issuer_figi": "BBG013KLVRC6",
+  "name": "HMC CAPITAL LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

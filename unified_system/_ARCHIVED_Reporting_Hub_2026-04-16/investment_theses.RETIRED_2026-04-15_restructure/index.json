@@ -1,0 +1,433 @@
+{
+  "schema_version": "2.0",
+  "generated_at_utc": "2026-04-15T02:48:34Z",
+  "generator": "reporting hub thesis pipeline (scheduled run; RPAY first-time thesis generation)",
+  "canonical_template": "investment_theses/docx/AXSM_Investment_Thesis_2026-04-13.docx",
+  "entries": [
+    {
+      "ticker": "AXSM",
+      "company": "Axsome Therapeutics, Inc.",
+      "subject": "AXS-05 (Auvelity) in Alzheimer's Disease Agitation",
+      "source_file": "investment_discovery_system/candidates/AXSM_ADA_PDUFA.md",
+      "source_md5": "16bbd135fe4181508845d9ffec08038f",
+      "score": 33.5,
+      "tier": "active_hold",
+      "catalyst": {
+        "type": "PDUFA",
+        "date": "2026-04-30",
+        "t_minus_business_days_at_generation": 12
+      },
+      "recommendation": {
+        "stance": "Core Hold / Add on weakness",
+        "size_tier": "core",
+        "conviction": "high"
+      },
+      "thesis_version": "2026-04-13",
+      "docx_path": "investment_theses/docx/AXSM_Investment_Thesis_2026-04-13.docx",
+      "pdf_path": "investment_theses/pdf/AXSM_Investment_Thesis_2026-04-13.pdf",
+      "pdf_bytes": 226267,
+      "prose_word_count": 2459,
+      "freshness_window_days": 7,
+      "regeneration_decision": "SKIP",
+      "regeneration_reason": "thesis dated 2026-04-13 within 7-day freshness window and source MD5 unchanged",
+      "web_research_verdict": "Thesis remains intact; ADA launch execution and pricing are the dominant value drivers, PDUFA is derisked by accelerated approval pathway and AdCom-free review.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "TVTX",
+      "company": "Travere Therapeutics, Inc.",
+      "subject": "Sparsentan (Filspari) full approval in FSGS",
+      "source_file": "investment_discovery_system/candidates/TVTX_FSGS_PDUFA.md",
+      "source_md5": "e016178323920845ae5725e5477e2503",
+      "score": null,
+      "tier": "delivered_closed",
+      "catalyst": {
+        "type": "PDUFA",
+        "date": "2026-01-13",
+        "t_minus_business_days_at_generation": 0,
+        "status": "APPROVED"
+      },
+      "recommendation": {
+        "stance": "Closed \u2014 catalyst delivered",
+        "size_tier": "n/a",
+        "conviction": "n/a"
+      },
+      "thesis_version": "delivered",
+      "docx_path": null,
+      "pdf_path": null,
+      "pdf_bytes": null,
+      "prose_word_count": null,
+      "regeneration_decision": "SKIP",
+      "regeneration_reason": "Catalyst resolved 2026-01-13 with full FSGS approval; no active thesis to regenerate.",
+      "web_research_verdict": "Full FDA approval confirmed January 2026; Filspari FSGS launch underway \u2014 no further thesis cycles required for this catalyst.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "VERA",
+      "company": "Vera Therapeutics, Inc.",
+      "subject": "Atacicept in IgA Nephropathy (IgAN)",
+      "source_file": "investment_discovery_system/candidates/VERA_IgAN_PDUFA.md",
+      "source_md5": "d5d5fe25520a2a766337de464083e141",
+      "score": 30.5,
+      "tier": "active_hold",
+      "catalyst": {
+        "type": "PDUFA",
+        "date": "2026-07-07",
+        "t_minus_business_days_at_generation": 60
+      },
+      "recommendation": {
+        "stance": "Buy / Accumulate",
+        "size_tier": "core",
+        "conviction": "high"
+      },
+      "thesis_version": "2026-04-14",
+      "docx_path": "investment_theses/docx/VERA_Investment_Thesis_2026-04-14.docx",
+      "pdf_path": "investment_theses/pdf/VERA_Investment_Thesis_2026-04-14.pdf",
+      "pdf_bytes": 296325,
+      "prose_word_count": 3656,
+      "freshness_window_days": 7,
+      "regeneration_decision": "REGENERATE",
+      "regeneration_reason": "No prior thesis on record for VERA; source candidate file updated and catalyst within 60 business days.",
+      "web_research_verdict": "Street narrative remains anchored to the sibeprenlimab $292,500 WAC and IgAN TAM expansion. Atacicept ORIGIN 3 Phase III data (39% UPCR reduction, 46% hematuria resolution) is BTD-supported and label-competitive. Risk skew is label breadth/positioning vs head-to-head efficacy, not approval probability. No litigation, no competing AdCom drama, analyst dispersion is narrowing bullish. Web layer validates the thesis.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "VRDN",
+      "company": "Viridian Therapeutics, Inc.",
+      "subject": "Veligrotug (IV anti-IGF-1R) in Thyroid Eye Disease (TED)",
+      "source_file": "investment_discovery_system/candidates/VRDN_veligrotug_PDUFA.md",
+      "source_md5": "21956cd6b094c88405cf8b7e8ec26fdf",
+      "score": 26.0,
+      "tier": "watchlist",
+      "catalyst": {
+        "type": "PDUFA",
+        "date": "2026-06-30",
+        "t_minus_business_days_at_generation": 54
+      },
+      "recommendation": {
+        "stance": "Hold / Modest Buy at watchlist size",
+        "size_tier": "watchlist",
+        "conviction": "medium"
+      },
+      "thesis_version": "2026-04-14",
+      "docx_path": "investment_theses/docx/VRDN_Investment_Thesis_2026-04-14.docx",
+      "pdf_path": "investment_theses/pdf/VRDN_Investment_Thesis_2026-04-14.pdf",
+      "pdf_bytes": 305665,
+      "prose_word_count": 3330,
+      "freshness_window_days": 7,
+      "regeneration_decision": "REGENERATE",
+      "regeneration_reason": "No prior thesis on record; score recently demoted to watchlist following REVEAL-1 disappointment and Amgen SC Tepezza 76.7% PRR readout \u2014 fresh framing required.",
+      "web_research_verdict": "Market is conflating long-dated elegrobart franchise damage (Amgen SC Tepezza superiority) with near-dated veligrotug IV approval probability. THRIVE / THRIVE-2 data is clean enough to support approval (~85\u201390% probability) and the IV niche persists even in an SC-dominant long-term landscape. Analyst price target cuts are franchise-oriented, not approval-oriented. Elevated short interest and depressed sentiment create a modest positive approval-day skew, but wider long-tail distribution argues for hedged expression and watchlist sizing.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "AVNS",
+      "company": "Avanos Medical, Inc.",
+      "subject": "American Industrial Partners take-private at $25.00 per share cash",
+      "source_file": "investment_discovery_system/candidates/AVNS_merger_arb_AIP_2026-04-14.md",
+      "source_md5": "914e16706f0c4b8ccfc5b8f29772baa1",
+      "score": 28.5,
+      "tier": "active_candidate_marginal",
+      "catalyst": {
+        "type": "Merger (cash)",
+        "date": "2026-04-13",
+        "expected_close": "2026-H2",
+        "t_minus_business_days_at_generation": 0,
+        "status": "DEFINITIVE_AGREEMENT_SIGNED"
+      },
+      "recommendation": {
+        "stance": "Hold / tactical add on weakness",
+        "size_tier": "cash-sleeve",
+        "conviction": "medium-low"
+      },
+      "thesis_version": "2026-04-14",
+      "docx_path": "investment_theses/docx/AVNS_Investment_Thesis_2026-04-14.docx",
+      "pdf_path": "investment_theses/pdf/AVNS_Investment_Thesis_2026-04-14.pdf",
+      "pdf_bytes": 216238,
+      "prose_word_count": 4989,
+      "freshness_window_days": 7,
+      "regeneration_decision": "REGENERATE",
+      "regeneration_reason": "No prior thesis on record for AVNS; candidate file created 2026-04-14 on definitive merger agreement announcement.",
+      "web_research_verdict": "Strengthens thesis on deal completion probability (~95-97%). No topping bid/antitrust concerns identified; confirms 72.1% premium as top-decile and consistent with negotiated process. Spread is fairly priced; arb edge is financing-dependent, not fundamental.",
+      "word_count_note": "Exceeded 4500-word target (4989); content is dense and structurally-required for merger-arb-specific risk decomposition.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "GSAT",
+      "company": "Globalstar, Inc.",
+      "subject": "Amazon acquisition at $90.00 cash / 0.3210 AMZN (capped); 40% cash proration",
+      "source_file": "investment_discovery_system/candidates/GSAT_merger_arb_AMZN_2026-04-14.md",
+      "source_md5": "b13658ffdb50287e2a1f653b0f4c4428",
+      "score": 25.5,
+      "tier": "watchlist",
+      "catalyst": {
+        "type": "Merger (cash/stock blend)",
+        "date": "2026-04-13",
+        "expected_close": "2027",
+        "t_minus_business_days_at_generation": 0,
+        "status": "DEFINITIVE_AGREEMENT_SIGNED"
+      },
+      "recommendation": {
+        "stance": "Watchlist \u2014 hedged exposure only at modest sizing",
+        "size_tier": "watchlist",
+        "conviction": "medium-low"
+      },
+      "thesis_version": "2026-04-14",
+      "docx_path": "investment_theses/docx/GSAT_Investment_Thesis_2026-04-14.docx",
+      "pdf_path": "investment_theses/pdf/GSAT_Investment_Thesis_2026-04-14.pdf",
+      "pdf_bytes": 241144,
+      "prose_word_count": 5676,
+      "freshness_window_days": 7,
+      "regeneration_decision": "REGENERATE",
+      "regeneration_reason": "No prior thesis on record for GSAT; new candidate file created 2026-04-14 on Amazon definitive merger agreement.",
+      "web_research_verdict": "Strengthens base-case completion probability (85-88%) given written-consent structure, Apple alignment, Amazon balance sheet. Adds emphasis to HIBLEO-4 closing condition and FCC regulatory path tail. 11.1% gross spread / ~7.4% annualized is fair value, not alpha. Watchlist sizing with AMZN-leg hedging appropriate.",
+      "word_count_note": "Exceeded 4500-word target (5676); long-dated, multi-jurisdictional deal with atypical closing-condition structure requires deeper decomposition.",
+      "source_tool": "investment_tool"
+    },
+    {
+      "ticker": "RPAY",
+      "company": "Repay Holdings Corporation",
+      "subject": "Forager Fund activist campaign \u2014 12.5% poison-pill trigger vs. 12.9% stake (Veradace Partners 8.4% second axis)",
+      "source_file": "investment_discovery_system/candidates/RPAY_Forager_ActivistPoisonPill.md",
+      "source_md5": "460c58f8d06a23228fa0c2f56308baea",
+      "source_md5_history": [
+        {
+          "md5": "5282c6968b75a3e6d45a72a5e9c8b4a1",
+          "updated_at": "2026-04-13T16:20:00Z"
+        },
+        {
+          "md5": "460c58f8d06a23228fa0c2f56308baea",
+          "updated_at": "2026-04-15T10:45:00Z"
+        }
+      ],
+      "hash_change_reason": "Monitoring-log-only changes detected in source candidate file; no substantive thesis regression.",
+      "score": 30.0,
+      "tier": "active_candidate",
+      "catalyst": {
+        "type": "Activist campaign (poison-pill adopted; Forager 13D/A #2 same day)",
+        "date": "2026-04-13",
+        "expected_resolution_window": "1-3 quarters",
+        "t_minus_business_days_at_generation": 0,
+        "status": "ACTIVE_CAMPAIGN"
+      },
+      "recommendation": {
+        "stance": "Buy \u2014 medium-high conviction",
+        "size_tier": "starter-to-satellite",
+        "conviction": "medium-high"
+      },
+      "thesis_version": "2026-04-15-v2",
+      "docx_path": "investment_theses/docx/RPAY_Investment_Thesis_2026-04-15.docx",
+      "pdf_path": "investment_theses/pdf/RPAY_Investment_Thesis_2026-04-15.pdf",
+      "pdf_bytes": 283898,
+      "prose_word_count": 5735,
+      "freshness_window_days": 7,
+      "regeneration_decision": "PATCHED",
+      "regeneration_reason": "v1 thesis written 2026-04-15 morning omitted Veradace Partners 8.4% stake and 2026-04-09 public letter opposing KUBRA (validated via WebSearch against primary sources: Business Wire, Stocktitan, Payments Dive, SEC Form ADV). Material gap: per Phase 2 rule (d), the web-research layer surfaced a new material finding (second activist-adjacent shareholder; hardening board response) not captured in the candidate .md file or v1 thesis. Archived v1 to archive/2026-04-15_pre_hub_migration/investment_tool_archive/2026-04-15_RPAY_superseded_v1/ and patched v1 docx in place with Veradace content across Summary, Case-in-Six-Points, Key Numbers, A.4 Governance, A.7 Market Interpretation, Kill condition 7, Catalyst Calendar, Sources, Recommendation and Verdict boxes.",
+      "web_research_verdict": "STRENGTHENS v1 further. Veradace Partners (8.4%, founded 2019 by ex-NWQ co-president John Conlin + Alex Vezendan, Dallas-based) issued 2026-04-09 public letter to independent directors calling for KUBRA termination and 2 board seats, claiming \"every single actively-managed investor\" polled opposed the deal. Repay board response 2026-04-09 reiterated KUBRA commitment (hardening signal, closes quiet-settlement path). Combined Forager 12.9% + Veradace 8.4% = ~21.3% of Class A float visibly opposed to current capital-allocation trajectory. Stock -17% on KUBRA announcement 2026-03-30; RPAY underperformed S&P and Russell 2000 by 20% since. ATG Fund Delaware Chancery lawsuit is against Empery Digital (EMPD), NOT RPAY \u2014 original search result was conflated; no RPAY litigation found. Thesis intact and modestly strengthened via two-axis shareholder pressure; kill condition 7 (Veradace private settlement without Forager) added.",
+      "word_count_note": "5735 words \u2014 extension of v1's 5243-word baseline (+492 for Veradace layer). Still outside 2500\u20134500 target, but consistent with AVNS (4989) / GSAT (5676) precedent for complex multi-axis situations.",
+      "v1_archive_path": "archive/2026-04-15_pre_hub_migration/investment_tool_archive/2026-04-15_RPAY_superseded_v1/",
+      "source_tool": "investment_tool"
+    }
+  ],
+  "run_summary": {
+    "candidates_considered": 7,
+    "regenerated": [
+      "RPAY"
+    ],
+    "skipped": [
+      "AXSM",
+      "VERA",
+      "VRDN",
+      "AVNS",
+      "GSAT",
+      "TVTX"
+    ],
+    "skip_reasons": {
+      "AXSM": "within 7-day freshness window (thesis 2026-04-13), source md5 unchanged, T-14 monitoring CLEAR",
+      "VERA": "thesis 2026-04-14 already present, source md5 unchanged",
+      "VRDN": "thesis 2026-04-14 already present, source md5 unchanged",
+      "AVNS": "thesis 2026-04-14 already present, source md5 unchanged",
+      "GSAT": "thesis 2026-04-14 already present, source md5 unchanged",
+      "TVTX": "catalyst delivered (APPROVED Jan 2026); in delivered/"
+    },
+    "new_theses_this_run": [
+      "RPAY"
+    ],
+    "watchlist_deferred_to_next_run": [
+      "MNKD",
+      "ARVN",
+      "HROW"
+    ]
+  },
+  "last_run": "2026-04-15T10:45:00Z",
+  "run_version": "thesis-v1",
+  "run_history": [
+    {
+      "run_at_utc": "2026-04-14T22:07:54Z",
+      "date_local": "2026-04-15",
+      "decision_per_ticker": {
+        "AXSM": "SKIP (thesis 2026-04-13, 2 days old, md5 unchanged, no SESSION_STATE material trigger)",
+        "VERA": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "VRDN": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "AVNS": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "GSAT": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "TVTX": "SKIP (delivered / catalyst resolved 2026-01-13)"
+      },
+      "housekeeping": [
+        "Moved 6 stray LibreOffice tmp artifacts out of pdf/ to archive/2026-04-15_libreoffice_tmp_cleanup/ (not deleted, per project never-delete rule)."
+      ],
+      "produced_theses": [],
+      "notes": "No candidate met any regeneration trigger under Phase 2 rules (a)-(d). All 5 active/watchlist theses are within 7-day freshness window and all source MD5s match the index. SESSION_STATE updates since last run are routine monitoring (CLEAR flags, T-16 for AXSM with T-14 intensive window activating tomorrow). No production work this run; verification + housekeeping only."
+    },
+    {
+      "run_at_utc": "2026-04-14T22:42:03Z",
+      "date_local": "2026-04-15",
+      "decision_per_ticker": {
+        "AXSM": "SKIP (thesis 2026-04-13, 2 days old, md5 unchanged, WebSearch kill-sweep: no material new events 4/13-4/15)",
+        "VERA": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged, routine consolidation)",
+        "VRDN": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "AVNS": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged, spread 1.3%->1.48% immaterial price-discovery)",
+        "GSAT": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "TVTX": "SKIP (delivered / catalyst resolved 2026-01-13)"
+      },
+      "housekeeping": [
+        "Moved 5 stray LibreOffice .~lock.*.pdf# files out of pdf/ to archive/2026-04-15_libreoffice_lock_cleanup/ (not deleted, per never-delete rule). pdf/ directory now contains only the 5 canonical thesis PDFs."
+      ],
+      "produced_theses": [],
+      "web_research_performed": [
+        {
+          "ticker": "AXSM",
+          "window": "2026-04-13 to 2026-04-15",
+          "queries_run": 6,
+          "verdict": "No material new events; thesis remains intact; prudent analyst would not regenerate a 2-day-old thesis on this basis."
+        }
+      ],
+      "notes": "No candidate met any regeneration trigger under Phase 2 rules (a)-(d). All 5 active/watchlist theses within 7-day freshness window; all source MD5s match index. AXSM AXS-05 ADA PDUFA remains 2026-04-30 (now T-14 business days). WebSearch kill-sweep on AXSM confirmed no material news since thesis was written 2026-04-13. SESSION_STATE S57 findings (EDGAR false-positive pattern, AVNS spread +15bps, GSAT stable, file-truncation bug on tools/) are not thesis-material. No production work this run; verification + housekeeping + web-research validation only."
+    },
+    {
+      "run_at_utc": "2026-04-15T02:48:34Z",
+      "date_local": "2026-04-15",
+      "decision_per_ticker": {
+        "AXSM": "SKIP (thesis 2026-04-13, 2 days old, md5 unchanged; T-14 intensive monitoring shows CLEAR per SESSION_STATE S58; no material new events)",
+        "VERA": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "VRDN": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "AVNS": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "GSAT": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "TVTX": "SKIP (delivered/catalyst resolved)",
+        "RPAY": "REGENERATE (NEW active candidate, score 30.0, no prior thesis on record, URGENT per SESSION_STATE S58)"
+      },
+      "produced_theses": [
+        "RPAY"
+      ],
+      "web_research_performed": [
+        {
+          "ticker": "RPAY",
+          "queries_run": 10,
+          "categories_covered": [
+            "recent news",
+            "analyst ratings",
+            "activist-fund history",
+            "rights-plan coverage",
+            "earnings/cash runway",
+            "annual-meeting governance",
+            "Forager principals",
+            "short interest/retail",
+            "competitive M&A landscape",
+            "litigation/SEC investigations"
+          ],
+          "verdict": "STRENGTHENS \u2014 KUBRA deal adds second activist-leverage axis; Shaler Alias departure adds governance instability; analyst PT collapse confirms market has not priced activist resolution; Forager initial 13D at 10.0% (Mar 12) predates the candidate-file timeline"
+        }
+      ],
+      "housekeeping": [
+        "Moved 2 LibreOffice tmp artifacts (lu20464aajaz.tmp, .~lock.RPAY...pdf#) from pdf/ to archive/2026-04-15_libreoffice_tmp_cleanup/ per never-delete rule"
+      ],
+      "notes": "Produced RPAY thesis (first on record). New active candidate with score 30.0 surfaced in SESSION_STATE S58. Filings <48h old so edge window is live (2-6 weeks per A.1). All 12 appendix sections (A.1-A.12) present. 14 tables (matches AXSM canonical). PDF 234KB. Word count 5243 \u2014 above 4500-word target, per AVNS/GSAT precedent for complex situations (activist + pending M&A)."
+    },
+    {
+      "run_at_utc": "2026-04-15T06:45:00Z",
+      "date_local": "2026-04-15",
+      "decision_per_ticker": {
+        "AXSM": "SKIP (thesis 2026-04-13, 2 days old, md5 unchanged; WebSearch kill-sweep confirmed no material new events \u2014 Apr 8 Q1 earnings announcement and Apr 1 balipodect acquisition both known / non-thesis-material; T-15 intensive window clean per SESSION_STATE S59)",
+        "VERA": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "VRDN": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "AVNS": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "GSAT": "SKIP (thesis 2026-04-14, 1 day old, md5 unchanged)",
+        "TVTX": "SKIP (delivered/catalyst resolved)",
+        "RPAY": "PATCH v1 \u2192 v2 (WebSearch surfaced Veradace Partners 8.4% + Apr 9 anti-KUBRA letter not in candidate .md or v1 thesis; per Phase 2 rule (d) material new finding; archived v1 to archive/, patched v1 docx in place with Veradace across 10 document locations, reconverted to PDF)"
+      },
+      "produced_theses": [
+        "RPAY_v2"
+      ],
+      "web_research_performed": [
+        {
+          "ticker": "AXSM",
+          "queries_run": 2,
+          "verdict": "No material new events 2026-04-13 to 2026-04-15. Q1 earnings May 4 (Apr 8 announcement), balipodect licensing Apr 1 known. Thesis intact."
+        },
+        {
+          "ticker": "RPAY",
+          "queries_run": 4,
+          "categories_covered": [
+            "poison-pill/Forager context",
+            "Veradace letter",
+            "KUBRA deal announcement",
+            "Veradace profile"
+          ],
+          "verdict": "STRENGTHENS \u2014 Veradace Partners 8.4% stake + Apr 9 letter + Repay Apr 9 hardened response = two-axis governance pressure. Validated via primary sources (Business Wire, SEC Form ADV for Veradace, stocktitan filings). ATG/Empery conflation caught and rejected."
+        }
+      ],
+      "housekeeping": [
+        "Archived RPAY v1 thesis (docx + pdf) to archive/2026-04-15_pre_hub_migration/investment_tool_archive/2026-04-15_RPAY_superseded_v1/ per never-delete rule",
+        "No LibreOffice tmp artifacts present in pdf/ after conversion"
+      ],
+      "notes": "Primary action this run: RPAY v2 thesis produced after WebSearch validation layer surfaced the Veradace Partners 8.4% public letter opposing KUBRA (2026-04-09). Surgical patch of v1 docx with 10 document-location updates. v2 word count 5735. PDF 283,898 bytes."
+    },
+    {
+      "run_at_utc": "2026-04-15T10:45:00Z",
+      "date_local": "2026-04-15",
+      "decision_per_ticker": {
+        "AXSM": "SKIP (thesis 2026-04-13, md5 MATCH, kill-sweep CLEAR, T-10 biz days to PDUFA)",
+        "VERA": "SKIP (thesis 2026-04-14, md5 MATCH, no new material events)",
+        "VRDN": "SKIP (thesis 2026-04-14, md5 MATCH, REVEAL-1 already in thesis)",
+        "AVNS": "SKIP (thesis 2026-04-14, md5 MATCH, Apr 14 DEFA14A routine)",
+        "GSAT": "SKIP (thesis 2026-04-14, md5 MATCH)",
+        "TVTX": "SKIP (delivered)",
+        "RPAY": "SKIP bookkeeping-only (v2 thesis 4 hours old; source md5 CHANGED 5282c696->460c58f8 but forensic diff confirms monitoring-log-only changes; regenerating from current candidate would REGRESS thesis)"
+      },
+      "produced_theses": [],
+      "web_research_performed": [
+        {
+          "ticker": "RPAY",
+          "queries_run": 6,
+          "verdict": "VERIFIED v2 thesis content (Veradace 8.4%, Apr 9 letter, KUBRA $372M deal) against primary sources. Candidate-file S60 'Veradace UNVERIFIED' conclusion is INCORRECT."
+        },
+        {
+          "ticker": "AXSM/VERA/VRDN/AVNS/GSAT",
+          "queries_run": 5,
+          "verdict": "All theses INTACT"
+        }
+      ],
+      "housekeeping": [
+        "Repaired index.json from pre-existing corruption (truncated mid-string at byte 22219 from 06:45Z run); backed up corrupted copy to archive/2026-04-15_pre_hub_migration/investment_tool_archive/2026-04-15_index_json_corrupted_backup/",
+        "Updated RPAY source_md5 5282c696->460c58f8 with hash_change_reason",
+        "Run log written to archive/2026-04-15_pre_hub_migration/working/investment_tool/thesis_run_2026-04-15_1045.log"
+      ],
+      "flagged_discrepancies": [
+        {
+          "candidate_file": "investment_discovery_system/candidates/RPAY_Forager_ActivistPoisonPill.md",
+          "entry": "Update Log S60 (2026-04-15)",
+          "issue": "Claims Veradace-on-RPAY UNVERIFIED; contradicts v2 thesis and primary sources",
+          "resolution": "v2 thesis content verified via Business Wire, Yahoo Finance, Morningstar, StockTitan. Candidate file incorrect. Cannot modify (read-only constraint).",
+          "impact_on_this_run": "None"
+        }
+      ],
+      "notes": "Zero regenerations this run. Resolved RPAY candidate-file vs v2-thesis conflict via primary-source verification. Fixed pre-existing index.json corruption from 06:45Z run."
+    }
+  ],
+  "_migration_note": {
+    "migrated_at": "2026-04-15",
+    "from": "Investment tool/reporting_layer/investment_theses/index.json",
+    "to": "Reporting Hub/investment_theses/index.json",
+    "schema_upgrade": "1.0 -> 2.0 (added source_tool per entry; repathed docx_path/pdf_path/v1_archive_path)"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "ticker_local": "SLX",
+  "mic": "XASX",
+  "figi": "BBG000C21HV8",
+  "issuer_figi": "BBG000C21HG5",
+  "name": "SILEX SYSTEMS LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

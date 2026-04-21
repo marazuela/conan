@@ -1,0 +1,68 @@
+[
+  {
+    "ticker": "CACI",
+    "isin": null,
+    "company_name": "CACI, INC. - FEDERAL",
+    "market_cap_mm": 12438.9,
+    "signal_type": "contract_very_large_award",
+    "signal_category": "government_contract",
+    "strength_estimate": 4,
+    "source_url": "https://www.usaspending.gov/award/CONT_AWD_47QFRA19F0011_4732_GS00Q09BGD0020_4735",
+    "source_date": "2019-05-08",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "recipient_name": "CACI, INC. - FEDERAL",
+      "award_amount": 708253079.87,
+      "awarding_agency": "General Services Administration",
+      "description": "DYNAMIC AND EVOLVING FEDERAL ENTERPRISE NETWORK DEFENSE GROUP A DEFEND A  OPTION EXERCISE AND TRANSFER FROM PIID 47QFCA18F0050",
+      "start_date": "2019-05-08",
+      "award_type": null,
+      "award_id": "47QFRA19F0011",
+      "matched_contractor": "caci"
+    }
+  },
+  {
+    "ticker": "GD",
+    "isin": null,
+    "company_name": "GENERAL DYNAMICS INFORMATION TECHNOLOGY, INC.",
+    "market_cap_mm": 93143.9,
+    "signal_type": "contract_very_large_award",
+    "signal_category": "government_contract",
+    "strength_estimate": 4,
+    "source_url": "https://www.usaspending.gov/award/CONT_AWD_47QFCA22F0018_4732_47QTCK18D0003_4732",
+    "source_date": "2022-04-04",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "recipient_name": "GENERAL DYNAMICS INFORMATION TECHNOLOGY, INC.",
+      "award_amount": 393859426.0,
+      "awarding_agency": "General Services Administration",
+      "description": "MANAGED APPLICATION, INFRASTRUCTURE, NETWORKING, ENTERPRISE, AND SECURITY SERVICES (MAINES) IN SUPPORT OF THE ENVIRONMENTAL PROTECTION AGENCY (EPA)",
+      "start_date": "2022-04-04",
+      "award_type": null,
+      "award_id": "47QFCA22F0018",
+      "matched_contractor": "general dynamics"
+    }
+  },
+  {
+    "ticker": "SAIC",
+    "isin": null,
+    "company_name": "SCIENCE APPLICATIONS INTERNATIONAL CORPORATION",
+    "market_cap_mm": 4288.5,
+    "signal_type": "contract_large_award",
+    "signal_category": "government_contract",
+    "strength_estimate": 3,
+    "source_url": "https://www.usaspending.gov/award/CONT_AWD_47QFPA22F0028_4732_GS00Q14OADU616_4732",
+    "source_date": "2022-05-16",
+    "scan_date": "2026-04-09",
+    "raw_data": {
+      "recipient_name": "SCIENCE APPLICATIONS INTERNATIONAL CORPORATION",
+      "award_amount": 229949333.06,
+      "awarding_agency": "General Services Administration",
+      "description": "PNT SEI FOLLOW ON",
+      "start_date": "2022-05-16",
+      "award_type": null,
+      "award_id": "47QFPA22F0028",
+      "matched_contractor": "science applications"
+    }
+  }
+]

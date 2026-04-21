@@ -1,0 +1,11 @@
+{
+  "ticker_local": "TWR",
+  "mic": "XASX",
+  "figi": "BBG000DC9BJ4",
+  "issuer_figi": "BBG000DC99V5",
+  "name": "TOWER LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "ticker": "LDOS",
+    "isin": null,
+    "company_name": "PERATON INC.",
+    "market_cap_mm": 19738.7,
+    "signal_type": "contract_award",
+    "signal_category": "government_contract",
+    "strength_estimate": 2,
+    "source_url": "https://www.usaspending.gov/award/CONT_AWD_693KA826F00055_6920_693KA726D00003_6920",
+    "source_date": "2026-01-09",
+    "scan_date": "2026-04-15",
+    "raw_data": {
+      "recipient_name": "PERATON INC.",
+      "award_amount": 28100336.0,
+      "awarding_agency": "Department of Transportation",
+      "description": "THIS DELIVERY ORDER IS FOR THE RADIO- ACLS NEEDS PACKAGE. ALL OTHER TERMS AND CONDITIONS OF THE CONTRACT REMAIN UNCHANGED AND IN FULL EFFECT.",
+      "start_date": "2026-01-09",
+      "award_type": null,
+      "award_id": "693KA826F00055",
+      "matched_contractor": "peraton"
+    }
+  }
+]

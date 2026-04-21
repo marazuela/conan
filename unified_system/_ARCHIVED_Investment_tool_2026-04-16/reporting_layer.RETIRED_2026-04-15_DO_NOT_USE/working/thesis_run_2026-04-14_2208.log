@@ -1,0 +1,85 @@
+Thesis Pipeline Run Log
+=======================
+
+Run timestamp (UTC):   2026-04-14 22:07
+Run date (local):      2026-04-15
+Task file:             uploads/SKILL.md (investment-tool-deep-dives scheduled task)
+Operator:              autonomous scheduled session
+Run version:           thesis-v1
+
+Phase 1 — Setup
+---------------
+- Verified workspace paths: /sessions/eloquent-nifty-mccarthy/mnt/Investment tool/
+- Verified canonical template present: reporting_layer/investment_theses/docx/AXSM_Investment_Thesis_2026-04-13.docx
+- python-docx / libreoffice usage not needed this run (no regeneration triggered).
+
+Phase 2 — Candidate triage
+--------------------------
+Sources scanned (READ-ONLY):
+  investment_discovery_system/candidates/*.md (top-level only; delivered/ and archive/ excluded)
+  investment_discovery_system/SESSION_STATE.md
+  reporting_layer/investment_theses/index.json
+
+Current on-disk candidate source MD5s:
+  AVNS_merger_arb_AIP_2026-04-14.md        914e16706f0c4b8ccfc5b8f29772baa1
+  AXSM_ADA_PDUFA.md                        16bbd135fe4181508845d9ffec08038f
+  GSAT_merger_arb_AMZN_2026-04-14.md       b13658ffdb50287e2a1f653b0f4c4428
+  VERA_IgAN_PDUFA.md                       d5d5fe25520a2a766337de464083e141
+  VRDN_veligrotug_PDUFA.md                 21956cd6b094c88405cf8b7e8ec26fdf
+  TVTX_FSGS_PDUFA.md                       (delivered; in index as delivered_closed)
+
+All five active candidate source MD5s match the MD5s recorded in index.json. No source has been modified since the last thesis was produced.
+
+Regeneration decision matrix (Phase 2 rules a/b/c/d):
+  Ticker | Last thesis date | Age (days) | MD5 changed | SESSION_STATE material trigger | Decision
+  AXSM   | 2026-04-13       | 2          | No          | No (CLEAR at T-16; T-14 window begins Apr 16) | SKIP
+  VERA   | 2026-04-14       | 1          | No          | No (CLEAR at T-84; routine consolidation)     | SKIP
+  VRDN   | 2026-04-14       | 1          | No          | No (watchlist; no change)                     | SKIP
+  AVNS   | 2026-04-14       | 1          | No          | No (first-day spread stable 1.3%)             | SKIP
+  GSAT   | 2026-04-14       | 1          | No          | No (routine AMZN-price tracking)              | SKIP
+  TVTX   | n/a (delivered)  | n/a        | n/a         | Catalyst resolved 2026-01-13                  | SKIP
+
+SESSION_STATE last updated 2026-04-14 22:01 UTC by maintenance run. Top-level findings reviewed:
+  - S56 discovered AVNS + GSAT deals (both already converted into theses on 2026-04-14).
+  - TVTX Apr 14 gap resolved (already delivered-closed).
+  - AXSM T-14 intensive window activates ~2026-04-16 — noted but not a material new finding today.
+  - File-truncation bug on tools/convergence_engine.py — discovery-system hygiene, not thesis-relevant.
+None of these constitute a material new finding under Phase 2(d) that would require thesis regeneration today.
+
+Phase 3 — Per-candidate thesis production
+------------------------------------------
+None triggered. No theses produced this run.
+
+Phase 4 — docx→pdf conversion
+-----------------------------
+Not executed (no new docx produced).
+
+Phase 5 — Index + housekeeping
+------------------------------
+- index.json updated: last_run bumped to 2026-04-14T22:07:54Z; run_history entry appended with per-ticker decisions and housekeeping notes.
+- Existing entries for AXSM, VERA, VRDN, AVNS, GSAT, TVTX preserved unchanged.
+- Housekeeping: 6 stray LibreOffice conversion artifacts (lu*.tmp, PDF v1.7 leftovers from prior runs on 2026-04-13 and 2026-04-14) were cluttering reporting_layer/investment_theses/pdf/. Moved (not deleted) to reporting_layer/archive/2026-04-15_libreoffice_tmp_cleanup/ per the never-delete rule. The pdf/ directory now contains only the five canonical thesis PDFs.
+
+Phase 6 — Verify
+----------------
+Current canonical PDF sizes (all > 30KB threshold):
+  AVNS_Investment_Thesis_2026-04-14.pdf  216,238 bytes  OK
+  AXSM_Investment_Thesis_2026-04-13.pdf  226,267 bytes  OK
+  GSAT_Investment_Thesis_2026-04-14.pdf  241,144 bytes  OK
+  VERA_Investment_Thesis_2026-04-14.pdf  296,325 bytes  OK
+  VRDN_Investment_Thesis_2026-04-14.pdf  305,665 bytes  OK
+Corresponding .docx files present for each.
+index.json parses as valid JSON (confirmed by Python reload-and-dump during update).
+
+Outcome
+-------
+Zero new theses produced. Zero regenerations required. All active-candidate theses and the watchlist theses are within the 7-day freshness window with unchanged source hashes and no SESSION_STATE material triggers. The next natural regeneration trigger is AXSM's T-14 intensive window activating 2026-04-16 — the next operational scheduled run will re-triage then, and if SESSION_STATE surfaces any material AXSM finding (8-K, PT revisions, adverse news, label scope signals) the thesis will be refreshed on the next cycle.
+
+No blockers. No failed conversions. No partial files.
+
+Constraint compliance
+---------------------
+- No writes to investment_discovery_system/ (read-only throughout).
+- All writes confined to reporting_layer/ (index.json update, archive/ move, working/ log).
+- No deletions (stray tmp files moved to dated archive folder).
+

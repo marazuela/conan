@@ -1,0 +1,11 @@
+{
+  "ticker_local": "PDI",
+  "mic": "XASX",
+  "figi": "BBG0017X3YN4",
+  "issuer_figi": "BBG0017X3YM5",
+  "name": "PREDICTIVE DISCOVERY LTD",
+  "security_type": "Common Stock",
+  "exchange_code": "AT",
+  "resolved": true,
+  "error": null
+}

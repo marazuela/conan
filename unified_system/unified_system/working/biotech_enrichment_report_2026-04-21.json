@@ -1,0 +1,121 @@
+{
+  "generated_at": "2026-04-21T14:16:29.392654+00:00",
+  "framework": "biotech_enricher v1",
+  "online": false,
+  "total_biotech_signals": 115,
+  "enriched": 115,
+  "by_color": {
+    "GREEN": 23,
+    "YELLOW": 78,
+    "ORANGE": 14,
+    "RED": 0
+  },
+  "tier_histogram": {
+    "endpoint": {
+      "1": 0,
+      "2": 14,
+      "3": 38,
+      "4": 56,
+      "5": 7
+    },
+    "sponsor": {
+      "1": 0,
+      "2": 0,
+      "3": 21,
+      "4": 43,
+      "5": 51
+    }
+  },
+  "top_green_signals": [
+    {
+      "signal_id": "8ba836bec2b9aadd50f5851562619631",
+      "ticker": null,
+      "nct_id": "NCT05021835",
+      "sponsor": "Novo Nordisk A/S",
+      "indication": "nephrology_ckd",
+      "score": 88,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "c7bfdd92fbf233fc23f7930cdd47f4ab",
+      "ticker": null,
+      "nct_id": "NCT04770896",
+      "sponsor": "Hoffmann-La Roche",
+      "indication": "oncology_solid_tumor",
+      "score": 88,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "97cc3fea062e72402919342972d46a29",
+      "ticker": null,
+      "nct_id": "NCT03682068",
+      "sponsor": "AstraZeneca",
+      "indication": "oncology_solid_tumor",
+      "score": 88,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "d0922e1357a58faf9b15e8f94361bd12",
+      "ticker": null,
+      "nct_id": "NCT04039607",
+      "sponsor": "Bristol-Myers Squibb",
+      "indication": "oncology_solid_tumor",
+      "score": 88,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "0feba6e4ac61382f6597e34af618b566",
+      "ticker": null,
+      "nct_id": "NCT05568095",
+      "sponsor": "Arcus Biosciences, Inc.",
+      "indication": "oncology_solid_tumor",
+      "score": 81,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "cc61859ccd90c62ef1a64d30c4b87986",
+      "ticker": null,
+      "nct_id": "NCT05144854",
+      "sponsor": "Ono Pharmaceutical Co., Ltd.",
+      "indication": "oncology_solid_tumor",
+      "score": 81,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "c5de00a6e98d515af01c75d4e55c881e",
+      "ticker": null,
+      "nct_id": "NCT04550260",
+      "sponsor": "AstraZeneca",
+      "indication": "oncology_solid_tumor",
+      "score": 78,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "0835c2ceb41cbee0b754311bd616bc48",
+      "ticker": null,
+      "nct_id": "NCT03847428",
+      "sponsor": "AstraZeneca",
+      "indication": "oncology_solid_tumor",
+      "score": 78,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "53c750a6d3b313ea9d40ff360b024357",
+      "ticker": null,
+      "nct_id": "NCT05261399",
+      "sponsor": "AstraZeneca",
+      "indication": "oncology_solid_tumor",
+      "score": 78,
+      "color": "GREEN"
+    },
+    {
+      "signal_id": "5c37a29ce5121d3bec2d293327ca8237",
+      "ticker": null,
+      "nct_id": "NCT05048797",
+      "sponsor": "AstraZeneca",
+      "indication": "oncology_solid_tumor",
+      "score": 78,
+      "color": "GREEN"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+02:05:52 [run_scanner] INFO: Running congressional: Congressional trading via Capitol Trades
+02:05:53 [congressional_trading] INFO: Page 1: 12 rows, 0 total trades so far
+02:05:54 [congressional_trading] INFO: Page 2: 12 rows, 0 total trades so far
+02:05:55 [congressional_trading] INFO: Page 3: 12 rows, 0 total trades so far
+02:05:56 [congressional_trading] INFO: Page 4: 12 rows, 0 total trades so far
+02:05:58 [congressional_trading] INFO: Page 5: 12 rows, 0 total trades so far
+02:05:59 [congressional_trading] INFO: Page 6: 12 rows, 9 total trades so far
+02:06:00 [congressional_trading] INFO: Page 7: 12 rows, 21 total trades so far
+02:06:02 [congressional_trading] INFO: Page 8: 12 rows, 32 total trades so far
+02:06:03 [congressional_trading] INFO: Page 9: 12 rows, 44 total trades so far
+02:06:04 [congressional_trading] INFO: Page 10: 12 rows, 56 total trades so far
+02:06:06 [congressional_trading] INFO: Page 11: 12 rows, 68 total trades so far
+02:06:07 [congressional_trading] INFO: Page 12: 12 rows, 80 total trades so far
+02:06:08 [congressional_trading] INFO: Page 13: 12 rows, 92 total trades so far
+02:06:10 [congressional_trading] INFO: Page 14: 12 rows, 104 total trades so far
+02:06:11 [congressional_trading] INFO: Page 15: 12 rows, 116 total trades so far
+02:06:12 [congressional_trading] INFO: Page 16: 12 rows, 128 total trades so far
+02:06:14 [congressional_trading] INFO: Page 17: 12 rows, 140 total trades so far
+02:06:15 [congressional_trading] INFO: Page 18: 12 rows, 152 total trades so far
+02:06:16 [congressional_trading] INFO: Page 19: 12 rows, 164 total trades so far
+02:06:18 [congressional_trading] INFO: Page 20: 12 rows, 175 total trades so far
+02:06:19 [congressional_trading] INFO: Page 21: 12 rows, 187 total trades so far
+02:06:21 [congressional_trading] INFO: Page 22: 12 rows, 199 total trades so far
+02:06:22 [congressional_trading] INFO: Page 23: 12 rows, 211 total trades so far
+02:06:24 [congressional_trading] INFO: Page 24: 12 rows, 220 total trades so far
+02:06:25 [congressional_trading] INFO: Page 25: 12 rows, 232 total trades so far
+02:06:27 [congressional_trading] INFO: Page 26: 12 rows, 244 total trades so far
+02:06:29 [congressional_trading] INFO: Page 27: 12 rows, 256 total trades so far
+02:06:30 [congressional_trading] INFO: Page 28: 12 rows, 268 total trades so far
+02:06:32 [congressional_trading] INFO: Page 29: 12 rows, 279 total trades so far
+02:06:33 [congressional_trading] INFO: Page 30: 12 rows, 291 total trades so far
+02:06:33 [congressional_trading] INFO: Fetched 291 trades from Capitol Trades (30 pages)
+02:06:33 [congressional_trading] INFO: After date filter (45d): 291 trades
+02:06:37 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: LCCCL"}}}
+02:06:43 [yfinance] ERROR: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: LCACN"}}}
+02:06:47 [congressional_trading] INFO: Congressional scan complete: 24 signals from 291 trades
+02:06:47 [congressional_trading] INFO: Saved 24 signals to /sessions/zealous-sharp-albattani/mnt/Investment tool/investment_discovery_system/signals/congressional_20260412_020647.json
+02:06:47 [run_scanner] INFO:   congressional: 24 signals in 55.5s
+OK: congressional — 24 signals in 55.5s

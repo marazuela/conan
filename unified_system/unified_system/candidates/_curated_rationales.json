@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "purpose": "Hand-curated per-candidate rationales rendered into executive_summary.pdf.",
+    "rule": "Each entry must explain the case to an intelligent non-specialist. Required fields: one_liner (MUST end with '→ Potential outcomes: ...' listing the plausible resolutions), hypothesis (one sentence — the bet), thesis (why we believe it, with plain-English context), expected_outcome (what happens if we're right), price_targets (dict: reference_price, upside_base, upside_best, downside), time_sensitivity (urgency label + concrete window), kill_watch (what would invalidate), catalyst_date_iso.",
+    "last_updated": "2026-04-17",
+    "schema_version": "2.2",
+    "philosophy": "Pre-edge only. A candidate surfaces ONLY if the market does not yet fully price the catalyst. Once an M&A deal is signed, a PDUFA resolves, or an activist goes public with a priced offer, the edge is gone and the candidate moves to archive. We identify opportunities in advance, not after news prints."
+  },
+  "RPAY": {
+    "one_liner": "Forager Capital published a $4.80/share all-cash take-out offer for Repay on April 17, 2026; stock at $3.18 implies a 51% spread — the market is pricing meaningful rejection risk. → Potential outcomes: board engages / sweetened bid emerges (+30-70%), strategic buyer counter-bids (+55-120%), board rejects and stock drifts (-5-10%), or activist retreats after fight (-10-20%).",
+    "hypothesis": "Forager's public $4.80/share offer forces Repay's board into a formal response window (SEC rules: ~10 business days). Either (a) board engages, strategic review starts, stock converges toward $4-5, or (b) a strategic buyer emerges given the public auction dynamic now in motion.",
+    "thesis": "The pre-activist pre-edge window is now closed — Forager's offer was published this morning (April 17). What remains is the BOARD-RESPONSE edge: the 51% spread ($3.18 vs $4.80) tells us the market is skeptical the board will accept. Small-cap payments processors with a public take-out offer + poison pill + 11.9% activist + shareholder lawsuits (ATG) historically converge OR trigger counter-bids within 30-60 days. Note: this is less pre-edge than the other active names; kept as active because the specific OUTCOME (accept/reject/counter) is still unpriced.",
+    "expected_outcome": "Most likely (50%): board engages, sweetened offer at $5.00-5.25 or strategic review, stock +30-70% to $4.00-5.25. Next (20%): strategic buyer counter-bids at $5.50-7.00, stock +73-120%. Base reject (20%): board rejects without counter, stock drifts to $2.85-3.00 (-5 to -10%). Worst (10%): activist retreats, stock reverts toward pre-activity levels of $2.60-2.80 (-12 to -18%).",
+    "price_targets": {
+      "reference_price": "$3.18 (2026-04-17)",
+      "upside_base": "$4.00-5.25 (+26% to +65%) — board engages / sweetened offer",
+      "upside_best": "$5.50-7.00 (+73% to +120%) — strategic counter-bid",
+      "downside": "$2.60-3.00 (-6% to -18%) — board rejects, activist retreats"
+    },
+    "time_sensitivity": "HIGH — Board response window 10 business days per SEC custom (roughly end of April). Half-life of the edge is ~30 days; once the board publicly responds, most of the move prints. Note: less pre-edge than AXSM/VERA/VRDN — offer is public, just the OUTCOME is unpriced.",
+    "kill_watch": "Board rejects publicly with no strategic review announced. Forager files 13D/A reducing stake. KUBRA acquisition closes before board responds (dilutes activist leverage). Second activist (ATG, Veradace) drops lawsuit.",
+    "catalyst_date_iso": "2026-05-01",
+    "_staleness_note": "KEPT DESPITE BEING BORDERLINE: Forager's $4.80 offer is public information as of 2026-04-17 — this is no longer a pre-edge setup. What remains unpriced is the board's response path (engage vs. reject vs. counter-bid). Retained because the 51% spread signals the market hasn't priced any specific outcome; residual information edge exists. If the board rejects cleanly in the next 10 business days without counter-bid, archive this name."
+  },
+  "VRDN": {
+    "one_liner": "Viridian's stock crashed 51% on issues unrelated to the drug being reviewed on June 30 (Thyroid Eye Disease). → Potential outcomes: FDA approval with broad label (+36-105%), approval with narrow label (+20-40%), or Complete Response Letter (-45-66%).",
+    "hypothesis": "The FDA approves veligrotug for Thyroid Eye Disease on June 30, 2026, and the stock re-rates from $14.66 toward $20-30 (+36% to +105%) as the dislocation-driven selloff reverses.",
+    "thesis": "Thyroid Eye Disease (TED) is a disfiguring autoimmune condition where eye muscles swell and bulge. Only one drug is approved (Horizon/Amgen Tepezza, 8 infusions). Viridian's veligrotug has THREE advantages: (a) only 5 infusions vs. 8 — fewer visits, better compliance; (b) two positive Phase 3 trials covering BOTH active AND chronic TED (Tepezza is used mostly in active); (c) better hearing-loss safety (5.5% placebo-adjusted vs. ~10% — hearing loss is the most feared side effect). The BLA has Priority Review AND Breakthrough Therapy. WHY the crash from $34 to $14.66: (1) Viridian's DIFFERENT drug — elegrobart — reported Phase 3 data March 30 that disappointed investors, 27% one-day drop; (2) Amgen's positive Phase 3 for subcutaneous Tepezza in early April raised competitive fears. CRITICAL: neither affects veligrotug's approval probability. Stock now below even the most bearish analyst target ($20).",
+    "expected_outcome": "Approval June 30 (high probability given data package): stock rebounds toward low-end sellside targets. Best case (broad label covering active + chronic, clean safety): mid-$20s. Ceiling $30-34 only if elegrobart REVEAL-2 also positive. Worst case (CRL): $5-8.",
+    "price_targets": {
+      "reference_price": "$18.84 (2026-04-05)",
+      "upside_base": "$20-22 (+36% to +50%) — approval with standard label",
+      "upside_best": "$28-30 (+91% to +105%) — approval + elegrobart REVEAL-2 positive",
+      "downside": "$5-8 (-45% to -66%) — CRL scenario"
+    },
+    "time_sensitivity": "HIGH — PDUFA June 30, 2026 (74 days). Enter now — 10+ weeks of runway allows accumulation without paying event-week premium. Elegrobart REVEAL-2 readout in Q2 provides secondary catalyst.",
+    "kill_watch": "FDA information request signaling 'Major Amendment' (pushes PDUFA 3 months). Hearing-loss safety signal in post-market Tepezza updates. Elegrobart REVEAL-2 misses badly + management signals dilution.",
+    "catalyst_date_iso": "2026-06-30"
+  },
+  "AXSM": {
+    "one_liner": "FDA decision April 30 for the first-ever drug approved specifically for Alzheimer's agitation — a $5B+ unmet need. → Potential outcomes: clean approval with broad label (+15-30%, sustained re-rating), narrow label approval (+5-10%), or Complete Response Letter (-21-29%).",
+    "hypothesis": "The FDA approves AXS-05 (dextromethorphan/bupropion) for Alzheimer's Disease Agitation on April 30, 2026, and AXSM re-rates as the market recognizes a new multi-billion dollar franchise into an unmet need.",
+    "thesis": "Alzheimer's Disease Agitation (ADA) is one of the most distressing symptoms of Alzheimer's — aggression, restlessness, shouting — and currently NO FDA-approved drug exists for it (physicians use antipsychotics off-label, which carry black-box warnings in the elderly). AXS-05 is already approved for major depression (as Auvelity) and now seeks the ADA indication. Phase 3 ACCORD met its primary endpoint; the label, if granted, unlocks access to 30%+ of Alzheimer's patients. AXSM is a mid-cap specialty pharma with commercial infrastructure in place from Auvelity. Even modest ADA penetration translates to $1-2B in annual sales within 3-4 years. The market has partially priced approval but is leaving most launch value on the table because biotech investors discount pre-launch catalysts until proof-of-commercial-traction arrives.",
+    "expected_outcome": "Approval + clean label (no black-box, broad population): +15-30% on the day, sustained re-rating. Approval narrow label: +5-10%. CRL: -20 to -35%.",
+    "price_targets": {
+      "reference_price": "$184.19 (2026-04-16 close)",
+      "upside_base": "$215-235 (+17% to +28%) — clean approval, standard label",
+      "upside_best": "$260-300 (+41% to +63%) — broad label + analyst model upgrades post-launch",
+      "downside": "$130-145 (-21% to -29%) — Complete Response Letter"
+    },
+    "time_sensitivity": "HIGH — PDUFA April 30 (13 days). Position should already be built or completed in next 3-5 trading days. After day 10 before PDUFA, IV premium prohibitive for new entries.",
+    "kill_watch": "FDA Major Amendment delay (PDUFA pushed 3 months). Negative AdCom surprise (note: no AdCom currently scheduled, mildly positive). New safety signal in post-market Auvelity.",
+    "catalyst_date_iso": "2026-04-30"
+  },
+  "VERA": {
+    "one_liner": "Small-cap biotech with the best Phase 3 data in IgA Nephropathy, heading into FDA decision July 7. → Potential outcomes: approval + broadest label (+78-113%), approval + competitive label (+37-61%), or Complete Response Letter (-48-57%).",
+    "hypothesis": "The FDA approves atacicept for IgA Nephropathy on July 7, 2026, and the stock re-rates 40-60% as the market recognizes atacicept is not a me-too entry — it has the strongest efficacy in class.",
+    "thesis": "IgA Nephropathy (IgAN) is an autoimmune kidney disease where mis-folded antibodies clog the kidney filter. The market already has approved drugs (Travere's FILSPARI, Calliditas's TARPEYO), but atacicept targets the upstream B-cell driver via BAFF/APRIL inhibition. Phase 3 (ORIGIN-3) showed a 46% proteinuria reduction at 36 weeks — the best in class. Priority Review granted, NO AdCom required — both positive. WHY the stock is beaten down: small-cap biotechs with a single product and pending PDUFA routinely suffer 'approval anxiety' dislocations — investors rotate out into the event and back in on approval. The current price implies high-30s-percent probability of approval; the actual probability based on the data package is 75-85%.",
+    "expected_outcome": "Approval + clean label: +50-80% over the following month as analysts update models (atacicept would leapfrog the class). Approval narrow label (stage-limited): +25-40%. CRL: -50 to -65%.",
+    "price_targets": {
+      "reference_price": "$43.72 (2026-04-15)",
+      "upside_base": "$58-68 (+37% to +61%) — approval with competitive label",
+      "upside_best": "$75-90 (+78% to +113%) — approval with broadest label + acquisition interest",
+      "downside": "$18-22 (-48% to -57%) — Complete Response Letter"
+    },
+    "time_sensitivity": "HIGH — PDUFA July 7, 2026 (81 days). Enter now or over next 2-3 weeks — after mid-May the event-week premium compresses entry economics. No AdCom scheduled (positive); watch for last-minute AdCom announcement.",
+    "kill_watch": "FDA announces AdCom (implies regulatory uncertainty). Major Amendment extension pushes PDUFA to October. Novartis iptacopan or Chinook atrasentan report unexpectedly strong Phase 3.",
+    "catalyst_date_iso": "2026-07-07"
+  },
+  "RGR": {
+    "one_liner": "Beretta Holding has filed a proxy fight AND proposed a $44.80/share partial tender offer (+20% premium) for 20.05% of Sturm Ruger — AGM May 27, 2026; the poison-pill waiver vote is the binary. → Potential outcomes: board waives pill + tender executes (+10-20%), negotiated settlement with board seats (+8-15%), proxy fight won by Beretta (+20-35%), or Beretta loses and stays as 9.95% holder (-5-10%).",
+    "hypothesis": "At or before Ruger's May 27, 2026 AGM, either (a) the board waives the October 2025 poison pill to let Beretta's $44.80 tender proceed (converging stock toward $44.80 + strategic premium), or (b) Beretta's 4-person slate succeeds, triggering pill removal + tender — in both cases stock re-rates significantly from $41.98.",
+    "thesis": "A proxy fight = a shareholder nominates their own board candidates seeking to replace incumbents. Beretta Holding — the family-controlled Italian conglomerate that owns Beretta firearms, Benelli, and Sako — accumulated a ~10% stake in Sturm Ruger (RGR) and filed proxy materials to nominate their own slate. Ruger is the iconic American firearms maker. The filing signals either (a) Beretta wants consolidation in the global firearms industry, (b) Beretta sees RGR as strategically undervalued and wants operational changes, or (c) Beretta is positioning for a larger stake or acquisition. Any of these resolutions tends to be stock-positive: Beretta wins and pushes changes; RGR settles with board seats; or a strategic transaction is announced.",
+    "expected_outcome": "Most likely: Beretta + Ruger negotiate a settlement before the AM — Beretta gets 2-3 seats and governance concessions, stock +10-20%. Less likely but higher value: strategic transaction announced (+25-40%). Downside bounded: even if Beretta loses the vote, the 10% stake is a floor.",
+    "price_targets": {
+      "reference_price": "$41.98 (2026-04-17 intraday)",
+      "upside_base": "$46-50 (+10% to +20%) — negotiated settlement with board seats",
+      "upside_best": "$52-58 (+25% to +40%) — strategic transaction / consolidation",
+      "downside": "$38-40 (-5% to -9%) — Beretta loses vote but stays as holder"
+    },
+    "time_sensitivity": "MEDIUM-HIGH — AM date not yet fixed (placeholder in filings). Historically late April to early May; contest filing pattern suggests late May or June 2026. Ruger's DEF 14A (company's definitive proxy) will set the date — expected within 2-4 weeks. Enter now while volume is still low; window narrows once the date is announced.",
+    "kill_watch": "Beretta withdraws proxy materials without a settlement. ISS + Glass Lewis both recommend AGAINST Beretta's slate. Ruger adopts poison pill with exclusionary trigger. Firearms-sector liability verdict shocks RGR fundamentals.",
+    "catalyst_date_iso": "2026-05-27"
+  },
+  "_archived": {
+    "TVTX": {
+      "archived_date": "2026-04-17",
+      "archive_reason": "DELIVERED — FDA granted full approval of FILSPARI for FSGS on April 13, 2026. Stock moved $30.70 → $41.10 (+34%) on announcement. Edge fully priced; no residual opportunity.",
+      "outcome": "WIN (if held pre-PDUFA). Post-approval stock at $41.10.",
+      "former_one_liner": "FDA decision on FILSPARI for rare kidney disease (FSGS); PDUFA April 13 already passed. → Potential outcomes: FDA approval (+20-35%), short delay then approval, 3-month major amendment (flat), or Complete Response Letter (-40-60%)."
+    },
+    "AVNS": {
+      "archived_date": "2026-04-17",
+      "archive_reason": "DELIVERED — American Industrial Partners announced $25/share cash take-private on April 14, 2026 ($1.27B EV, 72% premium). Stock spiked from ~$14.50 to ~$24.50 on announcement. Pre-edge opportunity is gone; remaining 1-2% merger-arb spread is not meaningful.",
+      "outcome": "WIN (if identified pre-announcement). MISSED — system identified AVNS only as post-announcement merger-arb, too late to capture premium.",
+      "former_one_liner": "Avanos merger arbitrage: going private at $25 cash vs. $24.66 — a 1.4% spread closable by late 2026. → Potential outcomes: deal closes at $25 (+1.4%), superior strategic bid emerges (+7-9%), or deal breaks (-19-27%, low probability).",
+      "lesson": "Takeover-candidate scanner should have flagged AVNS 60-90 days pre-deal: streamlined medtech portfolio, ~$850M mcap, stagnant stock, divested non-core, clean FCF — classic PE take-private setup."
+    },
+    "GSAT": {
+      "archived_date": "2026-04-17",
+      "archive_reason": "DELIVERED — Amazon announced all-cash acquisition at $90/share on April 14, 2026 ($11.57B). Fully priced; no residual arb given tight spread vs. regulatory timeline (FCC approval expected by end-2026 / early 2027).",
+      "outcome": "WIN (if held pre-announcement).",
+      "former_one_liner": "Amazon acquiring Globalstar — mixed cash + stock (0.3x AMZN) deal with 2-3% spread + embedded AMZN call option. → Potential outcomes: deal closes with AMZN flat (+2-5%), deal closes + AMZN rally (+10-15%), or FCC/DOJ blocks on antitrust grounds (-19-31%)."
+    },
+    "SEM": {
+      "archived_date": "2026-04-17",
+      "archive_reason": "POST-EDGE — $16.50/share WCAS + Ortenzio take-private announced March 2, 2026. Stock already at ~$15.90 (4% spread vs. deal). Merger-arb spread does not represent a meaningful unpriced edge; execution risk = reward. Not the kind of pre-edge setup this system targets.",
+      "outcome": "NEUTRAL — merger-arb only, thin spread.",
+      "former_one_liner": "Select Medical take-private by WCAS + Ortenzio family at ~$16.50 cash — low-risk LBO with ~3% spread. → Potential outcomes: deal closes as announced (+0.7%), superior strategic/PE proposal emerges (+7-10%), or state hospital regulators block the transfer (-21-33%)."
+    }
+  }
+}

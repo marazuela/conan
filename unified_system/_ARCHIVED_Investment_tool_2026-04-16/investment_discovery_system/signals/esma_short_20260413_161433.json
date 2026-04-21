@@ -1,0 +1,177 @@
+[
+  {
+    "ticker": "PPB.DE",
+    "isin": "IE00BWT6H894",
+    "company_name": "FLUTTER ENTERTAINMENT PLC",
+    "market_cap_mm": null,
+    "signal_type": "short_large_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Two Sigma Investments, LP",
+      "position_pct": 2.03,
+      "previous_position_pct": 1.92,
+      "change_pct": 0.11,
+      "position_date": "2026-04-10",
+      "isin": "IE00BWT6H894",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 1.03, \"date\": \"2026-02-25\", \"regulator\": \"FCA\"}, {\"holder\": \"Balyasny Asset Management\", \"position_pct\": 0.85, \"date\": \"2026-03-30\", \"regulator\": \"FCA\"}, {\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 1.68, \"date\": \"2026-03-23\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 2.03, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "EMG",
+    "isin": "JE00BJ1DLW90",
+    "company_name": "Man Group Ltd",
+    "market_cap_mm": null,
+    "signal_type": "short_new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Point72 Europe (London) LLP",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-10",
+      "isin": "JE00BJ1DLW90"
+    }
+  },
+  {
+    "ticker": "TRN.L",
+    "isin": "GB00BKDTK925",
+    "company_name": "Trainline PLC",
+    "market_cap_mm": 87935.8,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Citadel Advisors LLC",
+      "position_pct": 1.49,
+      "previous_position_pct": 1.49,
+      "change_pct": 0.0,
+      "position_date": "2026-04-07",
+      "isin": "GB00BKDTK925",
+      "crowded_info": "[{\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 1.49, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.52, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.72, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "TRN.L",
+    "isin": "GB00BKDTK925",
+    "company_name": "Trainline PLC",
+    "market_cap_mm": 87935.8,
+    "signal_type": "short_new_position+crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Qube Research & Technologies Limited",
+      "position_pct": 0.52,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-10",
+      "isin": "GB00BKDTK925",
+      "crowded_info": "[{\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 1.49, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.52, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.72, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "TRN.L",
+    "isin": "GB00BKDTK925",
+    "company_name": "Trainline PLC",
+    "market_cap_mm": 87935.8,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-07",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "Two Sigma Investments, LP",
+      "position_pct": 0.72,
+      "previous_position_pct": 0.72,
+      "change_pct": 0.0,
+      "position_date": "2026-04-07",
+      "isin": "GB00BKDTK925",
+      "crowded_info": "[{\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 1.49, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 0.52, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.72, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "SMWHUSD",
+    "isin": "GB00B2PDGW16",
+    "company_name": "WH SMITH PLC",
+    "market_cap_mm": null,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "FCA",
+      "holder_name": "GSA Capital Partners LLP",
+      "position_pct": 0.52,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-10",
+      "isin": "GB00B2PDGW16",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.7, \"date\": \"2026-04-01\", \"regulator\": \"FCA\"}, {\"holder\": \"Citadel Advisors LLC\", \"position_pct\": 1.22, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}, {\"holder\": \"D. E. Shaw & Co. LP\", \"position_pct\": 0.79, \"date\": \"2026-04-07\", \"regulator\": \"FCA\"}, {\"holder\": \"GLG Partners LP\", \"position_pct\": 0.66, \"date\": \"2026-04-08\", \"regulator\": \"FCA\"}, {\"holder\": \"GSA Capital Partners LLP\", \"position_pct\": 0.52, \"date\": \"2026-04-10\", \"regulator\": \"FCA\"}, {\"holder\": \"JPMorgan Asset Management (UK) Ltd\", \"position_pct\": 0.51, \"date\": \"2026-03-03\", \"regulator\": \"FCA\"}, {\"holder\": \"Marshall Wace LLP\", \"position_pct\": 1.2, \"date\": \"2026-03-25\", \"regulator\": \"FCA\"}, {\"holder\": \"Mirabella Financial Services LLP\", \"position_pct\": 0.7, \"date\": \"2026-03-20\", \"regulator\": \"FCA\"}, {\"holder\": \"Squarepoint Ops LLC\", \"position_pct\": 1.68, \"date\": \"2026-03-31\", \"regulator\": \"FCA\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.99, \"date\": \"2026-04-09\", \"regulator\": \"FCA\"}, {\"holder\": \"Walleye Capital LLC\", \"position_pct\": 0.51, \"date\": \"2026-03-23\", \"regulator\": \"FCA\"}]"
+    }
+  },
+  {
+    "ticker": "MT.PA",
+    "isin": "LU1598757687",
+    "company_name": "ArcelorMittal S.A.",
+    "market_cap_mm": null,
+    "signal_type": "short_crowded_short",
+    "signal_category": "esma_short",
+    "strength_estimate": 3,
+    "source_url": "https://www.afm.nl/en/sector/registers/meldingenregisters/netto-shortposities-actueel",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "AFM",
+      "holder_name": "AQR Capital Management, LLC",
+      "position_pct": 0.58,
+      "previous_position_pct": 0.61,
+      "change_pct": -0.03,
+      "position_date": "2026-04-10",
+      "isin": "LU1598757687",
+      "crowded_info": "[{\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.58, \"date\": \"2026-04-10\", \"regulator\": \"AFM\"}, {\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.61, \"date\": \"2026-04-01\", \"regulator\": \"AFM\"}, {\"holder\": \"AQR Capital Management, LLC\", \"position_pct\": 0.5, \"date\": \"2025-12-19\", \"regulator\": \"AFM\"}]"
+    }
+  },
+  {
+    "ticker": "SMHN.DE",
+    "isin": "DE000A1K0235",
+    "company_name": "SUSS MicroTec SE",
+    "market_cap_mm": 1107.7,
+    "signal_type": "short_crowded_short+new_position",
+    "signal_category": "esma_short",
+    "strength_estimate": 4,
+    "source_url": "https://www.bundesanzeiger.de/pub/en/nlp",
+    "source_date": "2026-04-10",
+    "scan_date": "2026-04-13",
+    "raw_data": {
+      "regulator": "BAFIN",
+      "holder_name": "Algert Global LLC",
+      "position_pct": 0.5,
+      "previous_position_pct": null,
+      "change_pct": null,
+      "position_date": "2026-04-10",
+      "isin": "DE000A1K0235",
+      "crowded_info": "[{\"holder\": \"Algert Global LLC\", \"position_pct\": 0.5, \"date\": \"2026-04-10\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Qube Research & Technologies Limited\", \"position_pct\": 1.24, \"date\": \"2026-04-10\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Two Sigma Investments, LP\", \"position_pct\": 0.79, \"date\": \"2026-04-10\", \"regulator\": \"BAFIN\"}, {\"holder\": \"JPMorgan Asset Management (UK) Ltd\", \"position_pct\": 1.77, \"date\": \"2026-03-17\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Voleon Capital Management LP\", \"position_pct\": 0.9, \"date\": \"2026-03-17\", \"regulator\": \"BAFIN\"}, {\"holder\": \"Numeric Investors LLC\", \"position_pct\": 1.1, \"date\": \"2026-03-05\", \"regulator\": \"BAFIN\"}]"
+    }
+  }
+]

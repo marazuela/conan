@@ -1,0 +1,11 @@
+{
+  "ticker_local": "HTG",
+  "mic": "XLON",
+  "figi": "BBG000BD54B2",
+  "issuer_figi": "BBG000BD53L3",
+  "name": "HUNTING PLC",
+  "security_type": "Common Stock",
+  "exchange_code": "LN",
+  "resolved": true,
+  "error": null
+}
