@@ -2,9 +2,13 @@
 Unified System Health Check (v1.0 — 2026-04-20)
 ================================================
 
-Consolidated integrity / drift / schema check. Intended to slot into the
-maintenance path so the operator learns about broken scanners, schema
-regressions, stale data, and signal-log drift without manual inspection.
+Consolidated local integrity / drift / schema check. Intended to slot into the
+maintenance path so the operator learns about local artifact regressions, schema
+drift, stale generated data, and signal-log issues without manual inspection.
+
+This tool reads the local unified_system registry and output files. It is NOT
+the live scanner fleet source of truth; Supabase-backed runtime health now
+lives behind the `scanner-health` endpoint.
 """
 
 from __future__ import annotations
@@ -52,6 +56,9 @@ REQUIRED_SCANNER_EITHER = (
 
 DRAFT_STALE_DAYS = 7
 DIR_STALE_DAYS = 30
+LOCAL_REGISTRY_NOTE = (
+    "local artifact view only — live fleet health is owned by the Supabase scanner-health endpoint"
+)
 
 
 def _now() -> datetime:
@@ -111,7 +118,9 @@ def _file_age_hours(path: Path) -> Optional[float]:
 
 
 def check_registry_coherence() -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = [
+        {"severity": "info", "family": "registry", "msg": LOCAL_REGISTRY_NOTE}
+    ]
     if not REGISTRY_PATH.exists():
         return [{"severity": "red", "family": "registry", "msg": "scanner_registry.json missing"}]
     try:

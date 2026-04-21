@@ -14,17 +14,24 @@
 //   {
 //     generated_at: ISO-8601,
 //     summary: {
-//       scanners: { total, operational, degraded, disabled, auth_required },
+//       scanners: {
+//         total, green, yellow, red,
+//         by_status,
+//         by_state_label,
+//       },
 //       open_flags: { critical, warn, info }
 //     },
 //     scanners: [
 //       {
-//         name, status, cadence, geography,
+//         name, status, cadence, geography, default_scoring_profile,
 //         timeout_soft_s, timeout_hard_s,
 //         last_run_utc, last_run_status, last_run_signals,
 //         last_probe_at, last_probe_status, last_probe_latency_ms,
 //         recent_runs: [{status, signals_emitted, started_at, completed_at, elapsed_s, error?}, ... up to 5],
-//         health: "green" | "yellow" | "red"   // derived below
+//         health, state_label, state_reason,
+//         has_running_run, running_run_count, is_stale,
+//         run_age_minutes, probe_age_minutes,
+//         latest_run_status, latest_run_started_at, latest_run_completed_at
 //       }, ...
 //     ],
 //     open_flags: [
@@ -33,6 +40,12 @@
 //   }
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import {
+  deriveScannerState,
+  type Health,
+  type OperatorFlagSnapshot,
+  type ScannerRunSnapshot,
+} from "./state.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -47,6 +60,7 @@ interface ScannerRow {
   status: string;
   cadence: string;
   geography: string | null;
+  default_scoring_profile: string;
   timeout_soft_s: number;
   timeout_hard_s: number;
   last_run_utc: string | null;
@@ -64,6 +78,12 @@ interface ScannerRunRow {
   started_at: string;
   completed_at: string | null;
   errors: Array<Record<string, unknown>>;
+}
+
+interface ScannerRunDiagnostics {
+  error: string | null;
+  warnings: string[];
+  metrics: Record<string, unknown> | null;
 }
 
 interface OperatorFlagRow {
@@ -111,7 +131,7 @@ async function build() {
   // --- 1. Fetch scanners + recent runs + open operator_flags in parallel.
   const [scannersRes, runsRes, flagsRes] = await Promise.all([
     sb.from("scanners").select(
-      "id,name,status,cadence,geography,timeout_soft_s,timeout_hard_s," +
+      "id,name,status,cadence,geography,default_scoring_profile,timeout_soft_s,timeout_hard_s," +
         "last_run_utc,last_run_status,last_run_signals," +
         "last_probe_at,last_probe_status,last_probe_latency_ms",
     ).order("name"),
@@ -154,7 +174,9 @@ async function build() {
 
   // --- 5. Build per-scanner entries with derived health color.
   const scannerOut = scanners.map((s) => {
-    const recent = (runsByScanner.get(s.id) ?? []).map((r) => ({
+    const recent = (runsByScanner.get(s.id) ?? []).map((r) => {
+      const diagnostics = extractRunDiagnostics(r.errors);
+      return {
       status: r.status,
       signals_emitted: r.signals_emitted,
       started_at: r.started_at,
@@ -162,15 +184,24 @@ async function build() {
       elapsed_s: r.completed_at
         ? Math.round((Date.parse(r.completed_at) - Date.parse(r.started_at)) / 1000)
         : null,
-      error: summarizeError(r.errors),
-    }));
+      error: diagnostics.error,
+      warnings: diagnostics.warnings,
+      metrics: diagnostics.metrics,
+    };
+    });
     const myFlags = flagsByScanner.get(s.id) ?? [];
-    const health = deriveHealth(s, recent, myFlags);
+    const derived = deriveScannerState(
+      s,
+      recent as ScannerRunSnapshot[],
+      myFlags as OperatorFlagSnapshot[],
+      new Date(),
+    );
     return {
       name: s.name,
       status: s.status,
       cadence: s.cadence,
       geography: s.geography,
+      default_scoring_profile: s.default_scoring_profile,
       timeout_soft_s: s.timeout_soft_s,
       timeout_hard_s: s.timeout_hard_s,
       last_run_utc: s.last_run_utc,
@@ -181,7 +212,9 @@ async function build() {
       last_probe_latency_ms: s.last_probe_latency_ms,
       recent_runs: recent,
       open_flag_count: myFlags.length,
-      health,
+      latest_run_metrics: recent[0]?.metrics ?? null,
+      latest_run_warnings: recent[0]?.warnings ?? [],
+      ...derived,
     };
   });
 
@@ -193,6 +226,7 @@ async function build() {
       yellow: scannerOut.filter((s) => s.health === "yellow").length,
       red: scannerOut.filter((s) => s.health === "red").length,
       by_status: summarizeBy(scannerOut, (s) => s.status),
+      by_state_label: summarizeBy(scannerOut, (s) => s.state_label),
     },
     open_flags: {
       critical: flags.filter((f) => f.severity === "critical").length,
@@ -221,45 +255,50 @@ async function build() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Health derivation (simple rule: aggregate signals, not a magic threshold)
-// ---------------------------------------------------------------------------
-
-type Health = "green" | "yellow" | "red";
-
-function deriveHealth(
-  s: ScannerRow,
-  recent: Array<{ status: string }>,
-  flags: OperatorFlagRow[],
-): Health {
-  // Critical open flag → red.
-  if (flags.some((f) => f.severity === "critical")) return "red";
-  // Scanner row explicitly disabled or errored → red.
-  if (s.status === "deprecated") return "red";
-  // Last run error or timeout → red (one-shot failure demands attention).
-  if (s.last_run_status === "error" || s.last_run_status === "timeout") return "red";
-  // auth_required + persistent → yellow (documented deferral in v2 for courtlistener/kind).
-  if (s.last_run_status === "auth_required") return "yellow";
-  // Probe drifted → yellow.
-  if (s.last_probe_status && s.last_probe_status !== "ok") return "yellow";
-  // 2+ partials in the last 5 runs → yellow (budget getting tight).
-  const partials = recent.filter((r) => r.status === "partial").length;
-  if (partials >= 2) return "yellow";
-  // Any warn flag → yellow.
-  if (flags.some((f) => f.severity === "warn")) return "yellow";
-  // No runs ever → yellow (not red — might be planned/not yet cadenced).
-  if (!s.last_run_utc) return "yellow";
-  // Last run ok and everything else clean → green.
-  return "green";
+function summarizeError(errors: Array<Record<string, unknown>> | null | undefined): string | null {
+  return extractRunDiagnostics(errors).error;
 }
 
-function summarizeError(errors: Array<Record<string, unknown>> | null | undefined): string | null {
-  if (!errors || errors.length === 0) return null;
-  const first = errors[0] as { type?: string; message?: string };
-  if (first?.message) {
-    return typeof first.type === "string" ? `${first.type}: ${first.message}` : first.message;
+function extractRunDiagnostics(
+  errors: Array<Record<string, unknown>> | null | undefined,
+): ScannerRunDiagnostics {
+  if (!errors || errors.length === 0) {
+    return { error: null, warnings: [], metrics: null };
   }
-  return JSON.stringify(first).slice(0, 200);
+  const warnings: string[] = [];
+  let metrics: Record<string, unknown> | null = null;
+  let error: string | null = null;
+
+  for (const entry of errors) {
+    if (!entry || typeof entry !== "object") continue;
+    const maybeWarnings = entry["warnings"];
+    if (Array.isArray(maybeWarnings)) {
+      warnings.push(...maybeWarnings.filter((value): value is string => typeof value === "string"));
+    }
+    const maybeMetrics = entry["metrics"];
+    if (maybeMetrics && typeof maybeMetrics === "object" && !Array.isArray(maybeMetrics)) {
+      metrics = maybeMetrics as Record<string, unknown>;
+    }
+    if (!error) {
+      const typed = entry as { type?: string; message?: string; error?: string };
+      if (typed?.message) {
+        error = typeof typed.type === "string" ? `${typed.type}: ${typed.message}` : typed.message;
+      } else if (typeof typed?.error === "string") {
+        error = typed.error;
+      }
+    }
+  }
+
+  if (!error) {
+    const firstWithError = errors.find((entry) =>
+      Boolean(entry && typeof entry === "object" && ("error" in entry || "message" in entry))
+    );
+    if (firstWithError) {
+      error = JSON.stringify(firstWithError).slice(0, 200);
+    }
+  }
+
+  return { error, warnings, metrics };
 }
 
 function summarizeBy<T>(rows: T[], key: (r: T) => string): Record<string, number> {

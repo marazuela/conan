@@ -150,12 +150,12 @@ Supabase tables `alerts`, `alert_deliveries`. Section 8 + PRD §8 event flow.
 | Resend message id | `alert_deliveries.resend_message_id` | — | Support. |
 | Email body | `alerts.email_body_storage_path` | — | Optionally preview on alert detail. |
 
-**UI v2 addition:** an `/alerts` inbox. Two tabs, because in v2 emails fire only after AI review + promotion to pre-edge — not on raw `alerts` INSERT (per the `email_alert_gating` design note, overrides the PRD §8 fan-out sketch):
+**UI v2 addition:** an `/alerts` inbox. In v2 this is an operator view, not just an email log, because raw `alerts` INSERT and candidate promotion are now independent paths:
 
-- **Dispatched** — `alert_deliveries` rows, last 50 by `dispatched_at DESC`, with `status`, signal deep-link, and the resend message id.
-- **Pending AI review** — signals at Immediate band that are waiting on a Claude-drafted thesis promotion (no `alerts` row yet). Column "Promotion state" reflects thesis_writer queue status so Pedro can see the bottleneck when the 15-drafts-per-day cap is reached. Cites `candidates/thesis_writer` routine (Immediate band, 15/day, Claude app routines API — users never author).
+- **Dispatched alert audit** — `alerts` + `alert_deliveries`, last 50 by `created_at DESC`, with delivery status and resend metadata.
+- **Pending AI review** — `thesis_jobs` rows in `needs_scoring`, `scoring`, `queued`, `drafting`, or `gate_failed_retrying`, joined to their source `signals`. This makes the actual bottleneck visible: waiting on scoring, waiting on draft, stuck retry, deferred short sub-quota, or daily quota gating.
 
-Neither tab permits action; both are diagnostic.
+Neither surface permits action; both are diagnostic.
 
 ---
 
@@ -243,7 +243,7 @@ Not design — just which surfaces exist and what they load. For Pedro to accept
 | `/scanners/[name]` | Scanner detail — rationale/edge/mechanics prose + signal-type routing + latency history | **new** |
 | `/profiles` | 6 profiles with dimensions/weights/auto-caps + band thresholds | **new** |
 | `/profiles/[name]` | Single profile rubric detail | **new** |
-| `/alerts` | Immediate-band dispatch inbox — two tabs: Dispatched + Pending AI review (§6 C4) | **new** |
+| `/alerts` | Alert audit + pending review queue (§6 C4) | **new** |
 | `/flags` | Operator flags (Phase 4 ok) | keep v1 |
 | `/decisions` | Decisions register static view | **new** |
 | `/reports` | Storage listing (Phase 4 ok) | keep v1 |

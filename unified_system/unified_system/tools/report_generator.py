@@ -241,13 +241,18 @@ def generate_daily_digest(
 
     story.append(Spacer(1, 8))
 
-    # Section 4 — System health
-    story.append(Paragraph("System Health", st["H2"]))
+    # Section 4 — Local system health
+    story.append(Paragraph("System Health (Local Registry Only)", st["H2"]))
     reg = _load_json(REPO / "config" / "scanner_registry.json", {"scanners": []})
     scanners = reg.get("scanners", [])
     ok = sum(1 for s in scanners if s.get("last_run_status") == "ok")
     err = sum(1 for s in scanners if s.get("last_run_status") in ("error", "timeout"))
     non_op = sum(1 for s in scanners if s.get("status") != "operational")
+    story.append(Paragraph(
+        "This section reflects unified_system/config/scanner_registry.json and local generated files. "
+        "It is not the live Supabase fleet dashboard.",
+        st["Body"],
+    ))
     story.append(Paragraph(
         f"Scanners total: {len(scanners)} · OK last run: {ok} · Errors/timeouts: {err} · Non-operational: {non_op}",
         st["Body"],

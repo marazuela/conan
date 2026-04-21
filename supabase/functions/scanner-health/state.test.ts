@@ -1,0 +1,109 @@
+import { deriveScannerState } from "./state.ts";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+Deno.test("running beats idle when a live run exists", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "daily",
+      last_run_utc: null,
+      last_run_status: null,
+      last_probe_at: null,
+      last_probe_status: null,
+    },
+    [{ status: "running", started_at: "2026-04-21T09:00:00Z", completed_at: null }],
+    [],
+    new Date("2026-04-21T09:10:00Z"),
+  );
+
+  assert(state.state_label === "running", "expected running label");
+  assert(state.has_running_run === true, "expected running flag");
+  assert(state.running_run_count === 1, "expected running count");
+});
+
+Deno.test("stale respects two-times cadence threshold", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "3h",
+      last_run_utc: "2026-04-21T02:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T07:30:00Z",
+      last_probe_status: "ok",
+    },
+    [],
+    [],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.state_label === "stale", "expected stale label");
+  assert(state.is_stale === true, "expected stale flag");
+});
+
+Deno.test("critical flags escalate the state to error", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "daily",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T08:05:00Z",
+      last_probe_status: "drift",
+    },
+    [],
+    [{ severity: "critical", title: "endpoint drift" }],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.state_label === "error", "expected critical flag to force error");
+  assert(state.health === "red", "expected red health");
+  assert(
+    state.state_reason.includes("endpoint drift"),
+    "expected critical flag title in the reason",
+  );
+});
+
+Deno.test("warn flags keep an ok run yellow without changing the label", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "daily",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T08:05:00Z",
+      last_probe_status: "ok",
+    },
+    [],
+    [{ severity: "warn", title: "fallback endpoint active" }],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.state_label === "ok", "warn flags should not rewrite ok into idle");
+  assert(state.health === "yellow", "warn flags should yellow the health");
+});
+
+Deno.test("latest observed timeout overrides stale scanners row metadata", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "3h",
+      last_run_utc: "2026-04-21T06:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: null,
+      last_probe_status: null,
+    },
+    [{
+      status: "timeout",
+      started_at: "2026-04-21T08:55:00Z",
+      completed_at: "2026-04-21T09:15:00Z",
+    }],
+    [],
+    new Date("2026-04-21T09:16:00Z"),
+  );
+
+  assert(state.state_label === "timeout", "expected latest timeout to win");
+  assert(state.latest_run_status === "timeout", "expected latest observed status");
+});
