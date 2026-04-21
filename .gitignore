@@ -4,6 +4,9 @@
 # Session state
 .claude/
 
+# Cursor IDE per-project config
+.cursor/
+
 # Python
 __pycache__/
 *.pyc

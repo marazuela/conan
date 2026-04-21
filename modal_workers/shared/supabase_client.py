@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -130,6 +131,37 @@ class SupabaseClient:
         except ValueError:
             return r.text
 
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        if isinstance(exc, requests.exceptions.RequestException):
+            return True
+        return isinstance(exc, SupabaseError) and (exc.status == 429 or exc.status >= 500)
+
+    def _rest_with_retry(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Optional[Any] = None,
+        prefer: Optional[str] = None,
+        attempts: int = 3,
+        backoff_s: float = 0.25,
+    ) -> Any:
+        for attempt in range(attempts):
+            try:
+                return self._rest(
+                    method,
+                    path,
+                    params=params,
+                    json_body=json_body,
+                    prefer=prefer,
+                )
+            except (SupabaseError, requests.exceptions.RequestException) as exc:
+                if attempt == attempts - 1 or not self._is_retryable_error(exc):
+                    raise
+                time.sleep(backoff_s * (2 ** attempt))
+        return None
+
     # ------------------------------------------------------------------
     # Scanner registry
     # ------------------------------------------------------------------
@@ -156,11 +188,11 @@ class SupabaseClient:
 
     def update_scanner_last_run(self, scanner_id: str, last_run_utc: str,
                                 last_run_status: str, last_run_signals: int) -> None:
-        self._rest("PATCH", "scanners",
-                   params={"id": f"eq.{scanner_id}"},
-                   json_body={"last_run_utc": last_run_utc,
-                              "last_run_status": last_run_status,
-                              "last_run_signals": last_run_signals})
+        self._rest_with_retry("PATCH", "scanners",
+                              params={"id": f"eq.{scanner_id}"},
+                              json_body={"last_run_utc": last_run_utc,
+                                         "last_run_status": last_run_status,
+                                         "last_run_signals": last_run_signals})
 
     # ------------------------------------------------------------------
     # Scanner runs
@@ -187,7 +219,18 @@ class SupabaseClient:
             patch["fetched_records"] = fetched_records
         if raw_log_path:
             patch["raw_log_path"] = raw_log_path
-        self._rest("PATCH", "scanner_runs", params={"id": f"eq.{run_id}"}, json_body=patch)
+        self._rest_with_retry("PATCH", "scanner_runs",
+                              params={"id": f"eq.{run_id}"},
+                              json_body=patch)
+
+    @staticmethod
+    def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     def reap_orphan_runs(self, max_age_seconds: int = 1200) -> List[Dict[str, Any]]:
         """Sweep `scanner_runs` where status='running' AND started_at is older than
@@ -229,13 +272,55 @@ class SupabaseClient:
             "errors": [{"type": "orphan_reaper",
                         "message": f"marked timeout: status=running for >{max_age_seconds}s; reaped by next dispatcher"}],
         }
-        self._rest(
+        self._rest_with_retry(
             "PATCH", "scanner_runs",
             params={"id": f"in.({ids})", "status": "eq.running"},
             json_body=patch,
         )
+
+        latest_started_by_scanner: Dict[str, str] = {}
+        for row in candidates:
+            scanner_id = row["scanner_id"]
+            started_at = row["started_at"]
+            current = latest_started_by_scanner.get(scanner_id)
+            if current is None or started_at > current:
+                latest_started_by_scanner[scanner_id] = started_at
+
+        reconciled_scanners: Dict[str, bool] = {}
+        if latest_started_by_scanner:
+            scanner_ids = ",".join(f'"{scanner_id}"' for scanner_id in latest_started_by_scanner)
+            scanner_rows = self._rest(
+                "GET", "scanners",
+                params={"select": "id,last_run_utc", "id": f"in.({scanner_ids})"},
+            ) or []
+            scanner_by_id = {row["id"]: row for row in scanner_rows}
+            timeout_at = datetime.now(timezone.utc).isoformat()
+
+            for scanner_id, started_at in latest_started_by_scanner.items():
+                scanner_row = scanner_by_id.get(scanner_id) or {}
+                last_run_dt = self._parse_iso(scanner_row.get("last_run_utc"))
+                orphan_started_dt = self._parse_iso(started_at)
+                if last_run_dt and orphan_started_dt and last_run_dt > orphan_started_dt:
+                    reconciled_scanners[scanner_id] = False
+                    continue
+                try:
+                    self.update_scanner_last_run(
+                        scanner_id,
+                        last_run_utc=timeout_at,
+                        last_run_status="timeout",
+                        last_run_signals=0,
+                    )
+                    reconciled_scanners[scanner_id] = True
+                except (SupabaseError, requests.exceptions.RequestException):
+                    reconciled_scanners[scanner_id] = False
+
         return [
-            {"id": r["id"], "scanner_id": r["scanner_id"], "started_at": r["started_at"]}
+            {
+                "id": r["id"],
+                "scanner_id": r["scanner_id"],
+                "started_at": r["started_at"],
+                "scanner_reconciled": reconciled_scanners.get(r["scanner_id"], False),
+            }
             for r in candidates
         ]
 

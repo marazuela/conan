@@ -16,9 +16,11 @@ from modal_workers.shared.rubric_engine import (
     WEIGHTS,
     UnknownScoringProfile,
     apply_auto_caps,
+    build_scoring_meta,
     classify_band,
     rescore_with_dims,
     score_signal,
+    dimensions_with_provenance,
     weighted_total,
 )
 
@@ -100,6 +102,31 @@ def test_weighted_total_missing_dim_defaults_to_zero_in_lookup():
     dims = {"spread_size": 5}
     # Only spread_size contributes: 5 * 3 = 15
     assert weighted_total(dims, "merger_arb") == 15.0
+
+
+def test_dimensions_with_provenance_adds_marker_without_mutating_scores():
+    dims = {"spread_size": 5, "deal_certainty": 4}
+    payload = dimensions_with_provenance(dims, "heuristic")
+    assert payload["spread_size"] == 5
+    assert payload["deal_certainty"] == 4
+    assert payload["_provenance"] == "heuristic"
+
+
+def test_build_scoring_meta_captures_resolution_state():
+    meta = build_scoring_meta(
+        provenance="heuristic",
+        supported_dims=["spread_size", "deal_certainty"],
+        defaulted_dims=["annualized_return"],
+        requires_resolution=True,
+        missing_dimensions=["annualized_return"],
+    )
+    assert meta == {
+        "provenance": "heuristic",
+        "supported_dims": ["spread_size", "deal_certainty"],
+        "defaulted_dims": ["annualized_return"],
+        "requires_resolution": True,
+        "missing_dimensions": ["annualized_return"],
+    }
 
 
 # ----------------------------------------------------------------------

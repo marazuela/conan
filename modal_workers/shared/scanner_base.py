@@ -6,6 +6,10 @@ dedup, persist signals, return a status envelope.
 This is the one place where IO shape is enforced: every scanner's scan_fn produces
 list[Signal] (or a ScannerResult with status=auth_required/timeout/etc.), run_scanner
 enriches each Signal with rubric_version_id + scoring fields and persists to Supabase.
+It is also the contract boundary where heuristic scoring becomes explicit:
+`signals.dimensions` gets `_provenance`, and `signals.extensions.scoring_meta`
+records which dims were supported vs neutral fallbacks so reactor/UI can treat
+provisional rows differently from final analyst-quality scores.
 
 Contract (matches spec.md §7.1):
   scan_fn(cfg: ScannerConfig) -> ScannerResult
@@ -15,7 +19,10 @@ Contract (matches spec.md §7.1):
     (derived from cfg.signal_type_profile_map if omitted), thesis_direction, strength_estimate.
 
   The scanner does NOT score signals. run_scanner calls rubric_engine.score_signal on each
-  Signal just before insert, matching v1's post_scan flow.
+  Signal just before insert, matching v1's post_scan flow. If the scanner payload
+  needs heuristic estimation, the persisted row carries `_provenance='heuristic'`
+  plus `extensions.scoring_meta.requires_resolution` when neutral fallback dims
+  were used.
 
 Auth-required handling:
   If scan_fn raises MissingAuthError OR returns ScannerResult(status='auth_required'),
@@ -78,6 +85,7 @@ class ScannerResult:
     warnings: List[str] = field(default_factory=list)
     fetched_records: Optional[int] = None
     error: Optional[str] = None
+    run_metrics: Dict[str, Any] = field(default_factory=dict)
     # Optional post-insert hook. run_scanner calls this AFTER signals are
     # successfully persisted to Supabase. Scanners that cache state in Storage
     # (dedup logs, per-day snapshots) should write through this callback instead
@@ -219,6 +227,14 @@ def _signal_to_row(
     }
 
 
+def _warning_payloads(warnings: List[str]) -> List[Dict[str, Any]]:
+    return [{"warnings": warnings}] if warnings else []
+
+
+def _metrics_payload(metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [{"metrics": metrics}] if metrics else []
+
+
 def run_scanner(
     scanner_name: str,
     scan_fn: Callable[[ScannerConfig], ScannerResult],
@@ -241,108 +257,151 @@ def run_scanner(
     cfg = client.load_scanner_config(scanner_name)
     modal_inv = os.environ.get("MODAL_TASK_ID")  # Modal sets this at runtime
     run_id = client.open_scanner_run(cfg.scanner_id, modal_invocation_id=modal_inv)
+    result = ScannerResult(scanner=scanner_name, status="error", signals=[])
+    final_status: ScannerStatus = "error"
+    final_signals_emitted = 0
+    final_errors: List[Dict[str, Any]] = []
+    final_fetched_records: Optional[int] = None
 
     try:
-        result = scan_fn(cfg)
-    except MissingAuthError as e:
-        result = ScannerResult(scanner=scanner_name, status="auth_required",
-                               signals=[], warnings=[str(e)])
-    except Exception as e:  # noqa: BLE001 — we want the stack in errors jsonb
+        try:
+            result = scan_fn(cfg)
+        except MissingAuthError as e:
+            result = ScannerResult(
+                scanner=scanner_name,
+                status="auth_required",
+                signals=[],
+                warnings=[str(e)],
+            )
+
+        final_fetched_records = result.fetched_records
+
+        if result.status == "auth_required":
+            final_status = "auth_required"
+            final_errors = _warning_payloads(result.warnings) + _metrics_payload(result.run_metrics)
+            return result
+
+        # Build signal rows, resolving entities as we go.
+        # Pre-pass: bulk-fetch entities whose FIGI we already know. For cold-start
+        # runs with thousands of signals (ESMA), this collapses thousands of per-
+        # signal priority-1 GETs into one `issuer_figi IN (...)` query. Signals
+        # whose hints miss the map still fall through to resolve_or_create_entity's
+        # full fallback chain.
+        figis_needed: List[str] = []
+        for sig in result.signals:
+            f = (sig.entity_hints.issuer_figi if sig.entity_hints else None) or sig.issuer_figi
+            if f:
+                figis_needed.append(f)
+        prefetched = client.prefetch_entities_by_figi(figis_needed) if figis_needed else {}
+
+        rows: List[Dict[str, Any]] = []
+        per_signal_errors: List[Dict[str, Any]] = []
+        for sig in result.signals:
+            try:
+                entity_id: Optional[str] = None
+                if sig.entity_hints is not None:
+                    entity_id = client.resolve_or_create_entity(sig.entity_hints, prefetched=prefetched)
+                elif sig.issuer_figi:
+                    entity_id = client.resolve_or_create_entity(
+                        EntityHints(issuer_figi=sig.issuer_figi), prefetched=prefetched)
+                rows.append(_signal_to_row(sig, cfg, entity_id, run_id, client))
+            except Exception as e:  # noqa: BLE001
+                per_signal_errors.append({"signal_id": sig.signal_id, "error": str(e)})
+
+        inserted: List[str] = []
+        insert_succeeded = False
+        bulk_insert_failed = False
+        try:
+            inserted = client.insert_signals(rows)
+            insert_succeeded = True
+        except SupabaseError as e:
+            per_signal_errors.append({"phase": "bulk_insert", "status": e.status, "error": e.body[:400]})
+            bulk_insert_failed = True
+
+        # Post-insert cache persistence. See ScannerResult.after_insert docstring —
+        # this is the hook that prevents dedup/snapshot poisoning when a Modal
+        # container is killed mid-flight. Only runs if insert_signals didn't raise;
+        # partial dup-rejections are still a successful insert from this hook's POV.
+        if insert_succeeded and result.after_insert is not None:
+            try:
+                result.after_insert()
+            except Exception as e:  # noqa: BLE001
+                per_signal_errors.append({"phase": "after_insert", "error": f"{type(e).__name__}: {e}"})
+
+        # Final status resolution:
+        #   error   — the bulk insert itself raised (nothing landed, upstream broken)
+        #   partial — insert landed but some per-signal errors happened (dup rejections
+        #             from ON CONFLICT, or per-signal entity-resolution failures)
+        #   ok      — clean run, no errors anywhere
+        # Previously a failed bulk insert with zero per_signal_errors left status='ok'
+        # with signals_emitted=0, so dashboards showed a green scanner that was
+        # silently down.
+        final_status = result.status
+        if bulk_insert_failed:
+            final_status = "error"
+        elif per_signal_errors and final_status == "ok":
+            final_status = "partial"
+
+        final_signals_emitted = len(inserted)
+        final_errors = (
+            per_signal_errors
+            + _warning_payloads(result.warnings)
+            + _metrics_payload(result.run_metrics)
+        )
+        result.status = final_status
+        return result
+    except Exception as e:  # noqa: BLE001 — catch post-scan pipeline failures too
         tb = traceback.format_exc()
-        result = ScannerResult(scanner=scanner_name, status="error", signals=[], error=str(e))
-        client.close_scanner_run(run_id, status="error", signals_emitted=0,
-                                 fetched_records=None,
-                                 errors=[{"type": e.__class__.__name__, "message": str(e), "trace": tb}])
-        client.update_scanner_last_run(cfg.scanner_id,
-                                       last_run_utc=_iso_utc(datetime.now(timezone.utc)),
-                                       last_run_status="error", last_run_signals=0)
-        return result
-
-    if result.status == "auth_required":
-        client.close_scanner_run(run_id, status="auth_required", signals_emitted=0,
-                                 fetched_records=result.fetched_records,
-                                 errors=[{"warnings": result.warnings}] if result.warnings else [])
-        client.update_scanner_last_run(cfg.scanner_id,
-                                       last_run_utc=_iso_utc(datetime.now(timezone.utc)),
-                                       last_run_status="auth_required", last_run_signals=0)
-        return result
-
-    # Build signal rows, resolving entities as we go.
-    # Pre-pass: bulk-fetch entities whose FIGI we already know. For cold-start
-    # runs with thousands of signals (ESMA), this collapses thousands of per-
-    # signal priority-1 GETs into one `issuer_figi IN (...)` query. Signals
-    # whose hints miss the map still fall through to resolve_or_create_entity's
-    # full fallback chain.
-    figis_needed: List[str] = []
-    for sig in result.signals:
-        f = (sig.entity_hints.issuer_figi if sig.entity_hints else None) or sig.issuer_figi
-        if f:
-            figis_needed.append(f)
-    prefetched = client.prefetch_entities_by_figi(figis_needed) if figis_needed else {}
-
-    rows: List[Dict[str, Any]] = []
-    per_signal_errors: List[Dict[str, Any]] = []
-    for sig in result.signals:
-        try:
-            entity_id: Optional[str] = None
-            if sig.entity_hints is not None:
-                entity_id = client.resolve_or_create_entity(sig.entity_hints, prefetched=prefetched)
-            elif sig.issuer_figi:
-                entity_id = client.resolve_or_create_entity(
-                    EntityHints(issuer_figi=sig.issuer_figi), prefetched=prefetched)
-            rows.append(_signal_to_row(sig, cfg, entity_id, run_id, client))
-        except Exception as e:  # noqa: BLE001
-            per_signal_errors.append({"signal_id": sig.signal_id, "error": str(e)})
-
-    inserted: List[str] = []
-    insert_succeeded = False
-    bulk_insert_failed = False
-    try:
-        inserted = client.insert_signals(rows)
-        insert_succeeded = True
-    except SupabaseError as e:
-        per_signal_errors.append({"phase": "bulk_insert", "status": e.status, "error": e.body[:400]})
-        bulk_insert_failed = True
-
-    # Post-insert cache persistence. See ScannerResult.after_insert docstring —
-    # this is the hook that prevents dedup/snapshot poisoning when a Modal
-    # container is killed mid-flight. Only runs if insert_signals didn't raise;
-    # partial dup-rejections are still a successful insert from this hook's POV.
-    if insert_succeeded and result.after_insert is not None:
-        try:
-            result.after_insert()
-        except Exception as e:  # noqa: BLE001
-            per_signal_errors.append({"phase": "after_insert", "error": f"{type(e).__name__}: {e}"})
-
-    # Final status resolution:
-    #   error   — the bulk insert itself raised (nothing landed, upstream broken)
-    #   partial — insert landed but some per-signal errors happened (dup rejections
-    #             from ON CONFLICT, or per-signal entity-resolution failures)
-    #   ok      — clean run, no errors anywhere
-    # Previously a failed bulk insert with zero per_signal_errors left status='ok'
-    # with signals_emitted=0, so dashboards showed a green scanner that was
-    # silently down.
-    final_status: ScannerStatus = result.status
-    if bulk_insert_failed:
+        existing_warnings = list(result.warnings or [])
         final_status = "error"
-    elif per_signal_errors and final_status == "ok":
-        final_status = "partial"
+        final_signals_emitted = 0
+        final_fetched_records = result.fetched_records
+        final_errors = [{"type": e.__class__.__name__, "message": str(e), "trace": tb}]
+        final_errors.extend(_warning_payloads(existing_warnings))
+        final_errors.extend(_metrics_payload(result.run_metrics))
+        result = ScannerResult(
+            scanner=scanner_name,
+            status="error",
+            signals=[],
+            warnings=existing_warnings,
+            fetched_records=final_fetched_records,
+            error=str(e),
+            run_metrics=result.run_metrics,
+        )
+        return result
+    finally:
+        finalization_warnings: List[str] = []
+        finished_at = _iso_utc(datetime.now(timezone.utc))
+        try:
+            client.close_scanner_run(
+                run_id,
+                status=final_status,
+                signals_emitted=final_signals_emitted,
+                fetched_records=final_fetched_records,
+                errors=final_errors,
+            )
+        except Exception as e:  # noqa: BLE001
+            finalization_warnings.append(
+                f"close_scanner_run failed after retries: {type(e).__name__}: {e}"
+            )
+        try:
+            client.update_scanner_last_run(
+                cfg.scanner_id,
+                last_run_utc=finished_at,
+                last_run_status=final_status,
+                last_run_signals=final_signals_emitted,
+            )
+        except Exception as e:  # noqa: BLE001
+            finalization_warnings.append(
+                f"update_scanner_last_run failed after retries: {type(e).__name__}: {e}"
+            )
 
-    client.close_scanner_run(
-        run_id,
-        status=final_status,
-        signals_emitted=len(inserted),
-        fetched_records=result.fetched_records,
-        errors=per_signal_errors + ([{"warnings": result.warnings}] if result.warnings else []),
-    )
-    client.update_scanner_last_run(
-        cfg.scanner_id,
-        last_run_utc=_iso_utc(datetime.now(timezone.utc)),
-        last_run_status=final_status,
-        last_run_signals=len(inserted),
-    )
-    result.status = final_status
-    return result
+        if finalization_warnings:
+            result.warnings.extend(
+                warning for warning in finalization_warnings if warning not in result.warnings
+            )
+            if result.status == "ok":
+                result.status = "partial"
 
 
 # ----------------------------------------------------------------------
@@ -359,4 +418,6 @@ def result_to_dict(result: ScannerResult) -> Dict[str, Any]:
     }
     if result.error:
         d["error"] = result.error
+    if result.run_metrics:
+        d["run_metrics"] = result.run_metrics
     return d

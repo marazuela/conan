@@ -337,6 +337,10 @@ def _estimate_short_positioning(raw: Dict[str, Any]) -> Optional[DimensionEstima
     if position_pct is not None:
         supported["size_vs_float"] = _single_short_size_tier(position_pct)
 
+    adv_usd = _raw_adv_usd(raw)
+    if adv_usd is not None:
+        supported["liquidity"] = _liquidity_tier(adv_usd)
+
     if not supported:
         return None
     return _materialize_estimate("short_positioning", supported)
@@ -384,6 +388,14 @@ def _liquidity_tier(adv_usd: float) -> int:
     if adv_usd >= 1_000_000:
         return 2
     return 1
+
+
+def _raw_adv_usd(raw: Dict[str, Any]) -> Optional[float]:
+    return (
+        _coerce_float(raw.get("adv_usd"))
+        or _coerce_float(raw.get("average_daily_dollar_volume"))
+        or _coerce_float(raw.get("liquidity_usd"))
+    )
 
 
 def _estimate_takeover_candidate(raw: Dict[str, Any]) -> Optional[DimensionEstimate]:
@@ -439,11 +451,7 @@ def _estimate_takeover_candidate(raw: Dict[str, Any]) -> Optional[DimensionEstim
     if valuation_discount is not None:
         supported["valuation_cushion"] = _valuation_cushion_tier(valuation_discount)
 
-    adv_usd = (
-        _coerce_float(raw.get("adv_usd"))
-        or _coerce_float(raw.get("average_daily_dollar_volume"))
-        or _coerce_float(raw.get("liquidity_usd"))
-    )
+    adv_usd = _raw_adv_usd(raw)
     if adv_usd is not None:
         supported["liquidity"] = _liquidity_tier(adv_usd)
 
@@ -525,6 +533,27 @@ def _magnitude_tier(raw: Dict[str, Any]) -> Optional[int]:
     return 1
 
 
+def _competitive_landscape_tier(raw: Dict[str, Any]) -> Optional[int]:
+    history_count = _coerce_float(raw.get("approval_history_count"))
+    if history_count is None:
+        enrichment = raw.get("enrichment") or {}
+        if isinstance(enrichment, dict):
+            fda_history = enrichment.get("fda_history")
+            if isinstance(fda_history, list):
+                history_count = float(len(fda_history))
+    if history_count is None:
+        return None
+    if history_count <= 0:
+        return 5
+    if history_count <= 1:
+        return 4
+    if history_count <= 3:
+        return 3
+    if history_count <= 6:
+        return 2
+    return 1
+
+
 def _estimate_binary_catalyst(raw: Dict[str, Any]) -> Optional[DimensionEstimate]:
     days = _coerce_float(raw.get("days_until_pdufa"))
     if days is None:
@@ -564,6 +593,14 @@ def _estimate_binary_catalyst(raw: Dict[str, Any]) -> Optional[DimensionEstimate
     magnitude = _magnitude_tier(raw)
     if magnitude is not None:
         supported["magnitude"] = magnitude
+
+    competitive = _competitive_landscape_tier(raw)
+    if competitive is not None:
+        supported["competitive_landscape"] = competitive
+
+    adv_usd = _raw_adv_usd(raw)
+    if adv_usd is not None:
+        supported["liquidity"] = _liquidity_tier(adv_usd)
 
     return _materialize_estimate("binary_catalyst", supported)
 

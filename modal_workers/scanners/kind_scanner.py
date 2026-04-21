@@ -214,7 +214,25 @@ def _fetch_page(token: str, bgn_de: str, end_de: str, page_no: int) -> Tuple[Opt
 # Signal builder
 # ---------------------------------------------------------------------------
 
-def _record_to_signal(rec: Dict[str, Any], scan_date: datetime) -> Optional[Signal]:
+def _resolve_figis(stock_codes: List[str]) -> Dict[str, Optional[str]]:
+    unique = sorted({code for code in stock_codes if code})
+    if not unique:
+        return {}
+    try:
+        from modal_workers.shared.openfigi_resolver import resolve_batch
+
+        queries = [{"idType": "TICKER", "idValue": code, "exchCode": "KS"} for code in unique]
+        resolutions = resolve_batch(queries)
+        return {
+            code: resolution.issuer_figi if resolution.resolved else None
+            for code, resolution in zip(unique, resolutions)
+        }
+    except Exception:
+        return {code: None for code in unique}
+
+
+def _record_to_signal(rec: Dict[str, Any], scan_date: datetime,
+                      issuer_figi: Optional[str] = None) -> Optional[Signal]:
     report_nm = (rec.get("report_nm") or "").strip()
     if not report_nm:
         return None
@@ -251,18 +269,6 @@ def _record_to_signal(rec: Dict[str, Any], scan_date: datetime) -> Optional[Sign
     ).hexdigest()[:32]
 
     source_date = _parse_rcept_dt(rcept_dt) or scan_date
-
-    # Best-effort OpenFIGI resolution on the 6-digit stock code. Some Korean
-    # issuers aren't in OpenFIGI; reactor/entity-resolver cascade handles misses.
-    issuer_figi: Optional[str] = None
-    if stock_code and len(stock_code) == 6:
-        try:
-            from modal_workers.shared.openfigi_resolver import resolve_ticker
-            res = resolve_ticker(stock_code, exch_code="KS")
-            if res.resolved:
-                issuer_figi = res.issuer_figi
-        except Exception:
-            pass
 
     raw_payload: Dict[str, Any] = {
         "corp_code": corp_code,
@@ -379,11 +385,27 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             error="; ".join(fetch_errors),
         )
 
+    resolvable_codes = sorted({
+        (rec.get("stock_code") or "").strip()
+        for rec in all_records
+        if (rec.get("stock_code") or "").strip() and _classify((rec.get("report_nm") or "").strip()) is not None
+    })
+    figi_by_stock_code: Dict[str, Optional[str]] = {}
+    if resolvable_codes and time.time() - scan_start <= budget:
+        figi_by_stock_code = _resolve_figis(resolvable_codes)
+    elif resolvable_codes:
+        warnings.append("skipped OpenFIGI batch — wall-clock budget exceeded before signal build")
+
     # Build signals with per-run dedup on source_content_hash.
     signals: List[Signal] = []
     seen: set[str] = set()
     for rec in all_records:
-        sig = _record_to_signal(rec, scan_date)
+        if time.time() - scan_start > budget:
+            warnings.append("signal-build loop aborted — wall-clock budget exceeded")
+            pagination_incomplete = True
+            break
+        stock_code = (rec.get("stock_code") or "").strip()
+        sig = _record_to_signal(rec, scan_date, figi_by_stock_code.get(stock_code))
         if sig is None:
             continue
         if sig.source_content_hash in seen:

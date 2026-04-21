@@ -252,6 +252,20 @@ def _first_match_to_resolution(query: Dict[str, Any], response: Dict[str, Any]) 
     )
 
 
+def _unresolved_resolution(query: Dict[str, Any], error: str) -> FigiResolution:
+    return FigiResolution(
+        ticker_local=query.get("idValue"),
+        mic=query.get("micCode"),
+        figi=None,
+        issuer_figi=None,
+        name=None,
+        security_type=None,
+        exchange_code=None,
+        resolved=False,
+        error=error,
+    )
+
+
 # ----------------------------------------------------------------------
 # Public resolve functions
 # ----------------------------------------------------------------------
@@ -352,10 +366,14 @@ def resolve_batch(queries: List[Dict[str, Any]]) -> List[FigiResolution]:
         chunk = to_post[start:start + _MAX_BATCH]
         chunk_indices = to_post_indices[start:start + _MAX_BATCH]
         responses = _post_batch(chunk)
-        for j, (q, r) in enumerate(zip(chunk, responses)):
+        for j, q in enumerate(chunk):
+            r = responses[j] if j < len(responses) else {"error": "missing batch response"}
             res = _first_match_to_resolution(q, r)
             out[chunk_indices[j]] = res
             cache_k = _cache_key(q.get("idType", "?"), q.get("idValue") or "?", q.get("micCode"))
             _save_cache(cache_k, res.to_dict())
 
-    return [o for o in out if o is not None]
+    return [
+        resolution if resolution is not None else _unresolved_resolution(queries[i], "missing batch response")
+        for i, resolution in enumerate(out)
+    ]

@@ -51,18 +51,18 @@ def test_short_positioning_high_crowding_high_trend():
         "position_pct": 4.0,
         "change_pct": 1.0,
         "regulators": ["FCA", "BaFin", "AMF"],
+        "adv_usd": 75_000_000,
     }
     estimate = _estimate("short_positioning", payload)
     assert estimate.dimensions["crowding_intensity"] == 5
     assert estimate.dimensions["trend_direction"] == 5
     assert estimate.dimensions["size_vs_float"] == 5
+    assert estimate.dimensions["liquidity"] == 5
     assert estimate.dimensions["catalyst_proximity"] == 3
     assert estimate.dimensions["historical_analog"] == 3
-    assert estimate.dimensions["liquidity"] == 3
     assert estimate.defaulted_dims == [
         "catalyst_proximity",
         "historical_analog",
-        "liquidity",
     ]
     assert estimate.requires_resolution is True
 
@@ -215,6 +215,22 @@ def test_binary_catalyst_supports_pre_phase3_probability_and_readout_window():
         "competitive_landscape",
         "liquidity",
     ]
+
+
+def test_binary_catalyst_uses_history_count_and_adv_for_more_dims():
+    estimate = _estimate(
+        "binary_catalyst",
+        {
+            "days_until_pdufa": 25,
+            "approval_probability": 0.71,
+            "approval_history_count": 1,
+            "adv_usd": 22_000_000,
+        },
+    )
+    assert estimate.dimensions["approval_probability"] == 4
+    assert estimate.dimensions["competitive_landscape"] == 4
+    assert estimate.dimensions["liquidity"] == 4
+    assert estimate.defaulted_dims == ["market_mispricing", "magnitude"]
 
 
 def test_binary_catalyst_resubmission_with_crl_history():

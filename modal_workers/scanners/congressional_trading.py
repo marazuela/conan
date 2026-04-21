@@ -525,21 +525,26 @@ def _parse_iso_date(s: str) -> Optional[datetime]:
         return None
 
 
-def _resolve_figi(ticker: Optional[str]) -> Optional[str]:
-    if not ticker:
-        return None
+def _resolve_figis(tickers: List[str]) -> Dict[str, Optional[str]]:
+    unique = sorted({ticker.strip().upper() for ticker in tickers if ticker})
+    if not unique:
+        return {}
     try:
-        from modal_workers.shared.openfigi_resolver import resolve_ticker
-        res = resolve_ticker(ticker, exch_code="US")
-        if res.resolved:
-            return res.issuer_figi
+        from modal_workers.shared.openfigi_resolver import resolve_batch
+
+        queries = [{"idType": "TICKER", "idValue": ticker, "exchCode": "US"} for ticker in unique]
+        resolutions = resolve_batch(queries)
+        return {
+            ticker: resolution.issuer_figi if resolution.resolved else None
+            for ticker, resolution in zip(unique, resolutions)
+        }
     except Exception:
-        pass
-    return None
+        return {ticker: None for ticker in unique}
 
 
 def _build_trade_signal(trade: Dict[str, Any], cluster_count: int,
-                        scan_date: datetime) -> Optional[Signal]:
+                        scan_date: datetime,
+                        issuer_figi: Optional[str]) -> Optional[Signal]:
     ticker = trade.get("ticker") or ""
     politician = trade.get("politician_name") or ""
     t_date = trade.get("transaction_date") or ""
@@ -569,8 +574,6 @@ def _build_trade_signal(trade: Dict[str, Any], cluster_count: int,
         signal_flags.append(f"timing_cluster:{cluster_count}_members")
     if _is_options(trade.get("transaction", "")):
         signal_flags.append("options_activity")
-
-    issuer_figi = _resolve_figi(ticker)
 
     if action == "buy":
         direction = "long"
@@ -622,7 +625,8 @@ def _build_trade_signal(trade: Dict[str, Any], cluster_count: int,
 
 
 def _build_cluster_signal(ticker: str, members: List[Dict[str, Any]],
-                          scan_date: datetime) -> Optional[Signal]:
+                          scan_date: datetime,
+                          issuer_figi: Optional[str]) -> Optional[Signal]:
     """Emit a congress_cluster signal: 3+ politicians buying same ticker in 7d."""
     if not members:
         return None
@@ -637,7 +641,6 @@ def _build_cluster_signal(ticker: str, members: List[Dict[str, Any]],
     content_hash = f"sha256:{hashlib.sha256(f'cluster|{ticker}|{raw}'.encode()).hexdigest()}"
     signal_id = f"congress_cluster_{content_hash[7:7 + 32]}"
 
-    issuer_figi = _resolve_figi(ticker)
     issuer_name = members_sorted[0].get("issuer_name") or ticker
 
     raw_payload: Dict[str, Any] = {
@@ -733,7 +736,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         n.lower().strip() for n in cfg.config.get("filter_excluded_filers", ["Ro Khanna"])
     ]
 
-    # Reserve ~5s for cluster detection + signal building + cache write.
+    # Reserve ~5s for cluster detection + signal building + cache persistence.
     budget = max(10, cfg.timeout_soft_s - 5)
     budget_deadline = time.time() + budget
 
@@ -779,26 +782,46 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         if distinct >= CLUSTER_MIN_MEMBERS:
             clusters[ticker] = trades
 
+    figi_by_ticker: Dict[str, Optional[str]] = {}
+    unique_tickers = sorted({
+        str(t.get("ticker") or "").upper()
+        for t in fresh_trades
+        if t.get("ticker")
+    } | set(clusters.keys()))
+    if unique_tickers and time.time() <= budget_deadline:
+        figi_by_ticker = _resolve_figis(unique_tickers)
+    elif unique_tickers:
+        warnings.append("skipped OpenFIGI batch — wall-clock budget exceeded before signal build")
+
     # Build signals only for fresh_trades (cached trades were already emitted on prior runs
     # and will hit the (source_content_hash, scoring_profile) unique constraint at insert).
     signals: List[Signal] = []
     for trade in fresh_trades:
+        if time.time() > budget_deadline:
+            warnings.append("signal-build loop aborted — wall-clock budget exceeded")
+            break
         cluster_n = ticker_cluster_count.get(trade.get("ticker", ""), 1)
-        sig = _build_trade_signal(trade, cluster_n, scan_date)
+        ticker = str(trade.get("ticker") or "").upper()
+        sig = _build_trade_signal(
+            trade,
+            cluster_n,
+            scan_date,
+            figi_by_ticker.get(ticker),
+        )
         if sig is not None:
             signals.append(sig)
 
     # Cluster signals (one per ticker meeting threshold).
     for ticker, members in clusters.items():
-        sig = _build_cluster_signal(ticker, members, scan_date)
+        if time.time() > budget_deadline:
+            warnings.append("cluster-build loop aborted — wall-clock budget exceeded")
+            break
+        sig = _build_cluster_signal(ticker, members, scan_date, figi_by_ticker.get(ticker.upper()))
         if sig is not None:
             signals.append(sig)
 
-    # Persist rolling window cache (best-effort).
-    try:
+    def _persist_after_insert() -> None:
         _save_recent_trades(client, retained)
-    except Exception as e:  # noqa: BLE001
-        warnings.append(f"cache write: {type(e).__name__}: {e}")
 
     status = "partial" if warnings else "ok"
     if warnings and not signals and not fresh_trades:
@@ -810,4 +833,5 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         signals=signals,
         warnings=warnings,
         fetched_records=len(fresh_trades),
+        after_insert=_persist_after_insert,
     )

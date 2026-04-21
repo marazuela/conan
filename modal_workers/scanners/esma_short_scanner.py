@@ -999,6 +999,20 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             f"(limit={top_signal_limit}); dropped_by_type: {_signal_type_breakdown(dropped_emissions)}"
         )
 
+    for item in kept_emissions:
+        hints = item.signal.entity_hints
+        ticker = hints.ticker if hints else None
+        mic = hints.mic if hints else None
+        if not ticker:
+            continue
+        try:
+            from modal_workers.shared.market_snapshot import load_market_snapshot
+            snapshot = load_market_snapshot(ticker, mic=mic, client=client)
+            if snapshot:
+                item.signal.raw_payload.update(snapshot)
+        except Exception:  # noqa: BLE001 — best-effort enrichment only
+            continue
+
     signals = [item.signal for item in kept_emissions]
     for item in kept_emissions:
         dedup_log[item.dedup_hash] = today_str

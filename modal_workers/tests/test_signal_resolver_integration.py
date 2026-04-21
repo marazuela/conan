@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from modal_workers.shared.rubric_engine import (
     WEIGHTS,
+    build_scoring_meta,
     rescore_with_dims,
 )
 
@@ -174,6 +175,36 @@ def test_resolver_writes_provenance_into_dimensions_jsonb():
         assert persisted[k] == 3
     # Pure int dims (no provenance) must also be available for convergence use.
     assert "_provenance" not in out["dimensions"]
+
+
+def test_resolver_ai_resolved_metadata_clears_resolution_requirement():
+    dims = {k: 4 for k in WEIGHTS["activist_governance"]}
+    out = rescore_with_dims("activist_governance", {"keyword": "13D"}, dims)
+    meta = build_scoring_meta(
+        provenance="ai_resolved",
+        supported_dims=list(WEIGHTS["activist_governance"].keys()),
+        defaulted_dims=[],
+        requires_resolution=False,
+    )
+    assert out["dimensions_with_provenance"]["_provenance"] == "ai_resolved"
+    assert meta["requires_resolution"] is False
+    assert meta["defaulted_dims"] == []
+
+
+def test_resolver_can_upgrade_a_provisional_heuristic_shape():
+    heuristic_meta = build_scoring_meta(
+        provenance="heuristic",
+        supported_dims=["setup_strength", "edge_freshness", "strategic_buyer_clarity"],
+        defaulted_dims=["valuation_cushion", "liquidity"],
+        requires_resolution=True,
+    )
+    assert heuristic_meta["requires_resolution"] is True
+
+    resolved_dims = {k: 5 for k in WEIGHTS["takeover_candidate"]}
+    out = rescore_with_dims("takeover_candidate", {"patterns_hit": 4}, resolved_dims)
+    assert out["dimensions_with_provenance"]["_provenance"] == "ai_resolved"
+    assert out["score"] == 50.0
+    assert out["band"] == "immediate"
 
 
 # ----------------------------------------------------------------------

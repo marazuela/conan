@@ -779,7 +779,7 @@ def _signal_hash(ticker: str, drug: str, pdufa_date: str, subtype: str) -> str:
 
 
 def _build_signal(entry: dict, days: int, scan_date: datetime,
-                  *, issuer_figi: Optional[str]) -> Optional[Signal]:
+                  *, issuer_figi: Optional[str], client: SupabaseClient) -> Optional[Signal]:
     pdufa_date_str = entry.get("pdufa_date", "")
     if not pdufa_date_str:
         return None
@@ -831,6 +831,14 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
         },
         "headline": f"{ticker} {drug} PDUFA {pdufa_date_str} (T-{days}d)",
     }
+    if ticker:
+        try:
+            from modal_workers.shared.market_snapshot import load_market_snapshot
+            snapshot = load_market_snapshot(ticker, client=client)
+            if snapshot:
+                raw_payload.update(snapshot)
+        except Exception:
+            pass
 
     nct = entry.get("phase3_nctid", "")
     source_url = (f"https://clinicaltrials.gov/study/{nct}" if nct
@@ -1018,7 +1026,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             except Exception:
                 pass
 
-        sig = _build_signal(entry, days, scan_date, issuer_figi=issuer_figi)
+        sig = _build_signal(entry, days, scan_date, issuer_figi=issuer_figi, client=client)
         if sig is not None:
             signals.append(sig)
 

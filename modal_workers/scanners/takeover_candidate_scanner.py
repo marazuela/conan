@@ -629,6 +629,14 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             "rejected_prior_offer_6mo": False,
             "going_concern_warning": False,
         }
+        if ticker:
+            try:
+                from modal_workers.shared.market_snapshot import load_market_snapshot
+                snapshot = load_market_snapshot(ticker, client=client)
+                if snapshot:
+                    raw_payload.update(snapshot)
+            except Exception:
+                pass
 
         entity_hints = EntityHints(
             issuer_figi=issuer_figi,
