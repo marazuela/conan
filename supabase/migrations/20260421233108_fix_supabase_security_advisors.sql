@@ -1,0 +1,9 @@
+-- Placeholder migration.
+--
+-- This timestamp was already recorded in the remote migration history while the
+-- actual advisor-fix SQL had to move later in the chain because it depends on
+-- objects created by subsequent migrations (`emissions_ledger`,
+-- `candidate_transition_apply`).
+--
+-- The ordered implementation now lives in
+-- `20260426020000_fix_supabase_security_advisors_ordered.sql`.
