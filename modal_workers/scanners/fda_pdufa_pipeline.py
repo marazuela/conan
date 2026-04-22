@@ -837,8 +837,9 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
             snapshot = load_market_snapshot(ticker, client=client)
             if snapshot:
                 raw_payload.update(snapshot)
-        except Exception:
-            pass
+        except Exception as e:
+            from modal_workers.observability import record_snapshot_fetch_failure
+            record_snapshot_fetch_failure(client, scanner_name="fda_pdufa_pipeline", ticker=ticker, exc=e)
 
     nct = entry.get("phase3_nctid", "")
     source_url = (f"https://clinicaltrials.gov/study/{nct}" if nct

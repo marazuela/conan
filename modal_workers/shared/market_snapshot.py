@@ -20,7 +20,17 @@ from typing import Any, Dict, Optional
 
 from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError
 
-CACHE_TTL_S = 24 * 3600
+# Cache age buckets.
+#   age < FRESH_TTL_S         → source_liveness="live"
+#   FRESH_TTL_S ≤ age < SERVE_STALE_TTL_S → source_liveness="stale_served"
+#   age ≥ SERVE_STALE_TTL_S   → treat as miss, refetch
+FRESH_TTL_S = 3600
+SERVE_STALE_TTL_S = 24 * 3600
+CACHE_TTL_S = SERVE_STALE_TTL_S  # backwards-compat alias
+
+LIVENESS_LIVE = "live"
+LIVENESS_STALE_SERVED = "stale_served"
+LIVENESS_UNAVAILABLE = "unavailable"
 
 MIC_TO_YF_SUFFIX = {
     "XNAS": "",
@@ -113,6 +123,14 @@ def _first_number(*values: Any) -> Optional[float]:
 
 
 def _read_cache(client: Optional[SupabaseClient], key: str) -> Optional[Dict[str, Any]]:
+    """Return a cached snapshot with `source_liveness` + `age_seconds` stamped.
+
+    A cache entry aged beyond `SERVE_STALE_TTL_S` is treated as a miss so the
+    caller refetches. Entries between `FRESH_TTL_S` and `SERVE_STALE_TTL_S` are
+    served with `source_liveness="stale_served"` — usable, but downstream
+    scoring can mark the row provisional. Entries below `FRESH_TTL_S` are
+    `source_liveness="live"`.
+    """
     if client is None:
         return None
     try:
@@ -126,10 +144,18 @@ def _read_cache(client: Optional[SupabaseClient], key: str) -> Optional[Dict[str
     except (ValueError, UnicodeDecodeError):
         return None
     cached_at = _coerce_float(payload.get("cached_at"))
-    if cached_at is None or time.time() - cached_at > CACHE_TTL_S:
+    if cached_at is None:
+        return None
+    age = time.time() - cached_at
+    if age >= SERVE_STALE_TTL_S:
         return None
     snapshot = payload.get("snapshot")
-    return snapshot if isinstance(snapshot, dict) else None
+    if not isinstance(snapshot, dict):
+        return None
+    enriched = dict(snapshot)
+    enriched["source_liveness"] = LIVENESS_LIVE if age < FRESH_TTL_S else LIVENESS_STALE_SERVED
+    enriched["age_seconds"] = int(age)
+    return enriched
 
 
 def _write_cache(client: Optional[SupabaseClient], key: str, snapshot: Dict[str, Any]) -> None:
@@ -147,12 +173,40 @@ def _write_cache(client: Optional[SupabaseClient], key: str, snapshot: Dict[str,
         pass
 
 
+def _unavailable_snapshot(ticker: str, mic: Optional[str], *, source: str = "yfinance") -> Dict[str, Any]:
+    """Skeleton returned when an upstream fetch can't produce any metric.
+
+    Downstream scanner_base stamps `scoring_meta.data_freshness.market_snapshot.status="missing"`
+    when it sees this liveness value, so the row is flagged provisional instead of
+    silently defaulting dims to 3.
+    """
+    return {
+        "market_snapshot_source": source,
+        "market_snapshot_symbol": _symbol_for(ticker, mic),
+        "market_snapshot_at": _utc_now(),
+        "adv_usd": None,
+        "market_cap_usd": None,
+        "valuation_cushion_pct": None,
+        "price_vs_5y_median_pct": None,
+        "source_liveness": LIVENESS_UNAVAILABLE,
+        "age_seconds": 0,
+    }
+
+
 def load_market_snapshot(
     ticker: str,
     *,
     mic: Optional[str] = None,
     client: Optional[SupabaseClient] = None,
 ) -> Optional[Dict[str, Any]]:
+    """Return a market snapshot dict for the ticker.
+
+    Always returns a dict with `source_liveness` stamped (one of `live`,
+    `stale_served`, `unavailable`). Returns None only if `ticker` is empty.
+    Unavailable skeletons are NOT written to the in-process memo OR the storage
+    cache, so a transient provider outage doesn't poison memory for the worker
+    pod's lifetime or the storage cache for 24h.
+    """
     if not ticker:
         return None
 
@@ -166,17 +220,19 @@ def load_market_snapshot(
         return cached
 
     snapshot = _fetch_market_snapshot(ticker, mic)
-    _MEMO[key] = snapshot
-    if snapshot is not None:
+    if snapshot is not None and snapshot.get("source_liveness") == LIVENESS_LIVE:
+        _MEMO[key] = snapshot
         _write_cache(client, key, snapshot)
     return snapshot
 
 
-def _fetch_market_snapshot(ticker: str, mic: Optional[str]) -> Optional[Dict[str, Any]]:
+def _fetch_market_snapshot(ticker: str, mic: Optional[str]) -> Dict[str, Any]:
+    """Fetch from yfinance. Always returns a snapshot dict — `source_liveness`
+    is "live" on success, "unavailable" on any failure or all-null result."""
     try:
         import yfinance as yf  # type: ignore
     except ImportError:
-        return None
+        return _unavailable_snapshot(ticker, mic)
 
     symbol = _symbol_for(ticker, mic)
     try:
@@ -185,7 +241,7 @@ def _fetch_market_snapshot(ticker: str, mic: Optional[str]) -> Optional[Dict[str
         info = instrument.info or {}
         history = instrument.history(period="5y", interval="1mo", auto_adjust=True)
     except Exception:
-        return None
+        return _unavailable_snapshot(ticker, mic)
 
     currency = (
         info.get("currency")
@@ -233,7 +289,9 @@ def _fetch_market_snapshot(ticker: str, mic: Optional[str]) -> Optional[Dict[str
         "market_cap_usd": market_cap_usd,
         "valuation_cushion_pct": valuation_cushion_pct,
         "price_vs_5y_median_pct": price_vs_5y_median_pct,
+        "source_liveness": LIVENESS_LIVE,
+        "age_seconds": 0,
     }
     if not any(snapshot.get(key) is not None for key in ("adv_usd", "market_cap_usd", "valuation_cushion_pct")):
-        return None
+        return _unavailable_snapshot(ticker, mic)
     return snapshot

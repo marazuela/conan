@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from modal_workers.shared.dim_estimator import DimensionEstimate, estimate_dimensions
 from modal_workers.shared.rubric_engine import WEIGHTS
 
@@ -297,3 +299,162 @@ def test_unscored_profile_leaves_signal_unscored():
     out = score_signal(signal)
     assert out["score"] is None
     assert out["band"] is None
+
+
+# ----------------------------------------------------------------------
+# scoring_meta — data_freshness plumbing
+# ----------------------------------------------------------------------
+
+def test_scoring_meta_without_data_freshness_omits_key():
+    estimate = _estimate("short_positioning", {"position_pct": 2.0, "change_pct": 0.0})
+    meta = estimate.scoring_meta("heuristic")
+    assert "data_freshness" not in meta
+
+
+def test_scoring_meta_propagates_data_freshness_block():
+    estimate = _estimate("short_positioning", {"position_pct": 2.0, "change_pct": 0.0})
+    freshness = {"market_snapshot": {"status": "live", "age_seconds": 42, "source": "yfinance"}}
+    meta = estimate.scoring_meta("heuristic", data_freshness=freshness)
+    assert meta["data_freshness"] == freshness
+    assert meta["provenance"] == "heuristic"
+
+
+# ----------------------------------------------------------------------
+# Per-profile supported/defaulted contract locks
+#
+# These tests assert the allowlists of dims that each heuristic profile is
+# capable of supporting, so that a future estimator change can't silently
+# shift a dim from "supported" to "defaulted" (or vice versa) without a
+# test update. The reactor's provisional routing + UI surfaces key off
+# `supported_dims` / `defaulted_dims` — those labels ARE the contract.
+# ----------------------------------------------------------------------
+
+_HEURISTIC_PROFILES = ["short_positioning", "takeover_candidate", "binary_catalyst"]
+_RESOLVER_ONLY_PROFILES = ["activist_governance", "merger_arb", "litigation"]
+
+# Dims each profile CAN support when evidence is present in raw_payload.
+_PROFILE_SUPPORTABLE_DIMS = {
+    "short_positioning": {
+        "crowding_intensity", "trend_direction", "size_vs_float", "liquidity",
+    },
+    "takeover_candidate": {
+        "setup_strength", "edge_freshness", "strategic_buyer_clarity",
+        "valuation_cushion", "liquidity",
+    },
+    "binary_catalyst": {
+        "catalyst_timeline", "approval_probability", "magnitude",
+        "competitive_landscape", "liquidity",
+    },
+}
+
+# Dims the heuristic layer deliberately leaves for signal_resolver — these
+# must NEVER appear in supported_dims. Anything a scanner can't honestly
+# quantify stays here.
+_PROFILE_ALWAYS_DEFAULTED_DIMS = {
+    "short_positioning": {"catalyst_proximity", "historical_analog"},
+    "takeover_candidate": set(),
+    "binary_catalyst": {"market_mispricing"},
+}
+
+
+def _max_evidence_payload(profile: str) -> dict:
+    """Payloads that exercise every supportable dim for the profile."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if profile == "short_positioning":
+        return {
+            "holder_count": 6,
+            "total_disclosed_pct": 12.0,
+            "regulators": ["FCA", "BaFin", "AMF"],
+            "holders": [
+                {"position_pct": 3.0, "position_date": today},
+                {"position_pct": 2.5, "position_date": today},
+                {"position_pct": 2.0, "position_date": today},
+                {"position_pct": 1.5, "position_date": today},
+            ],
+            "adv_usd": 75_000_000,
+        }
+    if profile == "takeover_candidate":
+        return {
+            "patterns_hit": 4,
+            "pattern_names": ["strategic_review", "pe_take_private"],
+            "primary_filing": {"file_date": today},
+            "pe_filer_type": "strategic",
+            "pe_filer_name": "BigCorp Industries",
+            "valuation_discount_pct": 22,
+            "adv_usd": 18_000_000,
+        }
+    if profile == "binary_catalyst":
+        return {
+            "days_until_pdufa": 10,
+            "adcom_vote": {"yes": 12, "no": 2},
+            "approval_history_count": 1,
+            "adv_usd": 22_000_000,
+            "upside_pct": 50.0,
+            "downside_pct": 35.0,
+            "approval_probability": 0.76,
+        }
+    raise AssertionError(f"no fixture for profile {profile}")
+
+
+@pytest.mark.parametrize("profile", _HEURISTIC_PROFILES)
+def test_supported_plus_defaulted_covers_every_weighted_dim(profile):
+    """The union of supported + defaulted must equal the profile's full WEIGHTS
+    keyset (no stray dims), and they must be disjoint."""
+    estimate = _estimate(profile, _max_evidence_payload(profile))
+    all_weighted = set(WEIGHTS[profile].keys())
+    supported = set(estimate.supported_dims)
+    defaulted = set(estimate.defaulted_dims)
+    assert supported | defaulted == all_weighted, (
+        f"{profile}: supported ∪ defaulted must equal WEIGHTS.keys(), "
+        f"got supported={supported}, defaulted={defaulted}, weighted={all_weighted}"
+    )
+    assert supported & defaulted == set(), (
+        f"{profile}: supported and defaulted must be disjoint, got overlap={supported & defaulted}"
+    )
+
+
+@pytest.mark.parametrize("profile", _HEURISTIC_PROFILES)
+def test_supported_dims_never_escape_allowlist(profile):
+    """With max-evidence payload, supported_dims ⊆ the profile's allowlist."""
+    estimate = _estimate(profile, _max_evidence_payload(profile))
+    allowed = _PROFILE_SUPPORTABLE_DIMS[profile]
+    stray = set(estimate.supported_dims) - allowed
+    assert stray == set(), (
+        f"{profile}: supported_dims contains dims not in allowlist: {stray}. "
+        f"Either the allowlist is stale, or the estimator grew new coverage "
+        f"without updating this test."
+    )
+
+
+@pytest.mark.parametrize("profile", _HEURISTIC_PROFILES)
+def test_always_defaulted_dims_stay_defaulted_under_max_evidence(profile):
+    """Dims marked as permanently heuristic-uncovered must stay in defaulted
+    even when max-evidence payload flows through the estimator."""
+    estimate = _estimate(profile, _max_evidence_payload(profile))
+    forbidden_in_supported = _PROFILE_ALWAYS_DEFAULTED_DIMS[profile]
+    leaked = forbidden_in_supported & set(estimate.supported_dims)
+    assert leaked == set(), (
+        f"{profile}: dims expected to always default leaked into supported: {leaked}"
+    )
+
+
+@pytest.mark.parametrize("profile", _HEURISTIC_PROFILES)
+def test_requires_resolution_tracks_defaulted_set(profile):
+    """`requires_resolution` must be True iff defaulted_dims is non-empty —
+    the reactor's provisional gate relies on this equivalence."""
+    estimate = _estimate(profile, _max_evidence_payload(profile))
+    assert estimate.requires_resolution == bool(estimate.defaulted_dims)
+
+
+@pytest.mark.parametrize("profile", _RESOLVER_ONLY_PROFILES)
+@pytest.mark.parametrize("payload", [
+    {},
+    {"keyword": "activist_13d"},
+    {"patterns_hit": 4},
+    {"spread_pct": 3.2, "deal_certainty_hint": 0.9},
+])
+def test_resolver_only_profiles_never_produce_estimates(profile, payload):
+    """activist_governance / merger_arb / litigation must return None for ANY
+    payload — they stay resolver-first per scope decision (2026-04-22). Adding
+    an estimator here is a governance change, not a refactor."""
+    assert estimate_dimensions(profile, payload) is None

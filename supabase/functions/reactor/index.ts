@@ -27,7 +27,7 @@ import {
   type GroupSignal,
 } from "../_shared/convergence.ts";
 import {
-  isProvisionalHeuristic,
+  classifyProvisionalHeuristic,
   shouldProcessUpdate,
 } from "./scoring-state.ts";
 
@@ -181,14 +181,24 @@ async function processSignal(sig: SignalRow) {
   // scoring_meta. If the estimator had to neutral-fill unsupported dims, the row
   // stays provisional and should be resolved before convergence / alerts /
   // thesis drafting treat it as final.
-  if (isProvisionalHeuristic(sig)) {
+  //
+  // A "malformed" heuristic row — _provenance='heuristic' with NO scoring_meta
+  // sidecar — is a scanner bug: we can't tell supported vs defaulted dims, so
+  // the row is routed to signal_resolver just like any other provisional row,
+  // AND we insert an operator_flag so the writing scanner gets fixed.
+  const provisional = classifyProvisionalHeuristic(sig);
+  if (provisional.provisional) {
     const enqueued = await enqueueNeedsScoring(sig.signal_id);
+    if (provisional.malformed) {
+      await flagHeuristicMissingScoringMeta(sig);
+    }
     return {
       processed: true,
       needs_scoring_enqueued: enqueued,
       signal_id: sig.signal_id,
       scoring_profile: sig.scoring_profile,
       provisional_scoring: true,
+      malformed_scoring_meta: provisional.malformed,
     };
   }
 
@@ -307,6 +317,39 @@ async function enqueueNeedsScoring(signal_id: string): Promise<boolean> {
     throw error;
   }
   return (data?.length ?? 0) > 0;
+}
+
+// Insert an operator_flag when a heuristic-stamped row is missing its
+// scoring_meta sidecar. This is a scanner writer bug — we still route the
+// row to signal_resolver so it can be fixed, but we also surface it so
+// operators can chase down the offending scanner. Per-signal dedup via
+// the partial unique index on (source, kind, signal_id) WHERE resolved_at IS NULL.
+// Never throws — flag-write failures cannot break reactor processing.
+async function flagHeuristicMissingScoringMeta(sig: SignalRow): Promise<void> {
+  try {
+    const { data: existing } = await sb
+      .from("operator_flags")
+      .select("id")
+      .eq("source", "reactor")
+      .eq("kind", "heuristic_missing_scoring_meta")
+      .eq("signal_id", sig.signal_id)
+      .is("resolved_at", null)
+      .limit(1);
+    if (existing && existing.length > 0) return;
+    await sb.from("operator_flags").insert({
+      severity: "error",
+      source: "reactor",
+      kind: "heuristic_missing_scoring_meta",
+      title: `Heuristic provenance without scoring_meta on signal ${sig.signal_id}`,
+      signal_id: sig.signal_id,
+      evidence: {
+        signal_id: sig.signal_id,
+        scoring_profile: sig.scoring_profile,
+      },
+    });
+  } catch (err) {
+    console.error("flagHeuristicMissingScoringMeta failed:", err);
+  }
 }
 
 // ----------------------------------------------------------------------

@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -37,6 +38,12 @@ from modal_workers.shared.supabase_client import SupabaseClient
 REPORT_PATH = REPO_ROOT / "migrations" / "backfill_heuristic_signal_scoring_report.json"
 TARGET_PROFILES = ("binary_catalyst", "short_positioning", "takeover_candidate")
 PAGE_SIZE = 200
+SCRIPT_VERSION = "v1"
+
+MODE_ALL = "all"
+MODE_CANDIDATE_LINKED_ONLY = "candidate-linked-only"
+MODE_ORPHANS_ONLY = "orphans-only"
+VALID_MODES = (MODE_ALL, MODE_CANDIDATE_LINKED_ONLY, MODE_ORPHANS_ONLY)
 
 
 def _quoted_in(values: Iterable[str]) -> str:
@@ -199,9 +206,26 @@ def _fetch_all_signal_metrics(client: SupabaseClient) -> Dict[str, Any]:
     return _metrics_from_signals(rows)
 
 
-def _merge_extensions(existing: Any, scoring_meta: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_extensions(
+    existing: Any,
+    scoring_meta: Dict[str, Any],
+    *,
+    batch_id: str,
+    run_at: str,
+) -> Dict[str, Any]:
+    """Merge scoring_meta and stamp this run's backfill batch into extensions.
+
+    The `backfill` key carries the UUID + run timestamp so replay paths and
+    post-run MCP queries can find every row touched by a specific run without
+    depending on the JSON report file (see --retry-reactor-failures-from).
+    """
     merged = dict(existing) if isinstance(existing, dict) else {}
     merged["scoring_meta"] = scoring_meta
+    merged["backfill"] = {
+        "batch_id": batch_id,
+        "run_at": run_at,
+        "script_version": SCRIPT_VERSION,
+    }
     return merged
 
 
@@ -229,6 +253,9 @@ def _build_backfill_patch(
     row: Dict[str, Any],
     entity: Optional[Dict[str, Any]],
     client: SupabaseClient,
+    *,
+    batch_id: str,
+    run_at: str,
 ) -> Dict[str, Any]:
     profile = row["scoring_profile"]
     raw_payload = _enriched_raw_payload(row, entity, client)
@@ -244,7 +271,12 @@ def _build_backfill_patch(
         )
         return {
             "dimensions": {},
-            "extensions": _merge_extensions(row.get("extensions"), scoring_meta),
+            "extensions": _merge_extensions(
+                row.get("extensions"),
+                scoring_meta,
+                batch_id=batch_id,
+                run_at=run_at,
+            ),
             "score": None,
             "band": None,
             "auto_caps_triggered": [],
@@ -262,6 +294,8 @@ def _build_backfill_patch(
         "extensions": _merge_extensions(
             row.get("extensions"),
             estimate.scoring_meta("heuristic"),
+            batch_id=batch_id,
+            run_at=run_at,
         ),
         "score": scored["score"],
         "band": scored["band"],
@@ -327,46 +361,185 @@ def _replay_reactor(client: SupabaseClient, record: Dict[str, Any]) -> requests.
     return response
 
 
-def _retry_reactor_failures(
-    *,
-    report_path: Path,
-) -> Dict[str, Any]:
-    _require_supabase_env()
-    client = SupabaseClient()
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    failures = report.get("reactor_failures") or []
-    retried: List[Dict[str, Any]] = []
-    for failure in failures:
-        signal_id = failure.get("signal_id")
-        if not signal_id:
-            continue
-        rows = client._rest(
-            "GET",
-            "signals",
+def _fetch_batch_replay_candidates(
+    client: SupabaseClient,
+    batch_id: str,
+) -> List[Dict[str, Any]]:
+    """Find rows touched by a given backfill batch that still need convergence.
+
+    Resumability criteria (4.2):
+      - `extensions.backfill.batch_id == :batch_id`  — this batch touched it
+      - `score IS NOT NULL`                           — heuristic produced a score
+      - `extensions.scoring_meta.requires_resolution = false` — not provisional
+      - `band_with_bonus IS NULL`                     — reactor never completed
+
+    These rows are ready for reactor replay; failures from the original backfill
+    run fall into this set automatically, even if the JSON report file is lost.
+    """
+    candidates: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = client._rest(
+            "GET", "signals",
             params={
                 "select": "*",
-                "signal_id": f"eq.{signal_id}",
-                "limit": "1",
+                "extensions->backfill->>batch_id": f"eq.{batch_id}",
+                "score": "not.is.null",
+                "extensions->scoring_meta->>requires_resolution": "eq.false",
+                "band_with_bonus": "is.null",
+                "order": "created_at.asc",
+                "limit": str(PAGE_SIZE),
+                "offset": str(offset),
             },
         ) or []
-        if not rows:
-            retried.append({"signal_id": signal_id, "status": "missing"})
-            continue
-        response = _replay_reactor(client, rows[0])
-        retried.append(
-            {
-                "signal_id": signal_id,
+        candidates.extend(page)
+        if len(page) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+    return candidates
+
+
+def _retry_reactor_failures(
+    *,
+    report_path: Optional[Path] = None,
+    batch_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Replay reactor for rows left without convergence by a prior backfill.
+
+    Two resumption modes (4.2):
+      - `batch_id`: DB-authoritative. Queries signals.extensions.backfill to
+        rebuild the replay set — survives report-file loss.
+      - `report_path`: legacy. Reads `reactor_failures` from the JSON report.
+        Used for historical runs where batch_id wasn't stamped.
+
+    Passing both is valid: the DB set is authoritative; the report list
+    supplements with any signal_ids not captured by DB filters (e.g. rows
+    from backfill runs before 4.1 landed).
+    """
+    if report_path is None and batch_id is None:
+        raise SystemExit("must pass --batch-id or --retry-reactor-failures-from")
+
+    _require_supabase_env()
+    client = SupabaseClient()
+
+    db_candidates: List[Dict[str, Any]] = []
+    legacy_candidates: List[Dict[str, Any]] = []
+    resolved_batch_id = batch_id
+
+    # DB-authoritative path.
+    if batch_id:
+        db_candidates = _fetch_batch_replay_candidates(client, batch_id)
+
+    # Legacy report-file path — used standalone, or as supplement.
+    if report_path:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        # Pick up the batch_id from the report if we weren't given one — this
+        # lets `--retry-reactor-failures-from report.json` still use the DB
+        # query for reports produced after 4.1 shipped.
+        if resolved_batch_id is None:
+            resolved_batch_id = report.get("batch_id")
+            if resolved_batch_id:
+                db_candidates = _fetch_batch_replay_candidates(client, resolved_batch_id)
+        seen_ids = {row["signal_id"] for row in db_candidates}
+        failure_ids = [
+            f.get("signal_id") for f in (report.get("reactor_failures") or [])
+            if f.get("signal_id")
+        ]
+        for sid in failure_ids:
+            if sid in seen_ids:
+                continue
+            rows = client._rest(
+                "GET", "signals",
+                params={"select": "*", "signal_id": f"eq.{sid}", "limit": "1"},
+            ) or []
+            if rows:
+                legacy_candidates.append(rows[0])
+                seen_ids.add(sid)
+
+    all_candidates = db_candidates + legacy_candidates
+    retried: List[Dict[str, Any]] = []
+    for row in all_candidates:
+        try:
+            response = _replay_reactor(client, row)
+            retried.append({
+                "signal_id": row["signal_id"],
                 "status": "ok" if response.ok else "error",
                 "status_code": response.status_code,
-                "body": response.text[:500],
-            }
-        )
+                "body": response.text[:500] if not response.ok else None,
+                "source": "db" if row in db_candidates else "legacy_report",
+            })
+        except requests.RequestException as exc:
+            retried.append({
+                "signal_id": row.get("signal_id"),
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "source": "db" if row in db_candidates else "legacy_report",
+            })
+
     return {
         "ran_at_utc": _utc_now(),
         "mode": "retry_reactor_failures",
-        "source_report": str(report_path),
+        "batch_id": resolved_batch_id,
+        "source_report": str(report_path) if report_path else None,
+        "db_state_candidates": len(db_candidates),
+        "legacy_report_fallbacks": len(legacy_candidates),
         "retried": retried,
+        "retried_ok": sum(1 for r in retried if r.get("status") == "ok"),
+        "retried_error": sum(1 for r in retried if r.get("status") != "ok"),
     }
+
+
+def _metrics_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    delta: Dict[str, Any] = {}
+    for key in (
+        "scored_rows", "exact_30_rows", "scored_without_provenance",
+        "total_numeric_dims", "numeric_dim_threes",
+    ):
+        delta[key] = (after.get(key) or 0) - (before.get(key) or 0)
+    return delta
+
+
+def _write_metrics_snapshot_flag(
+    client: SupabaseClient,
+    *,
+    batch_id: str,
+    run_at: str,
+    dry_run: bool,
+    mode: str,
+    metrics_before: Dict[str, Any],
+    metrics_after: Dict[str, Any],
+    summary: Dict[str, Any],
+) -> None:
+    """Persist before/after metrics into operator_flags so the delta is
+    retrievable without the JSON report file (4.4 contract)."""
+    try:
+        client._rest(
+            "POST", "operator_flags",
+            json_body={
+                "severity": "info",
+                "source": "backfill_heuristic_signal_scoring",
+                "kind": "backfill_metrics_snapshot",
+                "title": (
+                    f"heuristic backfill {'(dry-run)' if dry_run else ''} "
+                    f"batch={batch_id[:8]} mode={mode}"
+                ),
+                "evidence": {
+                    "batch_id": batch_id,
+                    "run_at": run_at,
+                    "dry_run": dry_run,
+                    "mode": mode,
+                    "summary": summary,
+                    "metrics_before": metrics_before,
+                    "metrics_after": metrics_after,
+                    "metrics_delta": _metrics_delta(metrics_before, metrics_after),
+                },
+            },
+            prefer="return=minimal",
+        )
+    except Exception as e:  # noqa: BLE001
+        # Metric-flag write must not break the backfill — the JSON report is
+        # still the primary record; the flag is a convenience surface.
+        print(f"warning: failed to write backfill_metrics_snapshot flag: {e}")
 
 
 def backfill(
@@ -375,9 +548,15 @@ def backfill(
     include_candidate_linked: bool,
     limit: Optional[int],
     signal_ids: Optional[List[str]] = None,
+    mode: str = MODE_ALL,
 ) -> Dict[str, Any]:
+    if mode not in VALID_MODES:
+        raise SystemExit(f"--mode must be one of {VALID_MODES}, got {mode!r}")
     _require_supabase_env()
     client = SupabaseClient()
+    batch_id = str(uuid.uuid4())
+    run_at = _utc_now()
+
     rows = _fetch_scored_signals(client, limit=limit, signal_ids=signal_ids)
     thesis_jobs = _fetch_thesis_jobs(client, [row["signal_id"] for row in rows])
     entity_ids = [row["entity_id"] for row in rows if row.get("entity_id")]
@@ -385,17 +564,26 @@ def backfill(
     metrics_before = _fetch_all_signal_metrics(client)
 
     summary = {
+        "batch_id": batch_id,
+        "run_at": run_at,
+        "mode": mode,
         "rows_examined": len(rows),
         "rows_updated": 0,
         "rows_unchanged": 0,
         "rows_replayed": 0,
         "rows_queued_for_scoring": 0,
         "rows_skipped_candidate_linked": 0,
+        "rows_skipped_orphan_by_mode": 0,
         "rows_candidate_linked_seen": 0,
         "reactor_failures": 0,
     }
     skipped_candidate_linked: List[str] = []
-    changed_signals: List[Dict[str, Any]] = []
+    skipped_orphan_by_mode: List[str] = []
+    # 4.3: split the changed-signals audit trail so operators can see how much
+    # of the run touched live-candidate rows (higher blast radius) vs orphan
+    # signals (safe churn).
+    candidate_linked_rewrites: List[Dict[str, Any]] = []
+    orphan_rewrites: List[Dict[str, Any]] = []
     reactor_failures: List[Dict[str, Any]] = []
 
     for row in rows:
@@ -410,7 +598,19 @@ def backfill(
         )
         if candidate_linked:
             summary["rows_candidate_linked_seen"] += 1
-        if candidate_linked and not include_candidate_linked:
+
+        # Mode filter (4.3): `candidate-linked-only` drops orphans,
+        # `orphans-only` drops candidate-linked, `all` defers to
+        # include_candidate_linked.
+        if mode == MODE_CANDIDATE_LINKED_ONLY and not candidate_linked:
+            summary["rows_skipped_orphan_by_mode"] += 1
+            skipped_orphan_by_mode.append(signal_id)
+            continue
+        if mode == MODE_ORPHANS_ONLY and candidate_linked:
+            summary["rows_skipped_candidate_linked"] += 1
+            skipped_candidate_linked.append(signal_id)
+            continue
+        if mode == MODE_ALL and candidate_linked and not include_candidate_linked:
             summary["rows_skipped_candidate_linked"] += 1
             skipped_candidate_linked.append(signal_id)
             continue
@@ -419,25 +619,26 @@ def backfill(
             row,
             entities.get(row.get("entity_id")),
             client,
+            batch_id=batch_id,
+            run_at=run_at,
         )
         patch = _signals_patch(row, recomputed)
         if not _row_needs_update(row, patch):
             summary["rows_unchanged"] += 1
             continue
 
-        changed_signals.append(
-            {
-                "signal_id": signal_id,
-                "scoring_profile": row["scoring_profile"],
-                "score_before": row.get("score"),
-                "score_after": patch["score"],
-                "band_before": row.get("band"),
-                "band_after": patch["band"],
-                "requires_resolution": recomputed["requires_resolution"],
-                "candidate_linked": candidate_linked,
-                "queue_action": "needs_scoring" if recomputed["requires_resolution"] else "reactor_replay",
-            }
-        )
+        change_entry = {
+            "signal_id": signal_id,
+            "scoring_profile": row["scoring_profile"],
+            "score_before": row.get("score"),
+            "score_after": patch["score"],
+            "band_before": row.get("band"),
+            "band_after": patch["band"],
+            "requires_resolution": recomputed["requires_resolution"],
+            "candidate_linked": candidate_linked,
+            "queue_action": "needs_scoring" if recomputed["requires_resolution"] else "reactor_replay",
+        }
+        (candidate_linked_rewrites if candidate_linked else orphan_rewrites).append(change_entry)
 
         if dry_run:
             summary["rows_updated"] += 1
@@ -477,12 +678,25 @@ def backfill(
 
     metrics_after = metrics_before if dry_run else _fetch_all_signal_metrics(client)
 
+    _write_metrics_snapshot_flag(
+        client,
+        batch_id=batch_id,
+        run_at=run_at,
+        dry_run=dry_run,
+        mode=mode,
+        metrics_before=metrics_before,
+        metrics_after=metrics_after,
+        summary=summary,
+    )
+
     result = {
-        "ran_at_utc": _utc_now(),
+        "ran_at_utc": run_at,
+        "batch_id": batch_id,
         "dry_run": dry_run,
+        "mode": mode,
         "candidate_linked_policy": (
             "include_promoted_and_candidate_linked"
-            if include_candidate_linked
+            if include_candidate_linked or mode == MODE_CANDIDATE_LINKED_ONLY
             else "skip_promoted_or_candidate_linked"
         ),
         "include_candidate_linked": include_candidate_linked,
@@ -491,9 +705,13 @@ def backfill(
         "profiles": list(TARGET_PROFILES),
         "metrics_before": metrics_before,
         "metrics_after": metrics_after,
+        "metrics_delta": _metrics_delta(metrics_before, metrics_after),
         "summary": summary,
-        "changed_signals_sample": changed_signals[:50],
+        "candidate_linked_rewrites": candidate_linked_rewrites,
+        "orphan_rewrites": orphan_rewrites,
+        "changed_signals_sample": (candidate_linked_rewrites + orphan_rewrites)[:50],
         "skipped_candidate_linked": skipped_candidate_linked,
+        "skipped_orphan_by_mode": skipped_orphan_by_mode,
         "reactor_failures": reactor_failures,
     }
     REPORT_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -507,7 +725,19 @@ def main() -> None:
     parser.add_argument(
         "--include-candidate-linked",
         action="store_true",
-        help="Also rewrite rows whose thesis job is already linked to a candidate.",
+        help="Also rewrite rows whose thesis job is already linked to a candidate. "
+             "Ignored when --mode is candidate-linked-only or orphans-only.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=VALID_MODES,
+        default=MODE_ALL,
+        help=(
+            "Row selection mode. 'all' (default) mirrors the legacy behavior. "
+            "'candidate-linked-only' processes only rows tied to live candidates "
+            "(higher blast radius — use for targeted remediation). "
+            "'orphans-only' processes only signals with no candidate link (safe churn)."
+        ),
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
@@ -518,10 +748,22 @@ def main() -> None:
         "--retry-reactor-failures-from",
         help="Path to a prior backfill report JSON. Replays only the recorded reactor failures.",
     )
+    parser.add_argument(
+        "--retry-batch",
+        help=(
+            "UUID of a prior backfill run (signals.extensions.backfill.batch_id). "
+            "Replays every row touched by that batch which still needs convergence — "
+            "survives loss of the JSON report file. Prefer this over "
+            "--retry-reactor-failures-from for batches produced after 4.1 shipped."
+        ),
+    )
     args = parser.parse_args()
 
-    if args.retry_reactor_failures_from:
-        result = _retry_reactor_failures(report_path=Path(args.retry_reactor_failures_from))
+    if args.retry_reactor_failures_from or args.retry_batch:
+        result = _retry_reactor_failures(
+            report_path=Path(args.retry_reactor_failures_from) if args.retry_reactor_failures_from else None,
+            batch_id=args.retry_batch,
+        )
         print(json.dumps(result, indent=2))
         return
 
@@ -532,6 +774,7 @@ def main() -> None:
         include_candidate_linked=args.include_candidate_linked,
         limit=args.limit,
         signal_ids=signal_ids or None,
+        mode=args.mode,
     )
     print(json.dumps(result, indent=2))
     print(f"Full report: {result['report_path']}")

@@ -32,6 +32,7 @@ Auth-required handling:
 
 from __future__ import annotations
 
+import logging
 import os
 import traceback
 from dataclasses import dataclass, field, asdict
@@ -44,7 +45,10 @@ from modal_workers.shared.rubric_engine import (
     build_scoring_meta,
     dimensions_with_provenance,
     score_signal,
+    validate_scoring_meta,
 )
+
+logger = logging.getLogger(__name__)
 from modal_workers.shared.supabase_client import (
     EntityHints,
     ScannerConfig,
@@ -137,7 +141,12 @@ def _normalise_direction(d: Any) -> Optional[str]:
     return None
 
 
-def _scanner_scoring_meta(profile: str, raw_dims: Dict[str, Any]) -> Dict[str, Any]:
+def _scanner_scoring_meta(
+    profile: str,
+    raw_dims: Dict[str, Any],
+    *,
+    data_freshness: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     required = list(WEIGHTS[profile].keys())
     supported = [dim for dim in required if dim in raw_dims]
     defaulted = [dim for dim in required if dim not in raw_dims]
@@ -147,7 +156,37 @@ def _scanner_scoring_meta(profile: str, raw_dims: Dict[str, Any]) -> Dict[str, A
         defaulted_dims=defaulted,
         requires_resolution=bool(defaulted),
         missing_dimensions=defaulted or None,
+        data_freshness=data_freshness,
     )
+
+
+_LIVENESS_TO_STATUS = {
+    "live": "live",
+    "stale_served": "stale_served",
+    "unavailable": "missing",
+}
+
+
+def _extract_data_freshness(raw_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pull market_snapshot liveness metadata out of the merged raw_payload.
+
+    Scanners that call `load_market_snapshot` merge its return dict (including
+    `source_liveness` + `age_seconds`) into raw_payload. We surface that here
+    as a compact `data_freshness` block for scoring_meta. Returns None when
+    no snapshot was attempted, so profiles that never touch market data don't
+    grow an empty key.
+    """
+    liveness = raw_payload.get("source_liveness")
+    if not liveness:
+        return None
+    status = _LIVENESS_TO_STATUS.get(liveness, liveness)
+    return {
+        "market_snapshot": {
+            "status": status,
+            "age_seconds": raw_payload.get("age_seconds"),
+            "source": raw_payload.get("market_snapshot_source") or "unknown",
+        }
+    }
 
 
 def _signal_to_row(
@@ -179,18 +218,26 @@ def _signal_to_row(
 
     persisted_dimensions: Dict[str, Any]
     extensions: Dict[str, Any] = dict(sig.extensions or {})
+    data_freshness = _extract_data_freshness(scoring_payload)
     if estimate is not None:
         persisted_dimensions = dimensions_with_provenance(
             scored["dimensions"],
             "heuristic",
         )
-        extensions["scoring_meta"] = estimate.scoring_meta("heuristic")
+        extensions["scoring_meta"] = estimate.scoring_meta(
+            "heuristic",
+            data_freshness=data_freshness,
+        )
     elif raw_dims is not None:
         persisted_dimensions = dimensions_with_provenance(
             scored["dimensions"],
             "scanner",
         )
-        extensions["scoring_meta"] = _scanner_scoring_meta(profile, raw_dims)
+        extensions["scoring_meta"] = _scanner_scoring_meta(
+            profile,
+            raw_dims,
+            data_freshness=data_freshness,
+        )
     else:
         persisted_dimensions = scored["dimensions"]
         if scored.get("missing_dimensions"):
@@ -200,6 +247,15 @@ def _signal_to_row(
                 defaulted_dims=[],
                 requires_resolution=True,
                 missing_dimensions=list(scored["missing_dimensions"]),
+                data_freshness=data_freshness,
+            )
+
+    if "scoring_meta" in extensions:
+        meta_errors = validate_scoring_meta(extensions["scoring_meta"])
+        if meta_errors:
+            logger.warning(
+                "scoring_meta shape invalid for signal_id=%s profile=%s: %s",
+                sig.signal_id, profile, "; ".join(meta_errors),
             )
 
     return {

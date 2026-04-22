@@ -140,6 +140,40 @@ def _resolve_flag(
     return len(resp_rows or [])
 
 
+def record_snapshot_fetch_failure(
+    client: SupabaseClient,
+    *,
+    scanner_name: str,
+    ticker: str,
+    exc: BaseException,
+) -> None:
+    """Log a market_snapshot fetch failure to operator_flags.
+
+    Replaces the bare `except Exception: continue/pass` at scanner caller
+    sites (esma / takeover / fda) so provider outages become visible via
+    open flags instead of silent-drop. The partial unique index on
+    (source, kind, open) collapses repeated upserts to one row per scanner,
+    with evidence carrying the most recent failure. Never raises — flag
+    writing must not break the scanner loop.
+    """
+    try:
+        _upsert_flag(
+            client,
+            severity="info",
+            source=f"scanner:{scanner_name}",
+            kind="market_snapshot_fetch_failed",
+            title=f"market_snapshot fetch failed for {ticker}",
+            body=f"{type(exc).__name__}: {exc}",
+            evidence={
+                "ticker": ticker,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:400],
+            },
+        )
+    except Exception:  # noqa: BLE001 — observability MUST NOT break scanners
+        pass
+
+
 # ===========================================================================
 # 7.6.1 translation_health
 # ===========================================================================
@@ -832,6 +866,220 @@ def orphan_convergence_sweeper(client: Optional[SupabaseClient] = None) -> Dict[
 
 
 # ===========================================================================
+# thesis_jobs_sla_sweeper — detect + unblock stuck queue rows
+#
+# Pattern-copy from orphan_convergence_sweeper. Each queue status has its own
+# age threshold. We stamp one flag per breaching status (kind=f"sla_breach_{status}"),
+# auto-resolving when that status clears. The only status we auto-reset is
+# `scoring` — a crashed signal_resolver worker is the most common cause, and
+# the transition `scoring → needs_scoring` is idempotent. Drafting is human-
+# in-the-loop (Claude skill); we flag but don't touch it.
+#
+# Age uses `updated_at` today. That's imprecise (re-bumps on unrelated patches)
+# but the plan defers adding a dedicated `status_entered_at` column — ship the
+# flag sweeper first, see if noise is a problem, then upgrade.
+# ===========================================================================
+
+_SLA_THRESHOLDS_S: Dict[str, int] = {
+    "needs_scoring": 30 * 60,   # 30min — signal_resolver claim latency budget
+    "scoring": 15 * 60,         # 15min — dim estimation should be fast
+    "queued": 60 * 60,          # 60min — thesis_writer poll + draft
+    "drafting": 45 * 60,        # 45min — Claude skill wall-clock
+}
+_SLA_BATCH_LIMIT = 200
+_SLA_SAMPLE_SIZE = 5
+_SCORING_AUTO_RESET_MAX_ATTEMPTS = 3
+
+
+def _age_seconds(updated_at: Any, now: datetime) -> Optional[int]:
+    if not isinstance(updated_at, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return int((now - ts).total_seconds())
+
+
+def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Detect stuck thesis_jobs rows and — for `scoring` specifically —
+    auto-reset to `needs_scoring` (3.2) until attempt_count exceeds the
+    retry budget, at which point the row is promoted to `dlq`."""
+    client = client or SupabaseClient()
+    now = datetime.now(timezone.utc)
+    summary: Dict[str, Any] = {
+        "function": "thesis_jobs_sla_sweeper",
+        "breaches_by_status": {},
+        "scoring_resets": 0,
+        "scoring_dlqs": 0,
+    }
+
+    for status, threshold_s in _SLA_THRESHOLDS_S.items():
+        cutoff = (now - timedelta(seconds=threshold_s)).isoformat()
+        rows = client._rest(
+            "GET", "thesis_jobs",
+            params={
+                # Embedded select pulls scoring_profile from the signals FK in one roundtrip.
+                "select": "id,signal_id,status,updated_at,attempt_count,signals(scoring_profile)",
+                "status": f"eq.{status}",
+                "updated_at": f"lt.{cutoff}",
+                "order": "updated_at.asc",
+                "limit": str(_SLA_BATCH_LIMIT),
+            },
+        ) or []
+        summary["breaches_by_status"][status] = len(rows)
+
+        if not rows:
+            _resolve_flag(
+                client,
+                source="thesis_jobs",
+                kind=f"sla_breach_{status}",
+                note=f"auto-resolved: 0 jobs stuck in {status}",
+            )
+            continue
+
+        sample: List[Dict[str, Any]] = []
+        for row in rows[:_SLA_SAMPLE_SIZE]:
+            signals_inner = row.get("signals")
+            profile = None
+            if isinstance(signals_inner, dict):
+                profile = signals_inner.get("scoring_profile")
+            elif isinstance(signals_inner, list) and signals_inner:
+                # PostgREST may return embedded resources as a list in some schemas.
+                inner = signals_inner[0]
+                profile = inner.get("scoring_profile") if isinstance(inner, dict) else None
+            sample.append({
+                "job_id": row.get("id"),
+                "signal_id": row.get("signal_id"),
+                "age_seconds": _age_seconds(row.get("updated_at"), now),
+                "attempt_count": row.get("attempt_count"),
+                "scoring_profile": profile,
+            })
+
+        # 3.2 — auto-reset for `scoring` status only. Crashed worker → row
+        # stuck pre-commit → safe to reset.
+        resets = 0
+        dlqs = 0
+        severity = "warn"
+        if status == "scoring":
+            for row in rows:
+                attempt = int(row.get("attempt_count") or 0)
+                next_attempt = attempt + 1
+                if next_attempt >= _SCORING_AUTO_RESET_MAX_ATTEMPTS:
+                    client._rest(
+                        "PATCH", "thesis_jobs",
+                        params={"id": f"eq.{row['id']}"},
+                        json_body={"status": "dlq", "attempt_count": next_attempt},
+                        prefer="return=minimal",
+                    )
+                    dlqs += 1
+                else:
+                    client._rest(
+                        "PATCH", "thesis_jobs",
+                        params={"id": f"eq.{row['id']}"},
+                        json_body={"status": "needs_scoring", "attempt_count": next_attempt},
+                        prefer="return=minimal",
+                    )
+                    resets += 1
+            summary["scoring_resets"] = resets
+            summary["scoring_dlqs"] = dlqs
+            if dlqs > 0:
+                severity = "error"
+
+        _upsert_flag(
+            client,
+            severity=severity,
+            source="thesis_jobs",
+            kind=f"sla_breach_{status}",
+            title=f"{len(rows)} thesis_jobs stuck in {status} past {threshold_s}s",
+            evidence={
+                "status": status,
+                "threshold_seconds": threshold_s,
+                "breach_count": len(rows),
+                "sample": sample,
+                "scoring_resets": resets if status == "scoring" else None,
+                "scoring_dlqs": dlqs if status == "scoring" else None,
+            },
+        )
+
+    return summary
+
+
+# ===========================================================================
+# provisional_convergence_audit — detect invariant-violating rows
+#
+# Invariant: a row with `extensions.scoring_meta.requires_resolution=true` must
+# NEVER carry `band_with_bonus` (convergence stamp). The reactor's
+# `classifyProvisionalHeuristic` gate enforces this — rows flagged provisional
+# are routed to signal_resolver BEFORE convergence can stamp them. If this
+# query ever returns a row, the reactor gate has regressed.
+#
+# This sweeper does NOT auto-fix: stamping a convergence result is not safe to
+# silently undo (the row may have driven alerts / thesis drafts). It just
+# surfaces a severity=error flag so an operator can investigate.
+# ===========================================================================
+
+_PROVISIONAL_AUDIT_LIMIT = 100
+
+
+def provisional_convergence_audit(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Flag any signals that hold a provisional scoring_meta AND convergence
+    stamps. In steady state the count is 0; a non-zero result means the
+    reactor's provisional guard leaked. Runs every 6h."""
+    client = client or SupabaseClient()
+    summary: Dict[str, Any] = {"function": "provisional_convergence_audit"}
+
+    violators = client._rest(
+        "GET", "signals",
+        params={
+            "select": "signal_id,scoring_profile,band_with_bonus,score_with_bonus",
+            "extensions->scoring_meta->>requires_resolution": "eq.true",
+            "band_with_bonus": "not.is.null",
+            "limit": str(_PROVISIONAL_AUDIT_LIMIT),
+        },
+    ) or []
+    summary["violators_found"] = len(violators)
+
+    if not violators:
+        _resolve_flag(
+            client,
+            source="reactor",
+            kind="provisional_converged_invariant_violated",
+            note="auto-resolved: 0 provisional rows carry convergence stamps",
+        )
+        return summary
+
+    sample_ids = [row.get("signal_id") for row in violators[:10]]
+    profiles_breakdown: Dict[str, int] = {}
+    for row in violators:
+        profile = row.get("scoring_profile") or "unknown"
+        profiles_breakdown[profile] = profiles_breakdown.get(profile, 0) + 1
+    summary["sample_signal_ids"] = sample_ids
+    summary["per_profile"] = profiles_breakdown
+
+    _upsert_flag(
+        client,
+        severity="error",
+        source="reactor",
+        kind="provisional_converged_invariant_violated",
+        title=f"{len(violators)} provisional rows carry convergence stamps",
+        evidence={
+            "violators_found": len(violators),
+            "sample_signal_ids": sample_ids,
+            "per_profile": profiles_breakdown,
+            "note": (
+                "classifyProvisionalHeuristic should route these to signal_resolver "
+                "before convergence — investigate reactor gate regression or direct "
+                "SQL writes bypassing the edge function"
+            ),
+        },
+    )
+    return summary
+
+
+# ===========================================================================
 # Health sub-entry (for ad-hoc invocation)
 # ===========================================================================
 
@@ -850,6 +1098,43 @@ def summarize_open_flags(client: Optional[SupabaseClient] = None) -> Dict[str, A
         out.setdefault(sev, {}).setdefault(src, 0)
         out[sev][src] += 1
     return {"open_flags": out, "total_open": len(rows)}
+
+
+def summarize_provisional_backlog(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """How many heuristic signals are still flagged provisional by profile.
+
+    Surface for answering "is the signal_resolver keeping up?" without ad-hoc
+    SQL. A growing number per profile = backlog; sustained growth = resolver
+    capacity problem. Dashboard panels consume this via the scanner-health
+    endpoint. Paginated because provisional counts can exceed PAGE_SIZE during
+    burst periods — we don't want a silent cap on the backlog number.
+    """
+    client = client or SupabaseClient()
+    counts: Dict[str, int] = {}
+    page_size = 500
+    offset = 0
+    while True:
+        rows = client._rest(
+            "GET", "signals",
+            params={
+                "select": "scoring_profile",
+                "extensions->scoring_meta->>requires_resolution": "eq.true",
+                "band_with_bonus": "is.null",
+                "order": "scan_date.asc",
+                "limit": str(page_size),
+                "offset": str(offset),
+            },
+        ) or []
+        for row in rows:
+            profile = row.get("scoring_profile") or "unknown"
+            counts[profile] = counts.get(profile, 0) + 1
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return {
+        "provisional_by_profile": counts,
+        "total_provisional": sum(counts.values()),
+    }
 
 
 # ===========================================================================

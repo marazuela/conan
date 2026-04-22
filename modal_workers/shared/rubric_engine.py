@@ -124,8 +124,16 @@ def build_scoring_meta(
     defaulted_dims: List[str],
     requires_resolution: bool,
     missing_dimensions: List[str] | None = None,
+    data_freshness: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Canonical JSON shape for `extensions.scoring_meta`."""
+    """Canonical JSON shape for `extensions.scoring_meta`.
+
+    `data_freshness` is an optional per-source staleness block (e.g. market
+    snapshot age/liveness) attached by the scanner so reactor + UI can
+    distinguish live-data scores from rows scored off stale external data.
+    Shape: `{"market_snapshot": {"status": "live"|"stale_served"|"missing",
+    "age_seconds": int|None, "source": str}}`.
+    """
     meta: Dict[str, Any] = {
         "provenance": provenance,
         "supported_dims": list(supported_dims),
@@ -134,7 +142,65 @@ def build_scoring_meta(
     }
     if missing_dimensions:
         meta["missing_dimensions"] = list(missing_dimensions)
+    if data_freshness:
+        meta["data_freshness"] = dict(data_freshness)
     return meta
+
+
+VALID_PROVENANCES = frozenset(
+    {"heuristic", "scanner", "unscored", "ai_resolved", "analyst"}
+)
+
+
+def validate_scoring_meta(meta: Any) -> List[str]:
+    """Return a list of shape errors on the scoring_meta dict (empty when valid).
+
+    Enforces the contract reactor/UI depend on: without this, a future change to
+    `build_scoring_meta` could drop a key and reactor `isProvisionalHeuristic`
+    would silently misclassify rows. Tests call this with expectation `==[]`;
+    `_signal_to_row` logs a warning when this returns non-empty, so dev
+    accidents surface in Modal logs without a per-signal DB write.
+    """
+    errors: List[str] = []
+    if not isinstance(meta, dict):
+        return ["scoring_meta must be a dict"]
+
+    for required_key in ("provenance", "supported_dims", "defaulted_dims", "requires_resolution"):
+        if required_key not in meta:
+            errors.append(f"missing required key: {required_key}")
+
+    provenance = meta.get("provenance")
+    if provenance is not None and provenance not in VALID_PROVENANCES:
+        errors.append(
+            f"invalid provenance: {provenance!r} (expected one of {sorted(VALID_PROVENANCES)})"
+        )
+
+    supported = meta.get("supported_dims")
+    if "supported_dims" in meta and not isinstance(supported, list):
+        errors.append("supported_dims must be a list")
+    defaulted = meta.get("defaulted_dims")
+    if "defaulted_dims" in meta and not isinstance(defaulted, list):
+        errors.append("defaulted_dims must be a list")
+
+    requires_resolution = meta.get("requires_resolution")
+    if "requires_resolution" in meta and not isinstance(requires_resolution, bool):
+        errors.append("requires_resolution must be bool")
+
+    if isinstance(supported, list) and isinstance(defaulted, list):
+        overlap = sorted(set(supported) & set(defaulted))
+        if overlap:
+            errors.append(f"supported_dims and defaulted_dims overlap: {overlap}")
+
+    if provenance in {"heuristic", "scanner"}:
+        missing = meta.get("missing_dimensions")
+        if isinstance(missing, list) and isinstance(defaulted, list):
+            stray = sorted(set(missing) - set(defaulted))
+            if stray:
+                errors.append(
+                    f"missing_dimensions contains dims not in defaulted_dims: {stray}"
+                )
+
+    return errors
 
 
 # --------------------------------------------------------------------

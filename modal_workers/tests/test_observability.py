@@ -130,6 +130,51 @@ def test_summarize_open_flags_uses_bare_path(fake_client):
     assert result == {"open_flags": {}, "total_open": 0}
 
 
+def test_record_snapshot_fetch_failure_upserts_flag_with_ticker_evidence(fake_client):
+    """Scanner-side snapshot failure → operator_flags row with scanner-scoped
+    source + ticker in evidence."""
+    observability.record_snapshot_fetch_failure(
+        fake_client,
+        scanner_name="esma_short_scanner",
+        ticker="ACME",
+        exc=RuntimeError("yfinance 429 Too Many Requests"),
+    )
+
+    gets = [c for c in fake_client.captured
+            if c["method"] == "GET" and c["path"] == "operator_flags"]
+    assert len(gets) == 1
+    assert gets[0]["params"]["source"] == "eq.scanner:esma_short_scanner"
+    assert gets[0]["params"]["kind"] == "eq.market_snapshot_fetch_failed"
+
+    posts = [c for c in fake_client.captured
+             if c["method"] == "POST" and c["path"] == "operator_flags"]
+    assert len(posts) == 1
+    body = posts[0]["json_body"]
+    assert body["severity"] == "info"
+    assert body["source"] == "scanner:esma_short_scanner"
+    assert body["kind"] == "market_snapshot_fetch_failed"
+    assert body["evidence"]["ticker"] == "ACME"
+    assert body["evidence"]["error_type"] == "RuntimeError"
+    assert "429" in body["evidence"]["error_message"]
+
+
+def test_record_snapshot_fetch_failure_swallows_flag_write_errors(monkeypatch):
+    """Flag writing must NEVER break the scanner loop — even if _upsert_flag
+    raises, the helper returns normally."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("supabase down")
+
+    monkeypatch.setattr(observability, "_upsert_flag", boom)
+
+    observability.record_snapshot_fetch_failure(
+        None,  # type: ignore[arg-type]
+        scanner_name="takeover_candidate_scanner",
+        ticker="XYZ",
+        exc=ValueError("parse fail"),
+    )  # must not raise
+
+
 def test_substitute_url_template_replaces_date_placeholders():
     """tdnet-style URLs with `{YYYYMMDD}` must be substituted to the probe target."""
     from datetime import datetime, timezone
@@ -263,6 +308,218 @@ def test_orphan_convergence_sweeper_replays_reactor_per_row(monkeypatch):
     # Authorization header uses service key; no webhook secret required if
     # none is configured on the reactor.
     assert captured_posts[0]["headers"]["Authorization"] == "Bearer fake_service_key"
+
+
+def test_provisional_convergence_audit_flags_violators(monkeypatch):
+    """Rows with requires_resolution=true AND band_with_bonus stamped are
+    invariant violations; sweeper must raise an error flag, never auto-fix."""
+    captured_rest = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured_rest.append({"method": method, "path": path, "params": params,
+                              "json_body": json_body, "prefer": prefer})
+        if method == "GET" and path == "signals":
+            return [
+                {"signal_id": "s1", "scoring_profile": "short_positioning",
+                 "band_with_bonus": "immediate", "score_with_bonus": 36.5},
+                {"signal_id": "s2", "scoring_profile": "takeover_candidate",
+                 "band_with_bonus": "watchlist", "score_with_bonus": 28.0},
+                {"signal_id": "s3", "scoring_profile": "short_positioning",
+                 "band_with_bonus": "archive", "score_with_bonus": 18.0},
+            ]
+        if method == "GET" and path == "operator_flags":
+            return []  # no existing flag → INSERT path
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://xvwvwbnxdsjpnealarkh.supabase.co"
+    client.service_key = "fake_service_key"
+
+    result = observability.provisional_convergence_audit(client)
+
+    assert result["violators_found"] == 3
+    assert set(result["sample_signal_ids"]) == {"s1", "s2", "s3"}
+    assert result["per_profile"]["short_positioning"] == 2
+    assert result["per_profile"]["takeover_candidate"] == 1
+
+    # Must use the nested JSONB filter path — this is the contract with PostgREST.
+    get_signals = [c for c in captured_rest
+                   if c["method"] == "GET" and c["path"] == "signals"]
+    assert len(get_signals) == 1
+    params = get_signals[0]["params"]
+    assert params["extensions->scoring_meta->>requires_resolution"] == "eq.true"
+    assert params["band_with_bonus"] == "not.is.null"
+
+    # Must insert an error-severity flag, not warn/info.
+    posts = [c for c in captured_rest
+             if c["method"] == "POST" and c["path"] == "operator_flags"]
+    assert len(posts) == 1
+    assert posts[0]["json_body"]["severity"] == "error"
+    assert posts[0]["json_body"]["kind"] == "provisional_converged_invariant_violated"
+
+
+def test_thesis_jobs_sla_sweeper_flags_each_breaching_status(monkeypatch):
+    """Rows past each status's threshold raise a per-status flag; scoring rows
+    are auto-reset to needs_scoring with incremented attempt_count."""
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params,
+                         "json_body": json_body, "prefer": prefer})
+        if method == "GET" and path == "thesis_jobs":
+            status = (params or {}).get("status", "")
+            if status == "eq.needs_scoring":
+                return [
+                    {"id": "j1", "signal_id": "s1", "status": "needs_scoring",
+                     "updated_at": "2026-04-22T10:00:00Z", "attempt_count": 0,
+                     "signals": {"scoring_profile": "short_positioning"}},
+                ]
+            if status == "eq.scoring":
+                return [
+                    {"id": "j2", "signal_id": "s2", "status": "scoring",
+                     "updated_at": "2026-04-22T10:30:00Z", "attempt_count": 0,
+                     "signals": {"scoring_profile": "takeover_candidate"}},
+                    {"id": "j3", "signal_id": "s3", "status": "scoring",
+                     "updated_at": "2026-04-22T10:30:00Z", "attempt_count": 2,
+                     "signals": {"scoring_profile": "binary_catalyst"}},
+                ]
+            return []
+        if method == "GET" and path == "operator_flags":
+            return []  # no existing flags
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://fake"
+    client.service_key = "fake"
+
+    result = observability.thesis_jobs_sla_sweeper(client)
+
+    # One flag per breaching status.
+    assert result["breaches_by_status"]["needs_scoring"] == 1
+    assert result["breaches_by_status"]["scoring"] == 2
+    # j2 (attempt_count=0) gets reset, j3 (attempt_count=2) goes to dlq on this attempt.
+    assert result["scoring_resets"] == 1
+    assert result["scoring_dlqs"] == 1
+
+    # Verify auto-reset patch went to needs_scoring with incremented attempt_count.
+    patches = [c for c in captured if c["method"] == "PATCH" and c["path"] == "thesis_jobs"]
+    reset_patch = next(p for p in patches if p["json_body"].get("status") == "needs_scoring")
+    assert reset_patch["json_body"]["attempt_count"] == 1
+    assert reset_patch["params"]["id"] == "eq.j2"
+
+    # Verify dlq patch for the 3rd-attempt row.
+    dlq_patch = next(p for p in patches if p["json_body"].get("status") == "dlq")
+    assert dlq_patch["json_body"]["attempt_count"] == 3
+    assert dlq_patch["params"]["id"] == "eq.j3"
+
+    # Scoring flag must be severity=error because at least one row was DLQ'd.
+    scoring_flag_posts = [
+        c for c in captured
+        if c["method"] == "POST" and c["path"] == "operator_flags"
+        and c["json_body"].get("kind") == "sla_breach_scoring"
+    ]
+    assert len(scoring_flag_posts) == 1
+    assert scoring_flag_posts[0]["json_body"]["severity"] == "error"
+    # needs_scoring flag is warn (not auto-acted).
+    ns_flag_posts = [
+        c for c in captured
+        if c["method"] == "POST" and c["path"] == "operator_flags"
+        and c["json_body"].get("kind") == "sla_breach_needs_scoring"
+    ]
+    assert len(ns_flag_posts) == 1
+    assert ns_flag_posts[0]["json_body"]["severity"] == "warn"
+    # Evidence carries sample with profile joined from signals.
+    sample = ns_flag_posts[0]["json_body"]["evidence"]["sample"]
+    assert sample[0]["scoring_profile"] == "short_positioning"
+
+
+def test_thesis_jobs_sla_sweeper_resolves_status_flags_when_clean(monkeypatch):
+    """Zero breaches in a given status → PATCH any open flag of that kind to resolved."""
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params,
+                         "json_body": json_body})
+        if method == "GET":
+            return []  # no breaches
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://fake"
+    client.service_key = "fake"
+
+    result = observability.thesis_jobs_sla_sweeper(client)
+    assert all(count == 0 for count in result["breaches_by_status"].values())
+
+    # Four PATCH calls (one per status) to resolve flags.
+    resolves = [c for c in captured
+                if c["method"] == "PATCH" and c["path"] == "operator_flags"]
+    resolved_kinds = {c["params"].get("kind") for c in resolves}
+    assert resolved_kinds == {
+        "eq.sla_breach_needs_scoring", "eq.sla_breach_scoring",
+        "eq.sla_breach_queued", "eq.sla_breach_drafting",
+    }
+
+
+def test_summarize_provisional_backlog_counts_by_profile(monkeypatch):
+    """Returns a per-profile counter of heuristic rows waiting on resolution."""
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params})
+        if method == "GET" and path == "signals":
+            # Simulate a single page returning all four rows.
+            return [
+                {"scoring_profile": "short_positioning"},
+                {"scoring_profile": "short_positioning"},
+                {"scoring_profile": "takeover_candidate"},
+                {"scoring_profile": "binary_catalyst"},
+            ]
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://fake"
+    client.service_key = "fake"
+
+    result = observability.summarize_provisional_backlog(client)
+    assert result["total_provisional"] == 4
+    assert result["provisional_by_profile"] == {
+        "short_positioning": 2, "takeover_candidate": 1, "binary_catalyst": 1,
+    }
+
+    # The JSON filter is the contract the reactor-gate depends on.
+    params = captured[0]["params"]
+    assert params["extensions->scoring_meta->>requires_resolution"] == "eq.true"
+    assert params["band_with_bonus"] == "is.null"
+
+
+def test_provisional_convergence_audit_empty_clears_flag(monkeypatch):
+    """Zero violators → auto-resolve any prior flag (steady-state contract)."""
+    rest_calls = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        rest_calls.append({"method": method, "path": path, "params": params,
+                           "json_body": json_body})
+        if method == "GET":
+            return []
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://xvwvwbnxdsjpnealarkh.supabase.co"
+    client.service_key = "fake_service_key"
+
+    result = observability.provisional_convergence_audit(client)
+    assert result["violators_found"] == 0
+
+    resolves = [c for c in rest_calls
+                if c["method"] == "PATCH" and c["path"] == "operator_flags"]
+    assert len(resolves) == 1
+    assert "resolved_at" in resolves[0]["json_body"]
 
 
 def test_orphan_convergence_sweeper_empty_clears_flag(monkeypatch):

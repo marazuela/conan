@@ -90,10 +90,11 @@ USER_AGENT = (
 REQUEST_TIMEOUT = 25  # per-request; lower than v1's 45 to fit 60s soft budget
 ALL_REGULATORS = ["fca", "amf", "afm", "bafin"]
 
-POSITION_DISCLOSURE_THRESHOLD = 0.5  # new position must be >= this pct
-POSITION_CHANGE_THRESHOLD = 0.2      # delta vs prior snapshot
+POSITION_DISCLOSURE_THRESHOLD = 1.0  # new position must be >= this pct
+POSITION_CHANGE_THRESHOLD = 0.5      # delta vs prior snapshot
 LARGE_POSITION_THRESHOLD = 2.0       # bumps strength on short_disclosure
-CROWDED_SHORT_MIN_HOLDERS = 3
+CROWDED_SHORT_MIN_HOLDERS = 6
+CROWDING_MIN_TOTAL_PCT = 5.0         # sum(position_pct) across crowded holders
 DEDUP_WINDOW_DAYS = 7
 TOP_SIGNAL_LIMIT_DEFAULT = 25
 
@@ -452,7 +453,15 @@ def _detect_crowded(positions: List[Dict[str, Any]]) -> Dict[str, List[Dict[str,
     for p in positions:
         if p.get("isin"):
             by_isin[p["isin"]].append(p)
-    return {isin: pos for isin, pos in by_isin.items() if len(pos) >= CROWDED_SHORT_MIN_HOLDERS}
+    crowded: Dict[str, List[Dict[str, Any]]] = {}
+    for isin, pos in by_isin.items():
+        if len(pos) < CROWDED_SHORT_MIN_HOLDERS:
+            continue
+        total_pct = sum((p.get("position_pct") or 0.0) for p in pos)
+        if total_pct < CROWDING_MIN_TOTAL_PCT:
+            continue
+        crowded[isin] = pos
+    return crowded
 
 
 def _country_from_isin(isin: str) -> Optional[str]:
@@ -569,11 +578,11 @@ def _classify(pos: Dict[str, Any]) -> Optional[Tuple[str, str, int]]:
 
     if change is not None and change <= -POSITION_CHANGE_THRESHOLD:
         # Larger unwind = stronger bullish covering signal.
-        strength = 3 if abs(change) >= 0.5 else 2
+        strength = 3 if abs(change) >= 1.0 else 2
         return ("short_unwind", "long", strength)
 
     if change is not None and change >= POSITION_CHANGE_THRESHOLD:
-        strength = 4 if change >= 0.5 else 3
+        strength = 4 if change >= 1.0 else 3
         if pct >= LARGE_POSITION_THRESHOLD:
             strength = max(strength, 4)
         return ("short_buildup", "short", strength)
@@ -1010,7 +1019,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             snapshot = load_market_snapshot(ticker, mic=mic, client=client)
             if snapshot:
                 item.signal.raw_payload.update(snapshot)
-        except Exception:  # noqa: BLE001 — best-effort enrichment only
+        except Exception as e:  # noqa: BLE001 — best-effort enrichment only
+            from modal_workers.observability import record_snapshot_fetch_failure
+            record_snapshot_fetch_failure(client, scanner_name="esma_short_scanner", ticker=ticker, exc=e)
             continue
 
     signals = [item.signal for item in kept_emissions]

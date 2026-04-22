@@ -1,4 +1,5 @@
 import {
+  classifyProvisionalHeuristic,
   isProvisionalHeuristic,
   scoringMeta,
   scoringProvenance,
@@ -79,6 +80,46 @@ Deno.test("shouldProcessUpdate accepts heuristic to ai_resolved transition", () 
     ) === true,
     "resolved rows must re-enter convergence processing",
   );
+});
+
+Deno.test("classifyProvisionalHeuristic flags heuristic provenance without scoring_meta as malformed", () => {
+  const result = classifyProvisionalHeuristic({
+    score: 30,
+    dimensions: { approval_probability: 3, _provenance: "heuristic" },
+    extensions: {}, // scoring_meta deliberately absent
+  });
+  assert(result.provisional === true, "missing scoring_meta must still route to resolver");
+  assert(result.malformed === true, "missing scoring_meta must be flagged as malformed");
+});
+
+Deno.test("classifyProvisionalHeuristic does NOT flag malformed when scoring_meta exists", () => {
+  const result = classifyProvisionalHeuristic({
+    score: 30,
+    dimensions: { approval_probability: 3, _provenance: "heuristic" },
+    extensions: { scoring_meta: { requires_resolution: true } },
+  });
+  assert(result.provisional === true, "should still be provisional");
+  assert(result.malformed === false, "well-formed scoring_meta should not trip malformed");
+});
+
+Deno.test("classifyProvisionalHeuristic returns malformed=false on non-heuristic rows", () => {
+  const result = classifyProvisionalHeuristic({
+    score: 37,
+    dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  });
+  assert(result.provisional === false, "ai_resolved rows are not provisional");
+  assert(result.malformed === false, "ai_resolved rows can't be malformed-heuristic");
+});
+
+Deno.test("classifyProvisionalHeuristic treats extensions=null as malformed when heuristic", () => {
+  const result = classifyProvisionalHeuristic({
+    score: 30,
+    dimensions: { approval_probability: 3, _provenance: "heuristic" },
+    extensions: null,
+  });
+  assert(result.provisional === true, "should route to resolver");
+  assert(result.malformed === true, "null extensions with heuristic provenance is malformed");
 });
 
 Deno.test("shouldProcessUpdate ignores reactor self-writes", () => {

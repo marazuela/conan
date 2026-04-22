@@ -67,12 +67,18 @@ class DimensionEstimate:
     def with_provenance(self, provenance: str = "heuristic") -> Dict[str, Any]:
         return dimensions_with_provenance(self.dimensions, provenance)
 
-    def scoring_meta(self, provenance: str = "heuristic") -> Dict[str, Any]:
+    def scoring_meta(
+        self,
+        provenance: str = "heuristic",
+        *,
+        data_freshness: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         return build_scoring_meta(
             provenance=provenance,
             supported_dims=self.supported_dims,
             defaulted_dims=self.defaulted_dims,
             requires_resolution=self.requires_resolution,
+            data_freshness=data_freshness,
         )
 
 

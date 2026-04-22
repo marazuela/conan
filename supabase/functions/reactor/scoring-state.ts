@@ -32,13 +32,39 @@ export function scoringMeta(
   return (meta ?? {}) as ScoringMeta;
 }
 
+export interface ProvisionalClassification {
+  provisional: boolean;
+  /**
+   * True when the row declares `_provenance='heuristic'` on dimensions but
+   * `extensions.scoring_meta` is missing. Without the sidecar, the reactor
+   * cannot trust `requires_resolution`, so the row is treated as provisional
+   * and routed to signal_resolver — AND an operator_flag is inserted because
+   * this is a scanner/writer bug, not a normal payload shape.
+   */
+  malformed: boolean;
+}
+
+export function classifyProvisionalHeuristic(
+  row: ScoringStateRow | null | undefined,
+): ProvisionalClassification {
+  if (scoringProvenance(row) !== "heuristic") {
+    return { provisional: false, malformed: false };
+  }
+  const extensions = asObject(row?.extensions);
+  const metaObj = asObject(extensions?.["scoring_meta"]);
+  if (metaObj === null) {
+    return { provisional: true, malformed: true };
+  }
+  return {
+    provisional: metaObj["requires_resolution"] === true,
+    malformed: false,
+  };
+}
+
 export function isProvisionalHeuristic(
   row: ScoringStateRow | null | undefined,
 ): boolean {
-  return (
-    scoringProvenance(row) === "heuristic" &&
-    scoringMeta(row).requires_resolution === true
-  );
+  return classifyProvisionalHeuristic(row).provisional;
 }
 
 export function shouldProcessUpdate(

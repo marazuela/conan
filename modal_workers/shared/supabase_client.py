@@ -203,6 +203,42 @@ class SupabaseClient:
             if row.get("name") and row.get("status")
         }
 
+    def load_operational_daily_names_for_hour(self, hour_utc: int,
+                                              null_default_hour: int = 13) -> List[str]:
+        """Names of `cadence='daily'` scanners operational right now and scheduled
+        for `hour_utc`. Rows with NULL `scheduled_hour_utc` route to `null_default_hour`
+        so a newly-registered scanner still fires once a day without manual timing.
+
+        Used by `dispatch_release_times` in modal_workers/app.py.
+        """
+        # Split into two REST calls because PostgREST can't OR a nullable `eq` with
+        # a NULL filter on the same column in a single `or=` expression cleanly;
+        # the two-query pattern is simpler and runs in milliseconds.
+        matched = self._rest(
+            "GET",
+            "scanners",
+            params={
+                "cadence": "eq.daily",
+                "status": "eq.operational",
+                "scheduled_hour_utc": f"eq.{hour_utc}",
+                "select": "name",
+            },
+        ) or []
+        names = [row["name"] for row in matched if row.get("name")]
+        if hour_utc == null_default_hour:
+            unset = self._rest(
+                "GET",
+                "scanners",
+                params={
+                    "cadence": "eq.daily",
+                    "status": "eq.operational",
+                    "scheduled_hour_utc": "is.null",
+                    "select": "name",
+                },
+            ) or []
+            names.extend(row["name"] for row in unset if row.get("name"))
+        return sorted(set(names))
+
     def update_scanner_last_run(self, scanner_id: str, last_run_utc: str,
                                 last_run_status: str, last_run_signals: int) -> None:
         self._rest_with_retry("PATCH", "scanners",

@@ -6,25 +6,30 @@ Surface (Phase 3 — full scanner fleet):
     signals.INSERT to apply auto-caps without porting rubric logic to TypeScript.
   - `health`             — trivial GET for dashboard + smoke tests.
   - 17 scanner functions — each as `<name>_once` (on-demand callable).
-  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_daily`, `dispatch_weekly`. Each
-    fires on the bucketed schedule and `.spawn()`s every `_once` in its bucket.
-    This keeps us under Modal's 5-cron plan limit while preserving per-scanner
-    isolation (each scanner runs in its own container with its own timeout).
+  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`, `dispatch_weekly`.
+    `dispatch_release_times` fires at 06/08/13/17/21 UTC and reads
+    `scanners.scheduled_hour_utc` from the registry to decide which daily
+    scanners to spawn at each tick. Per-scanner isolation preserved (each
+    scanner runs in its own container with its own timeout).
 
 NOT hosted here (by design, spec.md §7.4 revised 2026-04-20):
   - `thesis_writer`      — runs as a Claude skill under Pedro's account via a Cowork
     scheduled task (see `.claude/skills/thesis_writer.md`). Modal doesn't draft theses.
   - `candidate_aging`    — same pattern; a separate skill.
 
-Active scheduled subset (operator bandwidth cap, 2026-04-22):
-  - 3h:      edgar_filing_monitor, fda_pdufa_pipeline
-  - weekly:  takeover_candidate_scanner
-  - daily fetchers (universe maintenance, not signal emitters):
-             fda_adcomm_pdufa, sec_8k_mna
+Scheduled dispatch (2026-04-22 release-time amendment, spec.md §7):
+  - 3h:      edgar_filing_monitor (SEC filings land throughout US day)
+  - weekly:  takeover_candidate_scanner (Mon 12:00 UTC)
+  - daily release-time buckets — queried from registry per tick:
+      06 UTC  EU pre-open           (lse_rns, esma_short, bse_nse)
+      08 UTC  APAC post-close       (asx, tdnet, hkex, kind)
+      13 UTC  US pre-open / Americas (fda_pdufa, cvm, sedar_plus, bmv) + fetchers
+      17 UTC  US midday              (congressional_trading)
+      21 UTC  US post-close          (sec_enforcement, courtlistener)
 
-All other scanner `_once` functions remain deployed for manual/on-demand use,
-but are intentionally omitted from the scheduled dispatch buckets until they are
-re-enabled in the registry/operator UI.
+Only rows with `status='operational'` fire; paused rows are skipped inside
+`_dispatch`. Adding a new scanner = INSERT row with a `scheduled_hour_utc`;
+no code redeploy needed for timing tweaks.
 
 Secret requirements (populate via `modal secret create scanner-secrets ...`):
   - SEC_USER_AGENT          — required by edgar, fda_pdufa, takeover_candidate,
@@ -44,6 +49,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 import modal
+from fastapi import Header, HTTPException
 
 app = modal.App("conan-v2")
 
@@ -66,6 +72,7 @@ image = (
 # Secrets — populate via Modal Dashboard or `modal secret create`.
 scanner_secrets = modal.Secret.from_name("scanner-secrets")       # SEC_USER_AGENT, OPENFIGI_API_KEY, COURTLISTENER_TOKEN, OPENDART_KEY
 supabase_secrets = modal.Secret.from_name("supabase-secrets")     # SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUTE_SECRET — shared with Supabase internal_config.compute_secret
 # anthropic-secrets intentionally NOT referenced here. thesis_writer + candidate_aging
 # run as Claude skills via Cowork scheduled tasks, not as Modal functions.
 
@@ -99,6 +106,225 @@ def health() -> dict:
         "status": "ok",
         "app": "conan-v2",
         "profiles": sorted(WEIGHTS.keys()),
+    }
+
+
+# ==========================================================================
+# Skill compute endpoints — called by Cowork-scheduled skills (signal_resolver,
+# thesis_writer, candidate_aging, coverage_auditor) via pg_net-backed Postgres
+# RPCs (supabase/migrations/*_compute_rpcs.sql). Introduced 2026-04-22 when the
+# Cowork Linux sandbox stopped starting, breaking every skill that shelled out
+# to `python3 -c` or `curl`. Skills now call `rpc_<name>` via the Supabase MCP,
+# the RPC POSTs here via pg_net, we invoke the pure Python helpers, response
+# flows back to the skill as jsonb.
+#
+# Auth: every endpoint requires `x-conan-compute-secret` matching
+# `CONAN_COMPUTE_SECRET` from the `compute-auth` Modal secret. The Supabase
+# side reads the same value from `public.internal_config` (key='compute_secret')
+# and injects it via `_conan_modal_post`. Rotating the secret requires both
+# sides updated in lockstep.
+# ==========================================================================
+
+ALLOWED_STORAGE_BUCKETS = frozenset({"reports", "candidates"})
+MAX_STORAGE_CONTENT_BYTES = 5 * 1024 * 1024  # 5 MiB; coverage reports + candidate dossiers are <200 KB in practice.
+
+
+def _verify_compute_secret(provided: Optional[str]) -> None:
+    """Raise HTTPException if `provided` doesn't match CONAN_COMPUTE_SECRET.
+
+    401 on bad/missing header, 500 on server misconfiguration. Constant-time
+    compare so an attacker can't learn the prefix byte-by-byte.
+    """
+    import hmac
+    import os
+    expected = os.environ.get("CONAN_COMPUTE_SECRET", "")
+    if not expected:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "server misconfiguration: CONAN_COMPUTE_SECRET not set"},
+        )
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "invalid or missing x-conan-compute-secret"},
+        )
+
+
+def _validate_storage_upload(payload: dict) -> None:
+    """Guard storage_upload_endpoint: bucket allowlist, path sanity, size cap.
+
+    Raises HTTPException(400) on invalid bucket/path/content shape and
+    HTTPException(413) on oversize content. Size check is O(1) against the
+    encoded length; a 5 MiB cap is well above any legitimate caller.
+    """
+    bucket = payload.get("bucket")
+    if bucket not in ALLOWED_STORAGE_BUCKETS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "bucket not allowed",
+                "bucket": bucket,
+                "allowed": sorted(ALLOWED_STORAGE_BUCKETS),
+            },
+        )
+    path = payload.get("path")
+    if not isinstance(path, str) or not path:
+        raise HTTPException(status_code=400, detail={"error": "path must be a non-empty string"})
+    if path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail={"error": "invalid path", "path": path})
+    content = payload.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail={"error": "content must be a string"})
+    size = len(content.encode("utf-8"))
+    if size > MAX_STORAGE_CONTENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "content too large", "size_bytes": size, "max_bytes": MAX_STORAGE_CONTENT_BYTES},
+        )
+
+
+@app.function(image=image, timeout=30, secrets=[compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="rescore-with-dims")
+def rescore_with_dims_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """Wraps `modal_workers.shared.rubric_engine.rescore_with_dims` for signal_resolver.
+
+    payload:  {scoring_profile, raw_payload, dims, provenance?}
+    returns:  {scoring_profile, dimensions, dimensions_with_provenance, score, band, auto_caps_triggered}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+    from modal_workers.shared.rubric_engine import rescore_with_dims
+    return rescore_with_dims(
+        scoring_profile=payload["scoring_profile"],
+        raw_payload=payload.get("raw_payload") or {},
+        dims=payload["dims"],
+        provenance=payload.get("provenance", "ai_resolved"),
+    )
+
+
+@app.function(image=image, timeout=30, secrets=[compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="assess-thesis")
+def assess_thesis_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """Wraps `modal_workers.shared.candidate_gate.assess_thesis_v2` for thesis_writer + signal_resolver.
+
+    payload:  {thesis: {...}}
+    returns:  {ok: bool, reasons: [str]}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+    from modal_workers.shared.candidate_gate import assess_thesis_v2
+    ok, reasons = assess_thesis_v2(payload.get("thesis"))
+    return {"ok": ok, "reasons": reasons}
+
+
+@app.function(image=image, timeout=30, secrets=[compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="render-candidate-markdown")
+def render_candidate_markdown_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """Wraps `modal_workers.shared.candidate_gate.render_candidate_markdown_v2` for thesis_writer.
+
+    payload:  {signal, thesis, band, scoring_profile, entity?}
+    returns:  {markdown: str}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+    from modal_workers.shared.candidate_gate import render_candidate_markdown_v2
+    md = render_candidate_markdown_v2(
+        payload.get("signal") or {},
+        payload.get("thesis") or {},
+        band=payload["band"],
+        scoring_profile=payload.get("scoring_profile"),
+        entity=payload.get("entity"),
+    )
+    return {"markdown": md}
+
+
+@app.function(image=image, timeout=30, secrets=[compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="regex-check")
+def regex_check_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """Python `re.search` for candidate_aging step 6 integrity check.
+
+    Case-insensitive by default UNLESS the pattern already embeds an inline flag
+    group in its first 5 chars (e.g. `(?i)`, `(?im)`, `^(?i)`). Matches the
+    exact rule candidate_aging.md step 6 used in bash before the sandbox outage.
+
+    payload:  {pattern: str, text: str}
+    returns:  {matched: bool, match: str | null}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+    import re
+    pattern = payload["pattern"]
+    text = payload["text"]
+    flags = 0 if "(?" in pattern[:5] else re.IGNORECASE
+    m = re.search(pattern, text, flags)
+    return {"matched": m is not None, "match": m.group(0) if m else None}
+
+
+@app.function(image=image, timeout=60, secrets=[supabase_secrets, compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="storage-upload")
+def storage_upload_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """PUT a string payload to Supabase Storage with service-role auth.
+
+    Callers (2026-04-22):
+      - coverage_auditor: {bucket: "reports", path: "coverage/<iso_week>.md", content, content_type: "text/markdown"}
+      - thesis_writer:    {bucket: "candidates", path: "<YYYY>/<MM>/<ticker>_<signal_id>.md", content, content_type: "text/markdown"}
+
+    payload:  {bucket, path, content, content_type?}
+    returns:  {uploaded: true, bucket, path, size_bytes}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+    _validate_storage_upload(payload)
+
+    import os
+    import requests
+
+    bucket = payload["bucket"]
+    path = payload["path"]
+    content = payload["content"]
+    content_type = payload.get("content_type", "text/markdown")
+
+    key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    url = f"{os.environ['SUPABASE_URL']}/storage/v1/object/{bucket}/{path}"
+    body = content.encode("utf-8")
+
+    # v2 (2026-04-22) — surface upstream Storage errors instead of raise_for_status.
+    r = requests.put(
+        url,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": content_type,
+            "x-upsert": "true",
+        },
+        data=body,
+        timeout=30,
+    )
+    if not r.ok:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "version": "v2",
+                "upstream_status": r.status_code,
+                "upstream_body": r.text[:1000],
+                "url": url,
+            },
+        )
+    return {
+        "uploaded": True,
+        "bucket": bucket,
+        "path": path,
+        "size_bytes": len(body),
     }
 
 
@@ -243,7 +469,7 @@ def pre_phase3_readout_scanner_once() -> dict:
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
 def fda_adcomm_pdufa_once() -> dict:
     """openFDA drugsfda AP submissions → catalyst_universe (fda_approval).
-    Default 7-day look-back; overridden by dispatch_daily's schedule."""
+    Default 7-day look-back; scheduled via dispatch_release_times 13 UTC bucket."""
     return _run_fetcher("fda_adcomm_pdufa", days_back=7)
 
 
@@ -287,22 +513,19 @@ def reporting_weekly_once() -> dict:
 # ==========================================================================
 
 _SCANNERS_3H: List[str] = [
-    "edgar_filing_monitor", "fda_pdufa_pipeline",
+    "edgar_filing_monitor",
 ]
-_SCANNERS_DAILY: List[str] = []
 _SCANNERS_WEEKLY: List[str] = [
     "takeover_candidate_scanner",
 ]
 
-# Catalyst-universe fetchers run alongside daily scanners. They use the same
-# `_once` spawn pattern — _dispatch looks up `<name>_once` in this module.
-# Folded into dispatch_daily because the Modal free-tier 5-cron limit is at
-# capacity (dispatch_3h, dispatch_daily, dispatch_weekly, dispatch_observability,
-# reporting_weekly_cron).
-_FETCHERS_DAILY: List[str] = [
-    "fda_adcomm_pdufa",
-    "sec_8k_mna",
-]
+# Catalyst-universe fetchers are NOT registry-backed scanners — they have no
+# row in public.scanners, so _dispatch_by_hour can't pick them up. Hardcoded
+# to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
+# Fold in here so dispatch_release_times fires them at the right tick.
+_FETCHERS_AT_HOUR: dict[int, List[str]] = {
+    13: ["fda_adcomm_pdufa", "sec_8k_mna"],
+}
 
 
 def _load_dispatch_statuses(names: List[str]) -> tuple[dict[str, str], Optional[str]]:
@@ -375,10 +598,32 @@ def dispatch_3h() -> dict:
     return _dispatch(_SCANNERS_3H)
 
 
-@app.function(image=image, schedule=modal.Cron("0 9 * * *"), timeout=60,
+@app.function(image=image, schedule=modal.Cron("0 6,8,13,17,21 * * *"), timeout=60,
               secrets=[scanner_secrets, supabase_secrets])
-def dispatch_daily() -> dict:
-    return _dispatch(_SCANNERS_DAILY + _FETCHERS_DAILY)
+def dispatch_release_times() -> dict:
+    """Release-time-aware daily dispatcher. Fires at 06/08/13/17/21 UTC and
+    spawns only scanners whose `scheduled_hour_utc` matches the current hour
+    (NULL rows default to the 13 UTC bucket). Registry-driven — retiming a
+    scanner is a single UPDATE on public.scanners, no redeploy.
+    """
+    from datetime import datetime, timezone
+    from modal_workers.shared.supabase_client import SupabaseClient
+
+    hour = datetime.now(timezone.utc).hour
+    try:
+        registry_names = SupabaseClient().load_operational_daily_names_for_hour(hour)
+    except Exception as e:  # noqa: BLE001 — if the registry lookup fails, fetchers still fire
+        registry_names = []
+        registry_error = f"{type(e).__name__}: {e}"
+    else:
+        registry_error = None
+
+    names = list(registry_names) + _FETCHERS_AT_HOUR.get(hour, [])
+    envelope = _dispatch(names)
+    envelope["hour_utc"] = hour
+    if registry_error:
+        envelope["registry_error"] = registry_error
+    return envelope
 
 
 @app.function(image=image, schedule=modal.Cron("0 12 * * 1"), timeout=60,
@@ -413,7 +658,8 @@ def dispatch_observability() -> dict:
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     from modal_workers.observability import (
         convergence_qa, edgar_runtime_health, litigation_baselines_refresh, orphan_convergence_sweeper,
-        precision_auditor, scanner_probe, timing_auditor, translation_health,
+        precision_auditor, provisional_convergence_audit, scanner_probe, thesis_jobs_sla_sweeper,
+        timing_auditor, translation_health,
     )
     from modal_workers.legal_enricher import legal_enrichment_sweep
     from modal_workers.pre_edge_monitor import pre_edge_monitor
@@ -441,6 +687,21 @@ def dispatch_observability() -> dict:
         results["ran"].append("orphan_convergence_sweeper")
     except Exception as e:
         results["orphan_convergence_sweeper_error"] = str(e)
+
+    # Always: provisional-row invariant audit — catches reactor-gate regressions
+    # that let a provisional row get convergence-stamped. Does NOT auto-fix.
+    try:
+        results["provisional_convergence_audit"] = provisional_convergence_audit()
+        results["ran"].append("provisional_convergence_audit")
+    except Exception as e:
+        results["provisional_convergence_audit_error"] = str(e)
+
+    # Always: thesis_jobs SLA breach detection + auto-reset for stuck `scoring` rows.
+    try:
+        results["thesis_jobs_sla_sweeper"] = thesis_jobs_sla_sweeper()
+        results["ran"].append("thesis_jobs_sla_sweeper")
+    except Exception as e:
+        results["thesis_jobs_sla_sweeper_error"] = str(e)
 
     # Always: deterministic pre-edge lifecycle guard.
     try:

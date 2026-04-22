@@ -635,8 +635,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                 snapshot = load_market_snapshot(ticker, client=client)
                 if snapshot:
                     raw_payload.update(snapshot)
-            except Exception:
-                pass
+            except Exception as e:
+                from modal_workers.observability import record_snapshot_fetch_failure
+                record_snapshot_fetch_failure(client, scanner_name="takeover_candidate_scanner", ticker=ticker, exc=e)
 
         entity_hints = EntityHints(
             issuer_figi=issuer_figi,

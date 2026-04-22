@@ -80,7 +80,12 @@ def test_pre_phase3_signal_includes_structured_trial_flags():
     assert raw["matched_indications"] == ["oncology_solid_tumor"]
 
 
-def test_pdufa_signal_includes_structured_binary_hints():
+def test_pdufa_signal_includes_structured_binary_hints(monkeypatch):
+    # Keep the test hermetic: _build_signal calls load_market_snapshot when
+    # ticker is non-empty, which would otherwise hit yfinance over the network.
+    from modal_workers.shared import market_snapshot
+    monkeypatch.setattr(market_snapshot, "load_market_snapshot", lambda ticker, **kw: None)
+
     sig = build_pdufa_signal(
         {
             "ticker": "AXSM",
@@ -109,6 +114,7 @@ def test_pdufa_signal_includes_structured_binary_hints():
         10,
         datetime(2026, 4, 21, tzinfo=timezone.utc),
         issuer_figi=None,
+        client=None,
     )
 
     assert sig is not None
