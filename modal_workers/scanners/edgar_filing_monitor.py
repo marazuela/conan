@@ -23,6 +23,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -39,7 +40,7 @@ from modal_workers.scanners.edgar_issuer_filter_defaults import DEFAULT_EDGAR_IS
 
 EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
-SEC_RATE_LIMIT = 8              # req/sec (conservative vs SEC's 10)
+SEC_RATE_LIMIT = 9              # req/sec (SEC ceiling is 10; 10% safety margin)
 REQUEST_TIMEOUT = 10            # per-request seconds
 DEDUP_WINDOW_DAYS = 45          # signal novelty window
 ROTATION_ORDER = ["activist", "mna", "distress", "governance"]
@@ -56,6 +57,28 @@ DEFAULT_MARKET_CAP_FLOOR_USD_MM = 215.0
 MARKET_CAP_CACHE_PREFIX = "market-snapshots"
 ISSUER_FILTER_FILE = Path(__file__).with_name("edgar_issuer_filter.json")
 MAX_ISSUER_FILTER_SAMPLES = 10
+
+# Persistent cross-run caches (Supabase Storage, scanner-caches/edgar/*).
+# Prior to 2026-04-22 these lived only in process memory, so each 3h run
+# re-issued ~300–400 rate-limited data.sec.gov/submissions/CIK{cik}.json
+# lookups for issuers we had just resolved hours earlier — burning ~50s of
+# the 85s budget and forcing `partial` runs. Now the resolved map is
+# persisted between runs with a 7-day per-entry TTL (tickers/exchanges
+# rarely change) and the merger-sibling suppression cache is persisted
+# with a 30-day prune horizon (answers are stable; older file_dates fall
+# outside the ±7d query window anyway).
+COMPANY_CACHE_FILE = "company_tickers.json"
+COMPANY_CACHE_TTL_S = 7 * 24 * 3600
+MERGER_SIBLING_CACHE_FILE = "merger_siblings.json"
+MERGER_SIBLING_PRUNE_DAYS = 30
+
+# Post-scan market-cap resolution budget. The post-scan pass runs AFTER the
+# SEC rate-limited loops finish, but still inside Modal's 120s wall. yfinance
+# cold calls are 0.5–2s each and can hang; a parallel pool + soft budget
+# protects the wall timeout. Matches the esma_short_scanner pattern (file
+# ref: modal_workers/scanners/esma_short_scanner.py:821).
+POST_SCAN_MARKET_CAP_BUDGET_S = 25.0
+POST_SCAN_MARKET_CAP_WORKERS = 10
 
 _MARKET_CAP_MEMO: Dict[str, Optional[float]] = {}
 _DEFAULT_ISSUER_FILTER_CACHE: Optional[Dict[str, Any]] = None
@@ -186,6 +209,44 @@ class _SECRateLimiter:
 
 
 _rate_limiter = _SECRateLimiter()
+
+
+# ---------------------------------------------------------------------------
+# HTTP session (shared across all SEC calls for TCP/TLS keep-alive)
+# ---------------------------------------------------------------------------
+
+_SEC_SESSION: Optional[requests.Session] = None
+
+
+def _sec_session() -> requests.Session:
+    """Shared requests.Session used for every SEC GET.
+
+    Before 2026-04-22 each `_efts_search` / `_get_company_tickers` /
+    `_has_merger_sibling` call invoked `requests.get(...)` directly, which
+    opens a fresh TCP+TLS handshake every time. With 37 EFTS queries plus
+    300–400 submissions lookups per run, that handshake overhead is 30–40%
+    of per-request latency. A pooled session reuses connections across the
+    whole scan.
+    """
+    global _SEC_SESSION
+    if _SEC_SESSION is None:
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=0,  # retries handled per-caller with our own backoff
+        )
+        session.mount("https://", adapter)
+        _SEC_SESSION = session
+    return _SEC_SESSION
+
+
+def _http_get(url: str, *, params: Optional[Dict[str, Any]] = None,
+              headers: Optional[Dict[str, str]] = None,
+              timeout: Optional[float] = None) -> requests.Response:
+    """Single seam for SEC HTTP GETs. Tests patch this (not `requests.get`)
+    so that the pooled session is covered by the same mock surface."""
+    return _sec_session().get(url, params=params, headers=headers, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -352,9 +413,9 @@ def _efts_search(query: str, date_from: str, date_to: str,
     while True:
         _rate_limiter.wait()
         try:
-            resp = requests.get(EFTS_URL, params=params,
-                                headers={"User-Agent": user_agent},
-                                timeout=REQUEST_TIMEOUT)
+            resp = _http_get(EFTS_URL, params=params,
+                             headers={"User-Agent": user_agent},
+                             timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             break
@@ -414,8 +475,8 @@ def _get_company_tickers(cik: str, *, user_agent: str) -> Tuple[List[str], Optio
     url = SUBMISSIONS_URL.format(cik=cik_padded)
     _rate_limiter.wait()
     try:
-        resp = requests.get(url, headers={"User-Agent": user_agent},
-                            timeout=REQUEST_TIMEOUT)
+        resp = _http_get(url, headers={"User-Agent": user_agent},
+                         timeout=REQUEST_TIMEOUT)
         if resp.status_code == 200:
             data = resp.json()
             tickers = data.get("tickers", []) or []
@@ -430,15 +491,42 @@ def _load_company_context(
     cik: str,
     *,
     user_agent: str,
-    cache: Dict[str, Tuple[List[str], Optional[str]]],
+    cache: Dict[str, Dict[str, Any]],
+    dirty: Optional[List[bool]] = None,
 ) -> Tuple[List[str], Optional[str]]:
+    """Resolve CIK → (tickers, primary_exchange) via a persistent per-CIK cache.
+
+    Before 2026-04-22 this cache lived only in `scan()`-local scope and was
+    rebuilt from scratch every 3h run, issuing ~300–400 rate-limited
+    `data.sec.gov/submissions/CIK{cik}.json` calls per run. With a
+    Supabase-backed map reused across runs (7-day per-entry TTL — tickers
+    change rarely) cold calls drop to "net-new CIKs we've never seen".
+
+    `cache` is a `{cik_padded: {tickers, exchange, cached_at}}` dict shared
+    with the persistent loader. `dirty[0]` is flipped to True whenever a
+    fetch-and-store happens so `scan()` can skip the save round-trip when
+    no entries changed.
+    """
     if not cik:
         return [], None
-    if cik in cache:
-        return cache[cik]
-    context = _get_company_tickers(cik, user_agent=user_agent)
-    cache[cik] = context
-    return context
+    padded = cik.zfill(10)
+    now = time.time()
+    entry = cache.get(padded)
+    if isinstance(entry, dict):
+        cached_at = float(entry.get("cached_at") or 0)
+        if now - cached_at < COMPANY_CACHE_TTL_S:
+            tickers = list(entry.get("tickers") or [])
+            exchange = entry.get("exchange")
+            return tickers, exchange if isinstance(exchange, str) or exchange is None else None
+    tickers, exchange = _get_company_tickers(cik, user_agent=user_agent)
+    cache[padded] = {
+        "tickers": list(tickers),
+        "exchange": exchange,
+        "cached_at": now,
+    }
+    if dirty is not None:
+        dirty[0] = True
+    return tickers, exchange
 
 
 def _mic_for_exchange(exchange: Optional[str]) -> Optional[str]:
@@ -448,26 +536,53 @@ def _mic_for_exchange(exchange: Optional[str]) -> Optional[str]:
     return _EXCHANGE_TO_MIC.get(key)
 
 
+def _merger_sibling_key(cik: str, file_date_str: str) -> str:
+    """Serializable (cik|file_date) key used for both in-memory and
+    persisted merger-sibling caches."""
+    return f"{cik}|{file_date_str}"
+
+
 def _has_merger_sibling(cik: str, file_date_str: str, *, user_agent: str,
-                        cache: Dict[Tuple[str, str], bool]) -> bool:
+                        cache: Dict[str, bool],
+                        session_cache: Optional[Dict[str, bool]] = None,
+                        dirty: Optional[List[bool]] = None) -> bool:
     """Return True if the same CIK has a merger-agreement sibling filing
     (425 / PREM14A / SC TO-T) within ±MERGER_SIBLING_WINDOW_DAYS of file_date.
 
     Used to suppress activist-category keyword hits on 8-K that are really
     mechanical governance clauses inside a merger announcement (see
-    QXO-TopBuild 2026-04-18 DLQ incident). Per-run cache is keyed on
-    (cik, file_date) so multiple activist keywords hitting the same filing
-    only trigger one sibling lookup.
+    QXO-TopBuild 2026-04-18 DLQ incident).
+
+    Two-tier caching — the crucial invariant is that `True` answers are
+    **monotonic** (filings don't un-file) but `False` answers are NOT (a
+    companion PREM14A / DEFM14A can be filed days after the 8-K). So:
+
+      - `cache` is the cross-run persistent map — we **only write True
+        results** here. Cached True entries serve every subsequent run
+        without re-querying.
+      - `session_cache` is an optional same-run dict that dedupes repeated
+        `False`-answer lookups for the same (cik, file_date) within one
+        scan (e.g., three activist keywords landing on one 8-K). Missing
+        → default behavior is safe but re-queries per hit.
+
+    `dirty[0]` flips to True only when a new True entry lands in the
+    persistent cache, so the caller can skip re-saving when nothing
+    persistent changed.
     """
     if not cik or not file_date_str:
         return False
-    key = (cik, file_date_str)
-    if key in cache:
-        return cache[key]
+    key = _merger_sibling_key(cik, file_date_str)
+    # Persistent cache stores only True. A hit here is authoritative.
+    if cache.get(key) is True:
+        return True
+    # Same-run dedup for False answers (if caller provided a session cache).
+    if session_cache is not None and key in session_cache:
+        return session_cache[key]
     try:
         anchor = datetime.strptime(file_date_str, "%Y-%m-%d")
     except ValueError:
-        cache[key] = False
+        if session_cache is not None:
+            session_cache[key] = False
         return False
     date_from = (anchor - timedelta(days=MERGER_SIBLING_WINDOW_DAYS)).strftime("%Y-%m-%d")
     date_to = (anchor + timedelta(days=MERGER_SIBLING_WINDOW_DAYS)).strftime("%Y-%m-%d")
@@ -482,17 +597,25 @@ def _has_merger_sibling(cik: str, file_date_str: str, *, user_agent: str,
     }
     _rate_limiter.wait()
     try:
-        resp = requests.get(EFTS_URL, params=params,
-                            headers={"User-Agent": user_agent},
-                            timeout=REQUEST_TIMEOUT)
+        resp = _http_get(EFTS_URL, params=params,
+                         headers={"User-Agent": user_agent},
+                         timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except requests.exceptions.RequestException:
-        cache[key] = False  # fail open: do not suppress on network error
+        # Fail open — do not suppress on network error. Record the False in
+        # session cache only so the same hit within this run doesn't re-query.
+        if session_cache is not None:
+            session_cache[key] = False
         return False
 
     hit = bool(data.get("hits", {}).get("hits", []))
-    cache[key] = hit
+    if hit:
+        cache[key] = True
+        if dirty is not None:
+            dirty[0] = True
+    if session_cache is not None:
+        session_cache[key] = hit
     return hit
 
 
@@ -706,6 +829,117 @@ def _save_rotation(client: SupabaseClient, state: Dict[str, Any]) -> None:
                        content_type="application/json")
 
 
+def _coerce_cache_blob(raw: Any) -> Optional[Dict[str, Any]]:
+    """Decode a Supabase-Storage cache blob. Returns None on any problem.
+
+    Defensive against non-bytes returns (MagicMock in tests, partial reads,
+    corrupted blobs). Treating any failure as "cold cache" is safe — we
+    just re-fetch and re-save — so this swallows broadly rather than raising.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, (bytes, bytearray, str)):
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _load_persistent_ticker_cache(client: SupabaseClient) -> Dict[str, Dict[str, Any]]:
+    """Load the cross-run CIK → {tickers, exchange, cached_at} map from
+    scanner-caches/edgar/company_tickers.json. Returns {} on any failure."""
+    try:
+        raw = client.read_cache("edgar", COMPANY_CACHE_FILE, timeout=4.0)
+    except Exception:
+        return {}
+    data = _coerce_cache_blob(raw)
+    if data is None:
+        return {}
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}
+    # Normalize: drop malformed rows defensively.
+    clean: Dict[str, Dict[str, Any]] = {}
+    for k, v in entries.items():
+        if isinstance(k, str) and isinstance(v, dict):
+            clean[k] = v
+    return clean
+
+
+def _save_persistent_ticker_cache(
+    client: SupabaseClient, entries: Dict[str, Dict[str, Any]]
+) -> None:
+    """Best-effort save. Storage failures are swallowed so a stalled Supabase
+    write never breaks the scanner's completion path."""
+    try:
+        payload = {"cached_at": time.time(), "entries": entries}
+        client.write_cache(
+            "edgar", COMPANY_CACHE_FILE,
+            json.dumps(payload).encode("utf-8"),
+            content_type="application/json",
+        )
+    except Exception:
+        pass
+
+
+def _load_merger_sibling_cache(client: SupabaseClient) -> Dict[str, bool]:
+    """Load the cross-run `{cik|file_date: has_sibling}` cache from
+    scanner-caches/edgar/merger_siblings.json. Returns {} on any failure.
+
+    No TTL on the blob — the answer for a given (cik, file_date) is stable
+    (SEC filings don't change retroactively). Pruning of stale file_dates
+    happens at save time via `_prune_merger_sibling_cache`.
+    """
+    try:
+        raw = client.read_cache("edgar", MERGER_SIBLING_CACHE_FILE, timeout=4.0)
+    except Exception:
+        return {}
+    data = _coerce_cache_blob(raw)
+    if data is None:
+        return {}
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}
+    clean: Dict[str, bool] = {}
+    for k, v in entries.items():
+        if isinstance(k, str) and isinstance(v, bool):
+            clean[k] = v
+    return clean
+
+
+def _prune_merger_sibling_cache(entries: Dict[str, bool]) -> Dict[str, bool]:
+    """Drop cache rows whose file_date is older than MERGER_SIBLING_PRUNE_DAYS.
+    Entries with no parseable date are kept (safe default)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=MERGER_SIBLING_PRUNE_DAYS)).strftime("%Y-%m-%d")
+    pruned: Dict[str, bool] = {}
+    for key, value in entries.items():
+        if "|" not in key:
+            pruned[key] = value
+            continue
+        _, file_date = key.split("|", 1)
+        if file_date >= cutoff:  # ISO YYYY-MM-DD lexical compare == chronological
+            pruned[key] = value
+    return pruned
+
+
+def _save_merger_sibling_cache(client: SupabaseClient, entries: Dict[str, bool]) -> None:
+    """Best-effort save with stale-date pruning."""
+    try:
+        payload = {
+            "cached_at": time.time(),
+            "entries": _prune_merger_sibling_cache(entries),
+        }
+        client.write_cache(
+            "edgar", MERGER_SIBLING_CACHE_FILE,
+            json.dumps(payload).encode("utf-8"),
+            content_type="application/json",
+        )
+    except Exception:
+        pass
+
+
 def _rotation_state_for_mode(client: SupabaseClient, coverage_mode: str) -> Tuple[List[str], Optional[Dict[str, Any]]]:
     if coverage_mode == "rotation":
         rotation_state = _load_rotation(client)
@@ -793,6 +1027,96 @@ def _load_market_cap_usd_mm(
     except Exception:
         pass
     return memo[normalized]
+
+
+def _resolve_market_caps_parallel(
+    candidates: List[Tuple["Signal", Optional[str], Optional[str]]],
+    client: SupabaseClient,
+    memo: Dict[str, Optional[float]],
+    *,
+    budget_s: float = POST_SCAN_MARKET_CAP_BUDGET_S,
+    max_workers: int = POST_SCAN_MARKET_CAP_WORKERS,
+) -> Tuple[Dict[int, Optional[float]], bool]:
+    """Resolve market caps for every candidate in parallel, honoring a
+    soft wall-clock budget.
+
+    Returns (`by_index`, `budget_exhausted`):
+      - `by_index[i]` is the resolved cap (or None) for candidate `i`.
+        Every index in `range(len(candidates))` is present — un-resolved
+        candidates map to None, which the caller treats as "unknown".
+      - `budget_exhausted` is True if we hit the wall before every future
+        completed, so scan() can surface `market_cap_budget_exhausted` as
+        a partial_reason.
+
+    Fast path: candidates whose ticker is already in `memo` skip the
+    ThreadPoolExecutor entirely. Cold candidates fan out to the pool.
+
+    Threading pattern mirrors modal_workers/scanners/esma_short_scanner.py
+    (line 821): the executor is NOT used as a `with` context; `shutdown`
+    is called in `finally` with `cancel_futures=True` so a stuck yfinance
+    call never blocks Modal's wall timeout. Thread-safety verified — each
+    `_load_market_cap_usd_mm` call works on distinct per-ticker state and
+    the shared `memo` / `SupabaseClient._session` are safe for concurrent
+    use (worst case: redundant yfinance call on a race, not corruption).
+    """
+    by_index: Dict[int, Optional[float]] = {}
+    cold_candidates: List[Tuple[int, str]] = []
+
+    for i, (_, ticker, _) in enumerate(candidates):
+        if not ticker:
+            by_index[i] = None
+            continue
+        normalized = ticker.upper().strip()
+        if not normalized:
+            by_index[i] = None
+            continue
+        # Memo fast path — we already resolved this ticker earlier in the
+        # run (same-run same-ticker cache). Skip the pool.
+        if normalized in memo:
+            by_index[i] = memo[normalized]
+            continue
+        cold_candidates.append((i, ticker))
+
+    if not cold_candidates:
+        return by_index, False
+
+    budget_exhausted = False
+    ex = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {
+            ex.submit(_load_market_cap_usd_mm, client, ticker, memo): (i, ticker)
+            for i, ticker in cold_candidates
+        }
+        start = time.time()
+        for future, (i, ticker) in futures.items():
+            remaining = budget_s - (time.time() - start)
+            if remaining <= 0:
+                # Budget exhausted: mark remaining as unknown and bail.
+                budget_exhausted = True
+                for other_future, (j, _) in futures.items():
+                    if j not in by_index:
+                        other_future.cancel()
+                        by_index[j] = None
+                break
+            try:
+                by_index[i] = future.result(timeout=remaining)
+            except FuturesTimeout:
+                budget_exhausted = True
+                by_index[i] = None
+            except Exception:  # noqa: BLE001
+                # A failed lookup should not kill the run — treat as unknown.
+                by_index[i] = None
+    finally:
+        # Don't wait for stuck yfinance calls — cancel_futures requires 3.9+.
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    # Fill in any index we never got around to (shouldn't happen given the
+    # loop above, but belt-and-suspenders for the budget-exhausted path).
+    for i in range(len(candidates)):
+        if i not in by_index:
+            by_index[i] = None
+
+    return by_index, budget_exhausted
 
 
 def _resolve_figi_for_ticker(
@@ -995,9 +1319,23 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     hits_processed = 0
     dedup_updates: Dict[str, str] = {}
 
+    # Candidate signals deferred until the post-scan market-cap pass. Holding
+    # (signal, ticker, dedup_hash_or_none) lets us run all yfinance I/O after
+    # the SEC-rate-limited loops finish, so budget exhaustion in those loops
+    # stays a pure function of SEC work.
+    candidates: List[Tuple[Signal, Optional[str], Optional[str]]] = []
+
     activist_merger_suppression = bool(
         cfg.config.get("activist_merger_sibling_suppression", True))
-    merger_sibling_cache: Dict[Tuple[str, str], bool] = {}
+    # Merger-sibling caches — two-tier (see `_has_merger_sibling` docstring):
+    #   - Persistent (cross-run) cache stores ONLY True answers. True is
+    #     monotonic so caching forever is correct. False is NOT monotonic
+    #     (a companion proxy can land days after the 8-K), so we re-query.
+    #   - Session cache is ephemeral (this run only) and dedupes repeat
+    #     False-answer lookups for the same (cik, file_date).
+    merger_sibling_cache: Dict[str, bool] = _load_merger_sibling_cache(client)
+    merger_sibling_session_cache: Dict[str, bool] = {}
+    merger_sibling_dirty: List[bool] = [False]
     issuer_filter_enabled = bool(cfg.config.get("issuer_filter_enabled", True))
     issuer_filter = _resolve_issuer_filter(cfg) if issuer_filter_enabled else _empty_issuer_filter()
     market_cap_floor_usd_mm = float(cfg.config.get("market_cap_floor_usd_mm", DEFAULT_MARKET_CAP_FLOOR_USD_MM))
@@ -1007,7 +1345,11 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     run_metrics["market_cap_filter_enabled"] = market_cap_filter_enabled
     run_metrics["market_cap_floor_usd_mm"] = market_cap_floor_usd_mm
 
-    company_context_cache: Dict[str, Tuple[List[str], Optional[str]]] = {}
+    # Persistent CIK → tickers/exchange cache (Supabase Storage, 7d per-entry
+    # TTL). Pre-2026-04-22 this was session-only and burned ~50s/run of
+    # data.sec.gov rate-limited lookups for issuers we had just seen.
+    company_context_cache: Dict[str, Dict[str, Any]] = _load_persistent_ticker_cache(client)
+    company_context_dirty: List[bool] = [False]
     figi_cache: Dict[str, Optional[str]] = {}
     market_cap_cache: Dict[str, Optional[float]] = {}
 
@@ -1062,6 +1404,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                         cik,
                         user_agent=user_agent,
                         cache=company_context_cache,
+                        dirty=company_context_dirty,
                     )
                     return tickers[0].upper() if tickers else None
 
@@ -1091,7 +1434,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                         and form.upper().startswith("8-K")):
                     if _has_merger_sibling(cik, hit.get("file_date", ""),
                                            user_agent=user_agent,
-                                           cache=merger_sibling_cache):
+                                           cache=merger_sibling_cache,
+                                           session_cache=merger_sibling_session_cache,
+                                           dirty=merger_sibling_dirty):
                         run_metrics["merger_suppressed_total"] += 1
                         continue
 
@@ -1099,21 +1444,12 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                     cik,
                     user_agent=user_agent,
                     cache=company_context_cache,
+                    dirty=company_context_dirty,
                 )
                 ticker = maybe_ticker or (tickers[0].upper() if tickers else None)
-                market_cap_usd_mm: Optional[float] = None
-                if ticker and market_cap_filter_enabled:
-                    market_cap_usd_mm = _load_market_cap_usd_mm(client, ticker, market_cap_cache)
-                    if market_cap_usd_mm is None:
-                        run_metrics["market_cap_unknown_total"] += 1
-                    elif 0 < market_cap_usd_mm < market_cap_floor_usd_mm:
-                        _record_market_cap_filtered(
-                            run_metrics,
-                            ticker=ticker,
-                            market_cap_usd_mm=market_cap_usd_mm,
-                        )
-                        continue
 
+                # Market-cap resolution + filter is deferred to the post-scan
+                # pass below — see the candidates loop after the filing phase.
                 issuer_figi = _resolve_figi_for_ticker(ticker, figi_cache)
                 sig = _build_signal(
                     hit,
@@ -1124,13 +1460,14 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                     scan_date=scan_date,
                     tickers=tickers,
                     exchange=exchange,
-                    market_cap_usd_mm=market_cap_usd_mm,
+                    market_cap_usd_mm=None,
                     issuer_figi=issuer_figi,
                 )
                 if sig is None:
                     continue
-                signals.append(sig)
-                dedup_updates[_signal_hash(cik, keyword, signal_type)] = date_to
+                candidates.append(
+                    (sig, ticker, _signal_hash(cik, keyword, signal_type))
+                )
 
         if category_complete:
             run_metrics["categories_completed"].append(category)
@@ -1176,6 +1513,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                     cik,
                     user_agent=user_agent,
                     cache=company_context_cache,
+                    dirty=company_context_dirty,
                 )
                 return tickers[0].upper() if tickers else None
 
@@ -1199,21 +1537,12 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                 cik,
                 user_agent=user_agent,
                 cache=company_context_cache,
+                dirty=company_context_dirty,
             )
             ticker = maybe_ticker or (tickers[0].upper() if tickers else None)
-            market_cap_usd_mm: Optional[float] = None
-            if ticker and market_cap_filter_enabled:
-                market_cap_usd_mm = _load_market_cap_usd_mm(client, ticker, market_cap_cache)
-                if market_cap_usd_mm is None:
-                    run_metrics["market_cap_unknown_total"] += 1
-                elif 0 < market_cap_usd_mm < market_cap_floor_usd_mm:
-                    _record_market_cap_filtered(
-                        run_metrics,
-                        ticker=ticker,
-                        market_cap_usd_mm=market_cap_usd_mm,
-                    )
-                    continue
 
+            # Market-cap resolution + filter is deferred to the post-scan
+            # pass below — see the candidates loop after this block.
             issuer_figi = _resolve_figi_for_ticker(ticker, figi_cache)
             strength_estimate = 4 if "13D" in form_type else 3 if "NT 10" in form_type else 2
             sig = _build_signal(
@@ -1225,13 +1554,49 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                 scan_date=scan_date,
                 tickers=tickers,
                 exchange=exchange,
-                market_cap_usd_mm=market_cap_usd_mm,
+                market_cap_usd_mm=None,
                 issuer_figi=issuer_figi,
             )
             if sig is None:
                 continue
-            signals.append(sig)
+            # Filing-type hits don't track cross-run dedup (adsh is unique
+            # per filing so `seen_adsh_filing` suffices). Pass None as the
+            # dedup hash so the post-scan pass won't write a dedup row.
+            candidates.append((sig, ticker, None))
         run_metrics["filing_types_completed"].append(form_type)
+
+    # --- Post-scan market-cap filter pass ---
+    # yfinance lookups (unthrottled but 0.5–2s each cold) happen here, after
+    # the SEC rate-limited loops have released the budget. Resolution is
+    # parallelized via ThreadPoolExecutor with a soft wall-clock cap so a
+    # stuck yfinance call can't blow Modal's 120s wall timeout. The filter
+    # logic (floor check, unknown bookkeeping, survivor commit) stays serial
+    # and unchanged — only the resolution step is parallel.
+    if market_cap_filter_enabled and candidates:
+        cap_by_idx, cap_budget_exhausted = _resolve_market_caps_parallel(
+            candidates, client, market_cap_cache,
+        )
+        if cap_budget_exhausted:
+            _mark_partial(run_metrics, "market_cap_budget_exhausted")
+    else:
+        cap_by_idx = {i: None for i in range(len(candidates))}
+
+    for i, (candidate_sig, candidate_ticker, candidate_dedup_hash) in enumerate(candidates):
+        market_cap_usd_mm: Optional[float] = cap_by_idx.get(i)
+        if candidate_ticker and market_cap_filter_enabled:
+            if market_cap_usd_mm is None:
+                run_metrics["market_cap_unknown_total"] += 1
+            elif 0 < market_cap_usd_mm < market_cap_floor_usd_mm:
+                _record_market_cap_filtered(
+                    run_metrics,
+                    ticker=candidate_ticker,
+                    market_cap_usd_mm=market_cap_usd_mm,
+                )
+                continue
+        candidate_sig.raw_payload["market_cap_usd_mm"] = market_cap_usd_mm
+        signals.append(candidate_sig)
+        if candidate_dedup_hash is not None:
+            dedup_updates[candidate_dedup_hash] = date_to
 
     run_metrics["fetched_records"] = hits_processed
     run_metrics["signals_detected"] = len(signals)
@@ -1251,6 +1616,13 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             _save_dedup(client, updated)
         if rotation_state is not None:
             _save_rotation(client, rotation_state)
+        # Only re-save the persistent caches if we actually added/refreshed
+        # entries this run — avoids unnecessary Storage writes when every
+        # lookup hit a fresh cache entry.
+        if company_context_dirty[0]:
+            _save_persistent_ticker_cache(client, company_context_cache)
+        if merger_sibling_dirty[0]:
+            _save_merger_sibling_cache(client, merger_sibling_cache)
 
     return ScannerResult(
         scanner="edgar_filing_monitor",
