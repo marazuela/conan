@@ -466,7 +466,14 @@ def _detect_crowded(positions: List[Dict[str, Any]]) -> Dict[str, List[Dict[str,
             by_isin[p["isin"]].append(p)
     crowded: Dict[str, List[Dict[str, Any]]] = {}
     for isin, pos in by_isin.items():
-        if len(pos) < CROWDED_SHORT_MIN_HOLDERS:
+        # Count distinct holders, not filing rows. Upstream _dedup_positions
+        # already collapses (regulator, holder, isin) to one row per regulator,
+        # but the same holder may appear across multiple regulators (dual-filing
+        # under FCA+AFM is common for cross-listed issuers), and historically
+        # a single holder with many dated filings was counted as N "holders".
+        # Both cases are fake crowding and trigger downstream ITRK declines.
+        unique_holders = {p.get("holder_name") for p in pos if p.get("holder_name")}
+        if len(unique_holders) < CROWDED_SHORT_MIN_HOLDERS:
             continue
         total_pct = sum((p.get("position_pct") or 0.0) for p in pos)
         if total_pct < CROWDING_MIN_TOTAL_PCT:

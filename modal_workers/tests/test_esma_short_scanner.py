@@ -135,6 +135,17 @@ def test_detect_crowded_emits_when_both_gates_pass():
     assert list(result.keys()) == ["GB0000CCCC03"]
 
 
+def test_detect_crowded_ignores_duplicate_holders():
+    # Same holder repeated (e.g. dual-regulator filings or multi-dated rows that
+    # slipped past upstream dedup) must not count as N distinct holders.
+    per_row = (CROWDING_MIN_TOTAL_PCT / CROWDED_SHORT_MIN_HOLDERS) + 0.1
+    duplicates = [
+        _holder("GB0000DDDD04", "Ilex Capital Partners (UK) LLP", per_row)
+        for _ in range(CROWDED_SHORT_MIN_HOLDERS + 4)
+    ]
+    assert _detect_crowded(duplicates) == {}
+
+
 def test_classify_sub_threshold_change_is_none():
     # 0.3pp change no longer crosses the 0.5pp bar.
     assert _classify({"position_pct": 1.1, "previous_position_pct": 0.8, "change_pct": 0.3}) is None
