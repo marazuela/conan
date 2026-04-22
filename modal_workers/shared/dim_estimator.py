@@ -270,7 +270,137 @@ def _aggregate_trend_tier(holders: list[Any]) -> Optional[int]:
     return 3
 
 
+def _form4_cluster_tier(c_suite: int, vp: int, director_only: int,
+                         ten_pct: int, holder_count: int) -> int:
+    """Apply the Form 4 cluster rubric from profile_short_positioning.md:47-55.
+
+    Rubric:
+      5 — 3+ C-suite in same 30d window
+      4 — 2 C-suite + 1+ VP
+      3 — Cluster of VPs/directors, no C-suite
+      2 — 1-2 minor insiders
+      1 — Single minor insider
+    A 10%-holder is treated as C-suite-tier for aggregate counting (their
+    ownership stake makes their transactions equally informative).
+    """
+    csuite_tier = c_suite + ten_pct
+    if csuite_tier >= 3:
+        return 5
+    if csuite_tier >= 2 and vp >= 1:
+        return 4
+    if csuite_tier >= 2:
+        return 4  # 2 C-suite alone still above VP-only cluster
+    if (vp + director_only) >= 2 and csuite_tier == 0:
+        return 3
+    if holder_count == 1 and (c_suite >= 1 or ten_pct >= 1):
+        # Solo C-suite or solo 10%-holder buy — emitted as a dedicated signal_type
+        # upstream; route here to a meaningful non-minor tier.
+        return 3
+    if holder_count >= 1:
+        return 2
+    return 1
+
+
+def _form4_trend_tier(earliest: Optional[str], latest: Optional[str],
+                       holder_count: int) -> Optional[int]:
+    """Trend direction for an insider cluster.
+
+    Rapid buildup → 5 (all recent activity compressed in a week).
+    Steady → 4 (spread over 2-3 weeks with recent activity).
+    Stable → 3.
+    Returns None if we cannot date the cluster.
+    """
+    if not earliest or not latest:
+        return None
+    try:
+        e = datetime.strptime(earliest, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        l = datetime.strptime(latest, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    span = (l - e).days
+    days_since_latest = (datetime.now(timezone.utc) - l).days
+    # Compress into a single compact tier.
+    if span <= 7 and days_since_latest <= 7 and holder_count >= 2:
+        return 5
+    if span <= 14 and days_since_latest <= 14:
+        return 4
+    if span <= 30 and days_since_latest <= 21:
+        return 3
+    if days_since_latest > 21:
+        return 2
+    return 3
+
+
+def _form4_size_tier(total_value_usd: Optional[float],
+                      market_cap_usd: Optional[float]) -> Optional[int]:
+    """Form 4 size-vs-float tier: aggregate insider-transaction value as % of mcap.
+
+    Insider buys are rarely >1% of market cap; scale is compressed vs. ESMA
+    short positions.
+    """
+    if total_value_usd is None or market_cap_usd is None or market_cap_usd <= 0:
+        return None
+    pct = abs(total_value_usd) / market_cap_usd * 100.0
+    if pct >= 1.0:
+        return 5
+    if pct >= 0.5:
+        return 4
+    if pct >= 0.1:
+        return 3
+    if pct >= 0.05:
+        return 2
+    return 1
+
+
+def _estimate_form4_insider_cluster(raw: Dict[str, Any]) -> Optional[DimensionEstimate]:
+    """Form 4 insider-cluster branch of short_positioning.
+
+    Payload keys consumed:
+      c_suite_count, vp_count, director_only_count, ten_percent_holder_count,
+      holder_count, earliest_txn_date, latest_txn_date,
+      total_value_usd, market_cap (via market_snapshot), adv_usd.
+    """
+    c_suite = int(raw.get("c_suite_count") or 0)
+    vp = int(raw.get("vp_count") or 0)
+    director_only = int(raw.get("director_only_count") or 0)
+    ten_pct = int(raw.get("ten_percent_holder_count") or 0)
+    holder_count = int(raw.get("holder_count") or 0)
+    if holder_count == 0 and (c_suite + vp + director_only + ten_pct) == 0:
+        return None
+
+    supported: Dict[str, int] = {}
+    supported["crowding_intensity"] = _form4_cluster_tier(
+        c_suite, vp, director_only, ten_pct, holder_count)
+
+    trend = _form4_trend_tier(
+        raw.get("earliest_txn_date"),
+        raw.get("latest_txn_date"),
+        holder_count,
+    )
+    if trend is not None:
+        supported["trend_direction"] = trend
+
+    size_vs_float = _form4_size_tier(
+        _coerce_float(raw.get("total_value_usd")),
+        _coerce_float(raw.get("market_cap"))
+        or _coerce_float(raw.get("market_cap_usd")),
+    )
+    if size_vs_float is not None:
+        supported["size_vs_float"] = size_vs_float
+
+    adv_usd = _raw_adv_usd(raw)
+    if adv_usd is not None:
+        supported["liquidity"] = _liquidity_tier(adv_usd)
+
+    return _materialize_estimate("short_positioning", supported)
+
+
 def _estimate_short_positioning(raw: Dict[str, Any]) -> Optional[DimensionEstimate]:
+    # Form 4 insider-cluster payloads have their own rubric (profile spec
+    # lines 47-55); route them before the ESMA holder-count path.
+    if raw.get("insider_cluster") is True:
+        return _estimate_form4_insider_cluster(raw)
+
     holders = raw.get("holders") if isinstance(raw.get("holders"), list) else []
     regulators = raw.get("regulators") if isinstance(raw.get("regulators"), list) else []
     holder_count = raw.get("holder_count")

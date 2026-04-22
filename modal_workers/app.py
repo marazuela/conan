@@ -444,6 +444,18 @@ def courtlistener_scanner_once() -> dict:
 def sec_enforcement_scanner_once() -> dict:
     return _run("sec_enforcement_scanner")
 
+@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
+def insider_form4_scanner_once() -> dict:
+    # Per-filing XML fetch: EFTS list (1 call) + primary_doc.xml fetch per hit
+    # (~500 cap). At 9 req/s SEC ceiling with connection pooling, cold runs land
+    # in ~80-120s; keep timeout at 240s for variance. Registry timeout_hard_s
+    # matches.
+    return _run("insider_form4_scanner")
+
+@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
+def delaware_chancery_scanner_once() -> dict:
+    return _run("delaware_chancery_scanner")
+
 
 # --- weekly cadence ---
 

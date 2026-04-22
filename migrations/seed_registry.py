@@ -79,6 +79,8 @@ SCANNER_TO_SOURCE_KIND: Dict[str, str] = {
     "cvm_scanner": "cvm",
     "bmv_scanner": "bmv",
     "courtlistener_scanner": "courtlistener",
+    "insider_form4_scanner": "edgar",          # SEC Section 16 Form 4 via EDGAR
+    "delaware_chancery_scanner": "delaware_chancery",
 }
 
 SOURCE_NAME_TEMPLATE = {
@@ -97,6 +99,7 @@ SOURCE_NAME_TEMPLATE = {
     "cvm": "Brazil CVM",
     "bmv": "Mexico BMV",
     "courtlistener": "CourtListener (US federal dockets)",
+    "delaware_chancery": "Delaware Court of Chancery (opinions + CourtConnect dockets)",
 }
 
 # Canonical market-cap floor (spec §12 locked decision).
