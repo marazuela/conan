@@ -429,6 +429,17 @@ def _build_position_index(positions: List[Dict[str, Any]]) -> Dict[str, Dict[str
     return index
 
 
+def _dedup_positions(positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Feeds occasionally include multiple active rows for the same (holder, isin)
+    # — observed in FCA's "Current" sheet (amended filings left alongside originals).
+    # signal_id is deterministic on (regulator, isin, holder, signal_type), so
+    # two such rows both land in pending_signals with the same signal_id and
+    # crash the bulk insert on signals_pkey. Keep the most recent position_date.
+    # AMF already does this inline via its `active` dict; this helper normalizes
+    # the other three regulators to the same contract.
+    return list(_build_position_index(positions).values())
+
+
 def _diff_vs_prior(current: List[Dict[str, Any]],
                    prior: Optional[List[Dict[str, Any]]]) -> None:
     """Annotate each current position with previous_position_pct + change_pct."""
@@ -861,7 +872,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     # --- Diff each regulator vs its own prior snapshot ---
     all_current: List[Dict[str, Any]] = []
-    for reg, positions in current_by_regulator.items():
+    for reg in list(current_by_regulator.keys()):
+        positions = _dedup_positions(current_by_regulator[reg])
+        current_by_regulator[reg] = positions  # snapshot save uses deduped list
         prior = _load_prior_snapshot(client, reg.upper(), today_str)
         _diff_vs_prior(positions, prior)
         all_current.extend(positions)
@@ -992,6 +1005,26 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             signal=_build_crowding_signal(isin, positions, scan_date, issuer_figi, ticker_local),
             dedup_hash=h,
         ))
+
+    # Defense-in-depth: the main loop trusts dedup_log to prevent duplicate
+    # signal_ids within a run, but the log is only written AFTER top-cap, so
+    # two positions sharing (regulator, isin, holder, signal_type) both slip
+    # through and collide on signals_pkey at bulk insert (the ON CONFLICT
+    # clause targets source_content_hash, not signal_id). Per-regulator
+    # _dedup_positions above should prevent this; this is a belt-and-braces
+    # guard so a future feed quirk can't crash the whole batch.
+    seen_signal_ids: set[str] = set()
+    unique_pending: List[_PendingEmission] = []
+    collided = 0
+    for item in pending_signals:
+        if item.signal.signal_id in seen_signal_ids:
+            collided += 1
+            continue
+        seen_signal_ids.add(item.signal.signal_id)
+        unique_pending.append(item)
+    if collided:
+        warnings.append(f"signal_id_collision: dropped {collided} duplicate emission(s)")
+    pending_signals = unique_pending
 
     top_signal_limit = _coerce_signal_limit(
         cfg.config.get("top_signal_limit"),

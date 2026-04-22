@@ -8,7 +8,9 @@ from modal_workers.scanners.esma_short_scanner import (
     _PendingEmission,
     _apply_top_signal_limit,
     _classify,
+    _dedup_positions,
     _detect_crowded,
+    _signal_id,
 )
 from modal_workers.shared.scanner_base import Signal
 
@@ -148,3 +150,36 @@ def test_classify_buildup_strength_tiers_at_one_pct():
     assert mid == ("short_buildup", "short", 3)
     big = _classify({"position_pct": 2.3, "previous_position_pct": 0.8, "change_pct": 1.5})
     assert big == ("short_buildup", "short", 4)
+
+
+def test_dedup_positions_keeps_most_recent_per_holder_isin():
+    # Same (holder, isin) twice in a feed — e.g. amended FCA disclosure left alongside
+    # the original row. Must collapse to one entry (the one with the later date), or
+    # else both emit the same signal_id and crash the bulk insert.
+    positions = [
+        {"regulator": "FCA", "holder_name": "X", "isin": "GB0000AAAA01",
+         "position_pct": 0.7, "position_date": "2026-04-15"},
+        {"regulator": "FCA", "holder_name": "X", "isin": "GB0000AAAA01",
+         "position_pct": 0.9, "position_date": "2026-04-20"},
+        {"regulator": "FCA", "holder_name": "Y", "isin": "GB0000AAAA01",
+         "position_pct": 0.5, "position_date": "2026-04-18"},
+    ]
+    result = _dedup_positions(positions)
+    assert len(result) == 2
+    by_holder = {p["holder_name"]: p for p in result}
+    assert by_holder["X"]["position_pct"] == 0.9  # latest date wins
+    assert by_holder["X"]["position_date"] == "2026-04-20"
+    assert by_holder["Y"]["position_pct"] == 0.5
+
+
+def test_signal_id_deterministic_on_regulator_isin_holder_type():
+    # Contract the bug exploited: same tuple -> same PK. Regression test so a
+    # future refactor doesn't silently add entropy (breaking idempotent re-runs)
+    # or drop an input field (re-introducing cross-tuple collisions).
+    a = _signal_id("FCA", "GB0000AAAA01", "Holder X", "short_disclosure")
+    b = _signal_id("FCA", "GB0000AAAA01", "Holder X", "short_disclosure")
+    assert a == b
+    different_type = _signal_id("FCA", "GB0000AAAA01", "Holder X", "short_buildup")
+    different_holder = _signal_id("FCA", "GB0000AAAA01", "Holder Y", "short_disclosure")
+    assert a != different_type
+    assert a != different_holder
