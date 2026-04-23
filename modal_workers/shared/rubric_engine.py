@@ -101,6 +101,21 @@ def classify_band(score: float) -> str:
     return "discard"
 
 
+# Damper applied in score_signal when provenance=='heuristic'. Heuristic dim
+# estimates come directly from scanner raw_payload without AI/analyst vetting;
+# a borderline-immediate score should not skip the resolver queue. Applied after
+# weighted_total, before classify_band.
+#
+# 0.9 calibrated against the 2026-04-23 ESMA same-day distribution where 14 of
+# 17 immediates landed at crowd=5,trend=3,catalyst=3 (score ≈36.5, just over
+# the 35 threshold). 0.9 × 36.5 = 32.85 → watchlist. Genuinely-high scores
+# (≥39, e.g. trend=5,crowd=5,catalyst=5) remain immediate after damping.
+#
+# Not applied to provenance in {'scanner','ai_resolved','analyst'} — those
+# paths carry explicit per-dim reasoning and shouldn't be penalised.
+HEURISTIC_SCORE_MULTIPLIER: float = 0.9
+
+
 def dimensions_with_provenance(
     dimensions: Dict[str, int],
     provenance: str,
@@ -322,7 +337,7 @@ def apply_auto_caps(
 # Signal scoring
 # --------------------------------------------------------------------
 
-def score_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
+def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict[str, Any]:
     """Apply the matching profile rubric to a raw signal.
 
     Input contract:
@@ -332,6 +347,9 @@ def score_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
         dim for the profile is missing, the signal is returned unscored (score=None,
         band=None) rather than silently filled with defaults. Values are clamped to
         [1, 5] before scoring.
+      provenance — kwarg; when 'heuristic', HEURISTIC_SCORE_MULTIPLIER is applied
+        to the weighted total before classify_band. Other values ('scanner',
+        'ai_resolved', 'analyst') leave the score unchanged.
 
     Returns:
       {
@@ -375,6 +393,8 @@ def score_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
         dims[dim] = max(1, min(5, v))
 
     score = weighted_total(dims, profile)
+    if provenance == "heuristic":
+        score = round(score * HEURISTIC_SCORE_MULTIPLIER, 2)
     band = classify_band(score)
     band, caps = apply_auto_caps(signal, dims, profile, band)
 
@@ -433,7 +453,10 @@ def rescore_with_dims(
         )
     merged_payload: Dict[str, Any] = dict(raw_payload or {})
     merged_payload["dimensions"] = dims
-    result = score_signal({"scoring_profile": scoring_profile, "raw_data": merged_payload})
+    result = score_signal(
+        {"scoring_profile": scoring_profile, "raw_data": merged_payload},
+        provenance=provenance,
+    )
 
     dims_with_provenance = dimensions_with_provenance(
         result.get("dimensions") or {},

@@ -635,7 +635,7 @@ def _project_short_score(sig: Signal) -> float:
     scored = score_signal({
         "scoring_profile": "short_positioning",
         "raw_data": {"dimensions": estimate.dimensions},
-    })
+    }, provenance="heuristic")
     return float(scored.get("score") or 0.0)
 
 

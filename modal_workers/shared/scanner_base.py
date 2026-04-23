@@ -214,7 +214,8 @@ def _signal_to_row(
         "scoring_profile": profile,
         "raw_data": scoring_payload,
     }
-    scored = score_signal(scoring_input)
+    scoring_provenance = "heuristic" if estimate is not None else "scanner"
+    scored = score_signal(scoring_input, provenance=scoring_provenance)
 
     persisted_dimensions: Dict[str, Any]
     extensions: Dict[str, Any] = dict(sig.extensions or {})
