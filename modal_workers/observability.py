@@ -922,7 +922,7 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
             "GET", "thesis_jobs",
             params={
                 # Embedded select pulls scoring_profile from the signals FK in one roundtrip.
-                "select": "id,signal_id,status,updated_at,attempt_count,signals(scoring_profile)",
+                "select": "id,signal_id,status,updated_at,attempt_count,gate_reasons,signals(scoring_profile)",
                 "status": f"eq.{status}",
                 "updated_at": f"lt.{cutoff}",
                 "order": "updated_at.asc",
@@ -967,11 +967,16 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
             for row in rows:
                 attempt = int(row.get("attempt_count") or 0)
                 next_attempt = attempt + 1
+                existing_reasons = row.get("gate_reasons") or []
                 if next_attempt >= _SCORING_AUTO_RESET_MAX_ATTEMPTS:
                     client._rest(
                         "PATCH", "thesis_jobs",
                         params={"id": f"eq.{row['id']}"},
-                        json_body={"status": "dlq", "attempt_count": next_attempt},
+                        json_body={
+                            "status": "dlq",
+                            "attempt_count": next_attempt,
+                            "gate_reasons": existing_reasons + ["stuck_scoring_sla_dlq"],
+                        },
                         prefer="return=minimal",
                     )
                     dlqs += 1
@@ -979,7 +984,11 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
                     client._rest(
                         "PATCH", "thesis_jobs",
                         params={"id": f"eq.{row['id']}"},
-                        json_body={"status": "needs_scoring", "attempt_count": next_attempt},
+                        json_body={
+                            "status": "needs_scoring",
+                            "attempt_count": next_attempt,
+                            "gate_reasons": existing_reasons + ["stuck_scoring_sla_reset"],
+                        },
                         prefer="return=minimal",
                     )
                     resets += 1
