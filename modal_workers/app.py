@@ -268,6 +268,86 @@ def regex_check_endpoint(
     return {"matched": m is not None, "match": m.group(0) if m else None}
 
 
+@app.function(image=image, timeout=45, secrets=[scanner_secrets, compute_auth_secrets])
+@modal.fastapi_endpoint(method="POST", label="edgar-fetch")
+def edgar_fetch_endpoint(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = Header(default=None),
+) -> dict:
+    """Fetch an SEC/EDGAR URL with a compliant User-Agent for signal_resolver.
+
+    The Cowork resolver skill is required to cite primary sources, but the
+    Claude Code WebFetch tool's default User-Agent is 403'd by sec.gov under
+    SEC's fair-access policy. This endpoint wraps the same SEC_USER_AGENT
+    pattern the in-worker scanners (edgar_filing_monitor, insider_form4,
+    sec_enforcement) already use — `Name contact@email` format — so the skill
+    can retrieve primary sources via rpc_edgar_fetch instead of aggregators.
+
+    Only accepts hosts ending in sec.gov / sec.gov.* (e.g. www.sec.gov,
+    efts.sec.gov, data.sec.gov) to prevent this endpoint being used as an
+    open-proxy to anywhere on the internet.
+
+    payload:  {url: str, max_bytes?: int (default 2_000_000)}
+    returns:  {status: int, content: str, content_type: str, final_url: str, truncated: bool}
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+
+    import os
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+
+    url = payload.get("url")
+    if not isinstance(url, str) or not url:
+        raise ValueError("edgar_fetch: `url` is required and must be a string")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"edgar_fetch: unsupported scheme {parsed.scheme!r}")
+    host = (parsed.hostname or "").lower()
+    if not (host == "sec.gov" or host.endswith(".sec.gov")):
+        raise ValueError(f"edgar_fetch: only sec.gov hosts allowed; got {host!r}")
+
+    user_agent = os.environ.get("SEC_USER_AGENT")
+    if not user_agent:
+        raise RuntimeError(
+            "edgar_fetch: SEC_USER_AGENT env var missing — scanner-secrets not attached")
+
+    max_bytes = int(payload.get("max_bytes") or 2_000_000)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml,text/plain,*/*",
+            "Accept-Encoding": "identity",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read(max_bytes + 1)
+            truncated = len(raw) > max_bytes
+            if truncated:
+                raw = raw[:max_bytes]
+            content_type = resp.headers.get("Content-Type", "") or ""
+            charset = "utf-8"
+            if "charset=" in content_type.lower():
+                charset = content_type.split("charset=")[-1].split(";")[0].strip() or "utf-8"
+            content = raw.decode(charset, errors="replace")
+            return {
+                "status": resp.status,
+                "content": content,
+                "content_type": content_type,
+                "final_url": resp.url,
+                "truncated": truncated,
+            }
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read(2000).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"edgar_fetch: HTTP {e.code} from {url} — {body[:500]}")
+
+
 @app.function(image=image, timeout=60, secrets=[supabase_secrets, compute_auth_secrets])
 @modal.fastapi_endpoint(method="POST", label="storage-upload")
 def storage_upload_endpoint(
