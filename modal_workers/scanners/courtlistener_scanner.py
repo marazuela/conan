@@ -200,13 +200,23 @@ def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal
 
     # Resolve FIGI best-effort (v1 left this None; v2 populates when possible so
     # the reactor / entity-resolver cascade has a head start).
+    #
+    # Hard-gate 2026-04-23 — the TICKER_HINT_RE regex `[A-Z]{2,5}` matches any
+    # 2-5 uppercase acronym in a case-name parenthetical ("Foo Corp (UNOPS) v.
+    # Bar LLC" emits UNOPS — the UN Office for Project Services, not a ticker).
+    # Only propagate ticker_hint to EntityHints when OpenFIGI resolves it; that
+    # gates entity-table junk on a verified issuer, not on regex shape alone.
+    # The raw_payload still carries ticker_hint + ticker_hint_source for forensic
+    # trace so the hit isn't lost entirely.
     issuer_figi: Optional[str] = None
+    resolved_ticker: Optional[str] = None
     if ticker_hint:
         try:
             from modal_workers.shared.openfigi_resolver import resolve_ticker
             res = resolve_ticker(ticker_hint, exch_code="US")
             if res.resolved:
                 issuer_figi = res.issuer_figi
+                resolved_ticker = ticker_hint
         except Exception:
             pass
 
@@ -253,7 +263,7 @@ def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal
 
     entity_hints = EntityHints(
         issuer_figi=issuer_figi,
-        ticker=ticker_hint,
+        ticker=resolved_ticker,
         mic=None,  # US MIC not determinable from CourtListener payload alone
         name=case_name,
         country="US",

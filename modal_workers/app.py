@@ -268,30 +268,48 @@ def regex_check_endpoint(
     return {"matched": m is not None, "match": m.group(0) if m else None}
 
 
-@app.function(image=image, timeout=45, secrets=[scanner_secrets, compute_auth_secrets])
+@app.function(image=image, timeout=45, secrets=[scanner_secrets, supabase_secrets, compute_auth_secrets])
 @modal.fastapi_endpoint(method="POST", label="edgar-fetch")
 def edgar_fetch_endpoint(
     payload: dict,
     x_conan_compute_secret: Optional[str] = Header(default=None),
 ) -> dict:
-    """Fetch an SEC/EDGAR URL with a compliant User-Agent for signal_resolver.
+    """Multi-kind compute-fetch endpoint for signal_resolver.
 
-    The Cowork resolver skill is required to cite primary sources, but the
-    Claude Code WebFetch tool's default User-Agent is 403'd by sec.gov under
-    SEC's fair-access policy. This endpoint wraps the same SEC_USER_AGENT
-    pattern the in-worker scanners (edgar_filing_monitor, insider_form4,
-    sec_enforcement) already use — `Name contact@email` format — so the skill
-    can retrieve primary sources via rpc_edgar_fetch instead of aggregators.
+    Hosts two "kinds" under one fastapi_endpoint to stay within Modal's
+    per-app web-endpoint cap (8 on the current plan). Dispatch happens on
+    `payload.kind`; default is 'edgar_fetch' for backward-compat with the
+    existing rpc_edgar_fetch RPC (which doesn't send `kind`).
 
-    Only accepts hosts ending in sec.gov / sec.gov.* (e.g. www.sec.gov,
-    efts.sec.gov, data.sec.gov) to prevent this endpoint being used as an
-    open-proxy to anywhere on the internet.
+    The URL is kept as `edgar-fetch` despite the expanded scope because
+    rotating the label would break in-flight rpc_edgar_fetch calls during
+    deploy. The internal_config entries for each kind point at this one URL.
 
-    payload:  {url: str, max_bytes?: int (default 2_000_000)}
-    returns:  {status: int, content: str, content_type: str, final_url: str, truncated: bool}
+    kind='edgar_fetch' (default):
+      Fetch an SEC/EDGAR URL with the SEC_USER_AGENT header. Required because
+      WebFetch's default UA is 403'd by sec.gov under SEC's fair-access policy.
+      payload:  {url: str, max_bytes?: int (default 2_000_000)}
+      returns:  {status, content, content_type, final_url, truncated}
+
+    kind='market_snapshot':
+      Fetch a live yfinance snapshot (mcap, ADV, valuation cushion). Used by
+      the litigation profile's financial_materiality dim because
+      entities.market_cap_usd has no writer (100% NULL).
+      payload:  {ticker: str, mic?: str}
+      returns:  load_market_snapshot result dict, always with source_liveness
     """
     _verify_compute_secret(x_conan_compute_secret)
 
+    kind = payload.get("kind") or "edgar_fetch"
+
+    if kind == "edgar_fetch":
+        return _do_edgar_fetch(payload)
+    if kind == "market_snapshot":
+        return _do_market_snapshot(payload)
+    raise ValueError(f"edgar_fetch_endpoint: unknown kind {kind!r}")
+
+
+def _do_edgar_fetch(payload: dict) -> dict:
     import os
     import urllib.parse
     import urllib.request
@@ -346,6 +364,19 @@ def edgar_fetch_endpoint(
         except Exception:  # noqa: BLE001
             pass
         raise RuntimeError(f"edgar_fetch: HTTP {e.code} from {url} — {body[:500]}")
+
+
+def _do_market_snapshot(payload: dict) -> dict:
+    from modal_workers.shared.market_snapshot import load_market_snapshot
+    from modal_workers.shared.supabase_client import SupabaseClient
+    ticker = payload.get("ticker")
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("market_snapshot: `ticker` is required and must be a non-empty string")
+    mic = payload.get("mic")
+    if mic is not None and not isinstance(mic, str):
+        raise ValueError("market_snapshot: `mic` must be a string or omitted")
+    snapshot = load_market_snapshot(ticker.strip(), mic=mic, client=SupabaseClient())
+    return snapshot or {"source_liveness": "unavailable", "ticker": ticker}
 
 
 @app.function(image=image, timeout=60, secrets=[supabase_secrets, compute_auth_secrets])

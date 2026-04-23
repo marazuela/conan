@@ -396,6 +396,55 @@ def test_score_signal_produces_expected_shape():
     assert out["band"] == "immediate"
 
 
+def test_score_signal_heuristic_provenance_damps_borderline_immediate_to_watchlist():
+    """Heuristic-provenance scoring applies HEURISTIC_SCORE_MULTIPLIER (0.9)
+    before classify_band. Motivating case from 2026-04-23 ESMA same-day
+    distribution: short_positioning crowd=5,trend=3,catalyst=3,size_vs_float=4
+    (+ defaulted historical_analog=3, liquidity=3) scores ~36.5 — just above
+    the 35 immediate threshold. Damped to 32.85 → watchlist."""
+    signal = {
+        "scoring_profile": "short_positioning",
+        "raw_data": {"dimensions": {
+            "crowding_intensity": 5, "trend_direction": 3, "catalyst_proximity": 3,
+            "size_vs_float": 4, "historical_analog": 3, "liquidity": 3,
+        }},
+    }
+    undamped = score_signal(signal)  # default provenance='scanner'
+    damped = score_signal(signal, provenance="heuristic")
+    assert undamped["score"] == 36.5 and undamped["band"] == "immediate"
+    assert damped["score"] == 32.85 and damped["band"] == "watchlist"
+
+
+def test_score_signal_heuristic_provenance_keeps_clearly_immediate_at_immediate():
+    """Damping must not demote genuinely-high scores. All-5s on short_positioning
+    score 50 → 45 damped → still immediate (≥35)."""
+    signal = {
+        "scoring_profile": "short_positioning",
+        "raw_data": {"dimensions": {
+            "crowding_intensity": 5, "trend_direction": 5, "catalyst_proximity": 5,
+            "size_vs_float": 5, "historical_analog": 5, "liquidity": 5,
+        }},
+    }
+    damped = score_signal(signal, provenance="heuristic")
+    assert damped["score"] == 45.0
+    assert damped["band"] == "immediate"
+
+
+def test_score_signal_ai_resolved_provenance_is_not_damped():
+    """Only 'heuristic' triggers the damper. AI/analyst-resolved paths keep
+    the raw weighted_total."""
+    signal = {
+        "scoring_profile": "short_positioning",
+        "raw_data": {"dimensions": {
+            "crowding_intensity": 5, "trend_direction": 3, "catalyst_proximity": 3,
+            "size_vs_float": 4, "historical_analog": 3, "liquidity": 3,
+        }},
+    }
+    assert score_signal(signal, provenance="ai_resolved")["score"] == 36.5
+    assert score_signal(signal, provenance="analyst")["score"] == 36.5
+    assert score_signal(signal, provenance="scanner")["score"] == 36.5
+
+
 def test_score_signal_litigation_with_party_confidence_cap():
     # Litigation signal that would score Immediate but gets capped to Archive by party confidence.
     signal = {
