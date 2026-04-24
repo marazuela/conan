@@ -224,20 +224,90 @@ class TestBinaryCatalystEvFloor:
 
 
 class TestLitigationPartyConfidence:
-    def test_party_confidence_below_3_caps_immediate_to_archive(self):
-        band, caps = apply_auto_caps({"raw_data": {}}, {"party_resolution_confidence": 1}, "litigation", "immediate")
+    # 2026-04-24: threshold raised from <3 to <4. Tests pass
+    # `universe_resolved=True` to isolate party_confidence_cap behaviour from
+    # the new litigation.universe_miss_cap.
+    def test_party_confidence_below_4_caps_immediate_to_archive(self):
+        raw = {"raw_data": {"universe_resolved": True}}
+        band, caps = apply_auto_caps(raw, {"party_resolution_confidence": 1}, "litigation", "immediate")
         assert band == "archive"
         assert caps == ["litigation.party_confidence_cap"]
 
-    def test_party_confidence_below_3_caps_watchlist_to_archive(self):
-        band, caps = apply_auto_caps({"raw_data": {}}, {"party_resolution_confidence": 2}, "litigation", "watchlist")
+    def test_party_confidence_below_4_caps_watchlist_to_archive(self):
+        raw = {"raw_data": {"universe_resolved": True}}
+        band, caps = apply_auto_caps(raw, {"party_resolution_confidence": 2}, "litigation", "watchlist")
         assert band == "archive"
         assert caps == ["litigation.party_confidence_cap"]
 
-    def test_party_confidence_at_3_does_not_cap(self):
-        band, caps = apply_auto_caps({"raw_data": {}}, {"party_resolution_confidence": 3}, "litigation", "immediate")
+    def test_party_confidence_3_now_caps(self):
+        """New behaviour: prc=3 falls below the raised threshold."""
+        raw = {"raw_data": {"universe_resolved": True}}
+        band, caps = apply_auto_caps(raw, {"party_resolution_confidence": 3}, "litigation", "immediate")
+        assert band == "archive"
+        assert caps == ["litigation.party_confidence_cap"]
+
+    def test_party_confidence_at_4_does_not_cap(self):
+        raw = {"raw_data": {"universe_resolved": True}}
+        band, caps = apply_auto_caps(raw, {"party_resolution_confidence": 4}, "litigation", "immediate")
         assert band == "immediate"
         assert caps == []
+
+    def test_party_confidence_at_5_does_not_cap(self):
+        raw = {"raw_data": {"universe_resolved": True}}
+        band, caps = apply_auto_caps(raw, {"party_resolution_confidence": 5}, "litigation", "immediate")
+        assert band == "immediate"
+        assert caps == []
+
+
+class TestLitigationUniverseMissCap:
+    """New 2026-04-24 rubric cap — archives litigation signals where the party
+    didn't resolve to a public issuer AND the NOS isn't high-priority."""
+
+    def _call(self, raw_data, prc=5, band="immediate"):
+        return apply_auto_caps(
+            {"raw_data": raw_data},
+            {"party_resolution_confidence": prc},
+            "litigation", band,
+        )
+
+    def test_no_universe_match_low_priority_nos_caps(self):
+        band, caps = self._call({"universe_resolved": False, "nos": "830"})
+        assert band == "archive"
+        assert "litigation.universe_miss_cap" in caps
+
+    def test_no_universe_match_contract_nos_caps(self):
+        band, caps = self._call({"universe_resolved": False, "nos": "190"})
+        assert band == "archive"
+        assert "litigation.universe_miss_cap" in caps
+
+    def test_securities_nos_exempt(self):
+        band, caps = self._call({"universe_resolved": False, "nos": "850"})
+        assert band == "immediate"
+        assert caps == []
+
+    def test_antitrust_nos_exempt(self):
+        band, caps = self._call({"universe_resolved": False, "nos": "410"})
+        assert band == "immediate"
+        assert caps == []
+
+    def test_chancery_category_exempt(self):
+        band, caps = self._call({
+            "universe_resolved": False,
+            "signal_category": "delaware_chancery",
+        })
+        assert band == "immediate"
+        assert caps == []
+
+    def test_universe_resolved_not_capped(self):
+        band, caps = self._call({"universe_resolved": True, "nos": "830"})
+        assert band == "immediate"
+        assert caps == []
+
+    def test_watchlist_to_archive(self):
+        band, caps = self._call({"universe_resolved": False, "nos": "830"},
+                                 band="watchlist")
+        assert band == "archive"
+        assert "litigation.universe_miss_cap" in caps
 
 
 class TestTakeoverCandidateCaps:
@@ -447,17 +517,21 @@ def test_score_signal_ai_resolved_provenance_is_not_damped():
 
 def test_score_signal_litigation_with_party_confidence_cap():
     # Litigation signal that would score Immediate but gets capped to Archive by party confidence.
+    # Passes universe_resolved=True to isolate party_confidence_cap from universe_miss_cap.
     signal = {
         "scoring_profile": "litigation",
-        "raw_data": {"dimensions": {
-            "financial_materiality": 5, "legal_outcome_probability": 5, "market_pricing": 5,
-            "resolution_timeline": 5, "liquidity": 5, "party_resolution_confidence": 2,
-        }},
+        "raw_data": {
+            "universe_resolved": True,
+            "dimensions": {
+                "financial_materiality": 5, "legal_outcome_probability": 5, "market_pricing": 5,
+                "resolution_timeline": 5, "liquidity": 5, "party_resolution_confidence": 2,
+            },
+        },
     }
     out = score_signal(signal)
     # score = 5*(3+2+2+1.5+1) + 2*0.5 = 47.5 + 1.0 = 48.5
     assert out["score"] == 48.5
-    # Raw band = immediate (≥35), but party_confidence_cap (prc<3) downgrades to archive.
+    # Raw band = immediate (≥35), but party_confidence_cap (prc<4) downgrades to archive.
     assert out["band"] == "archive"
     assert out["auto_caps_triggered"] == ["litigation.party_confidence_cap"]
 
@@ -536,8 +610,10 @@ def test_rescore_with_dims_litigation_party_confidence_cap_fires():
     dims = {"financial_materiality": 5, "legal_outcome_probability": 5,
             "market_pricing": 5, "resolution_timeline": 5, "liquidity": 5,
             "party_resolution_confidence": 2}
-    out = rescore_with_dims("litigation", {}, dims)
-    # Raw score 48.5 → immediate, but prc<3 caps to archive.
+    # Pass universe_resolved=True via raw_data to isolate the party_confidence_cap
+    # test from the new universe_miss_cap (both trigger when prc<4 and unresolved).
+    out = rescore_with_dims("litigation", {"universe_resolved": True}, dims)
+    # Raw score 48.5 → immediate, but prc<4 caps to archive.
     assert out["score"] == 48.5
     assert out["band"] == "archive"
     assert out["auto_caps_triggered"] == ["litigation.party_confidence_cap"]

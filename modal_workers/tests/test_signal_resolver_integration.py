@@ -126,7 +126,12 @@ def test_resolver_merger_arb_weak_spread_lands_archive():
 # ----------------------------------------------------------------------
 
 def test_resolver_litigation_material_claim_confirmed_party_lands_immediate():
-    raw_payload = {"nos": "330 (antitrust)", "case_name": "Acme v. BigCorp"}
+    # NOS 410 = antitrust per CourtListener's nature-of-suit codes. universe_resolved=True
+    # marks the caption as having been matched against the SEC issuer index — required
+    # for the litigation.universe_miss_cap (added in courtlistener selectivity rework)
+    # not to demote the band to archive on a high-confidence-party + high-score row.
+    raw_payload = {"nos": "410", "case_name": "Acme v. BigCorp",
+                   "universe_resolved": True}
     dims = {"financial_materiality": 5, "legal_outcome_probability": 4,
             "market_pricing": 5, "resolution_timeline": 4, "liquidity": 4,
             "party_resolution_confidence": 5}
