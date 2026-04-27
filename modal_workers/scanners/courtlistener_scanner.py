@@ -50,13 +50,15 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from modal_workers.shared.caption_party import extract_corporate_party
 from modal_workers.shared.scanner_base import MissingAuthError, Signal, ScannerResult
+from modal_workers.shared.sec_issuer_lookup import IssuerIndex, IssuerMatch
 from modal_workers.shared.supabase_client import EntityHints, ScannerConfig, SupabaseClient
 
 NAME = "courtlistener_scanner"
 
 # ---------------------------------------------------------------------------
-# Constants (verbatim from v1)
+# Constants
 # ---------------------------------------------------------------------------
 
 BASE_URL = "https://www.courtlistener.com/api/rest/v4"
@@ -65,20 +67,104 @@ BASE_URL = "https://www.courtlistener.com/api/rest/v4"
 # filter hangs >45s server-side. /search/?type=r is indexed and returns in ~1-3s.
 SEARCH_URL = f"{BASE_URL}/search/"
 
-NOS_SECURITIES = {"850"}
-NOS_CONTRACT_MA = {"190"}
-NOS_PATENT = {"830", "835"}
-NOS_ANTITRUST = {"410"}
+# ---------------------------------------------------------------------------
+# Per-NOS configuration (2026-04-24 selectivity rework).
+#
+# Problem context (2026-04-23 log review): the scanner was emitting ~19 signals
+# per day, with 99% of resolved entities having a case caption as their name
+# (e.g., "Sipin v. Tesla Inc."), 0 FIGI coverage, and band distribution 66%
+# archive / 13% watchlist / 0 immediate. NOS 190 (Other Contract) and 830/835
+# (Patent) together were 70% of emissions and 70%+ archive — low-value noise.
+#
+# Fix: per-NOS priority tiering + universe-match gate. NOS with
+# `require_universe_match=True` only emit if the extracted corporate party
+# resolves to a public issuer via sec_issuer_lookup. NOS with `priority=off`
+# are disabled entirely (config flag, re-enable via scanners row config).
+#
+# The legacy `TARGET_NOS` set is preserved below as a union so tests and any
+# external importers still see the full whitelist.
+# ---------------------------------------------------------------------------
+
+NOS_CONFIG: Dict[str, Dict[str, Any]] = {
+    "850": {  # Securities/Commodities
+        "priority": "high",
+        "strength": 4,
+        "require_universe_match": False,
+        "signal_type": "federal_civil_securities_filed",
+        "case_family": "securities",
+    },
+    "410": {  # Antitrust
+        "priority": "high",
+        "strength": 4,
+        "require_universe_match": False,
+        "signal_type": "federal_civil_antitrust_filed",
+        "case_family": "antitrust",
+    },
+    "830": {  # Patent
+        "priority": "low",
+        "strength": 3,
+        "require_universe_match": True,
+        "signal_type": "federal_civil_patent_filed",
+        "case_family": "patent_ip",
+    },
+    "835": {  # Patent — Abbreviated New Drug Application
+        "priority": "low",
+        "strength": 3,
+        "require_universe_match": True,
+        "signal_type": "federal_civil_patent_filed",
+        "case_family": "patent_ip",
+    },
+    "190": {  # Other Contract — the flood source; default OFF
+        "priority": "off",
+        "strength": 3,
+        "require_universe_match": True,
+        "signal_type": "federal_civil_contract_filed",
+        "case_family": "contract_mna",
+    },
+}
+
+NOS_SECURITIES = {k for k, v in NOS_CONFIG.items() if v["case_family"] == "securities"}
+NOS_CONTRACT_MA = {k for k, v in NOS_CONFIG.items() if v["case_family"] == "contract_mna"}
+NOS_PATENT = {k for k, v in NOS_CONFIG.items() if v["case_family"] == "patent_ip"}
+NOS_ANTITRUST = {k for k, v in NOS_CONFIG.items() if v["case_family"] == "antitrust"}
 TARGET_NOS = NOS_SECURITIES | NOS_CONTRACT_MA | NOS_PATENT | NOS_ANTITRUST
+
 LOOKBACK_DAYS = 7
 PAGE_SIZE = 50
 REQUEST_TIMEOUT = 15  # per-request seconds
 
 TICKER_HINT_RE = re.compile(r'\(\s*"?([A-Z]{2,5})"?\s*\)')
 
-# Signal-type -> thesis direction. Preserved byte-for-byte from v1's inline map.
+
+def _resolve_nos_config(nos: str, cfg_overrides: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Merge static NOS_CONFIG with per-scan overrides from cfg.config.
+
+    Config flags (scanners.config jsonb):
+      courtlistener_nos_190_enabled: bool  # override off → high
+      courtlistener_nos_overrides:   dict   # per-NOS partial overrides
+    """
+    base = NOS_CONFIG.get(nos)
+    if base is None:
+        return None
+    merged = dict(base)
+    # Backwards-compat flag: re-enable NOS 190 when caption parsing is proven.
+    if nos == "190" and cfg_overrides.get("courtlistener_nos_190_enabled") is True:
+        merged["priority"] = "low"
+        merged["require_universe_match"] = True
+    # Free-form per-NOS override knob.
+    per_nos = cfg_overrides.get("courtlistener_nos_overrides") or {}
+    if isinstance(per_nos, dict) and nos in per_nos and isinstance(per_nos[nos], dict):
+        merged.update(per_nos[nos])
+    return merged
+
+# Signal-type -> thesis direction. "filed" variants all lean short (new
+# litigation = overhang), procedural stages keep v1 mappings.
 _DIRECTION_MAP: Dict[str, str] = {
     "federal_civil_filed": "short",
+    "federal_civil_securities_filed": "short",
+    "federal_civil_antitrust_filed": "short",
+    "federal_civil_patent_filed": "short",
+    "federal_civil_contract_filed": "short",
     "mtd_denied": "short",
     "class_certified": "short",
     "settlement": "neutral",
@@ -128,7 +214,12 @@ def _procedural_stage(signal_type: str) -> tuple[str, str]:
         "settlement": ("settlement", "1-3m"),
         "summary_judgment": ("summary_judgment", "1-3m"),
         "mtd_denied": ("post_mtd", "3-6m"),
+        # All "filed" variants (the 2026-04-24 NOS split) are complaint-stage.
         "federal_civil_filed": ("complaint_filed", ">12m"),
+        "federal_civil_securities_filed": ("complaint_filed", ">12m"),
+        "federal_civil_antitrust_filed": ("complaint_filed", ">12m"),
+        "federal_civil_patent_filed": ("complaint_filed", ">12m"),
+        "federal_civil_contract_filed": ("complaint_filed", ">12m"),
     }
     return mapping.get(signal_type, ("unknown", "unknown"))
 
@@ -178,49 +269,125 @@ def _fetch_nos(
 # Signal builder
 # ---------------------------------------------------------------------------
 
-def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal]:
+def _classify_procedural_override(case_name: str) -> Optional[str]:
+    """Derive a procedural-stage signal_type override from case_name keywords.
+
+    When the caption mentions "class certified", "settlement", "summary
+    judgment", or "motion to dismiss...denied", the signal_type becomes the
+    procedural stage instead of the NOS-derived one. This preserves v1
+    behaviour where procedural moves were the highest-value events.
+    """
+    nm = (case_name or "").lower()
+    if "class certif" in nm:
+        return "class_certified"
+    if "settlement" in nm:
+        return "settlement"
+    if "summary judgment" in nm:
+        return "summary_judgment"
+    if "motion to dismiss" in nm and "denied" in nm:
+        return "mtd_denied"
+    return None
+
+
+def _docket_to_signal(
+    d: Dict[str, Any],
+    *,
+    scan_date: datetime,
+    issuer_index: Optional[IssuerIndex],
+    cfg_overrides: Dict[str, Any],
+) -> Optional[Signal]:
+    """Build a Signal from a CourtListener docket result.
+
+    Returns None when:
+      - case_name missing
+      - NOS is `priority=off` (disabled)
+      - NOS requires universe match and issuer lookup failed
+    """
     # /search/?type=r returns camelCase (caseName, dateFiled, suitNature). The
-    # snake_case fallbacks preserve parity with the legacy /dockets/ response
-    # shape in case a caller ever feeds one of those dicts in.
+    # snake_case fallbacks preserve parity with the legacy /dockets/ response.
     case_name = d.get("caseName") or d.get("case_name") or d.get("case_name_short") or ""
     if not case_name:
         return None
 
-    nos = d.get("_nos_queried") or d.get("suitNature") or d.get("nature_of_suit") or ""
-    # Prefer court_id (short stable code, e.g. "nysd"). Search endpoint returns
-    # `court` as a display label ("District Court, S.D. New York"); the old
-    # /dockets/ endpoint returned it as a REST URL. court_id is identical on both.
+    nos = str(d.get("_nos_queried") or d.get("suitNature") or d.get("nature_of_suit") or "")
+    nos_cfg = _resolve_nos_config(nos, cfg_overrides)
+    if nos_cfg is None:
+        return None
+
+    # Procedural override is computed early because it bypasses NOS=off AND
+    # require_universe_match gates. Class certifications, settlements,
+    # summary judgments, and denied MTDs are high-value regardless of NOS or
+    # universe match — dropping them would lose the best signals the scanner
+    # can produce.
+    procedural = _classify_procedural_override(case_name)
+
+    # NOS-off gate: applies only when there's no procedural override.
+    if procedural is None and nos_cfg.get("priority") == "off":
+        return None
+
     court = d.get("court_id") or d.get("court") or ""
     filing_date = d.get("dateFiled") or d.get("date_filed") or ""
     docket_id = d.get("docket_id") or d.get("id")
+
+    # Extract corporate party + confidence (shared helper — same logic the
+    # Chancery scanner uses).
+    extracted_party, party_confidence = extract_corporate_party(case_name)
+
+    # Universe resolution: try SEC tickers list first (fast, free), fall back
+    # to the paren-ticker heuristic if it's there.
+    issuer_match: Optional[IssuerMatch] = None
+    if issuer_index is not None and extracted_party:
+        issuer_match = issuer_index.resolve(extracted_party)
+
     ticker_hint = _extract_ticker_hint(case_name)
-    signal_type = _classify_signal_type(str(nos), case_name)
-    direction = _DIRECTION_MAP.get(signal_type, "neutral")
+    # Universe-match gate — only applies to require_universe_match NOS rows
+    # AND only if the procedural fast-path doesn't fire. Securities (850) and
+    # antitrust (410) always emit so thesis_writer can triage; noise-heavy
+    # contract/patent rows are gated.
+    if (
+        procedural is None
+        and nos_cfg.get("require_universe_match")
+        and issuer_match is None
+        and not ticker_hint
+    ):
+        return None
+
+    # Signal type: procedural override beats NOS default
+    signal_type = procedural or nos_cfg["signal_type"]
+    # Back-compat: the legacy `federal_civil_filed` alias is preserved so
+    # downstream listeners that match on it still route correctly.
+    direction = _DIRECTION_MAP.get(signal_type) or _DIRECTION_MAP.get(
+        "federal_civil_filed", "neutral"
+    )
     procedural_stage, timeline_bucket = _procedural_stage(signal_type)
 
-    # Resolve FIGI best-effort (v1 left this None; v2 populates when possible so
-    # the reactor / entity-resolver cascade has a head start).
-    #
-    # Hard-gate 2026-04-23 — the TICKER_HINT_RE regex `[A-Z]{2,5}` matches any
-    # 2-5 uppercase acronym in a case-name parenthetical ("Foo Corp (UNOPS) v.
-    # Bar LLC" emits UNOPS — the UN Office for Project Services, not a ticker).
-    # Only propagate ticker_hint to EntityHints when OpenFIGI resolves it; that
-    # gates entity-table junk on a verified issuer, not on regex shape alone.
-    # The raw_payload still carries ticker_hint + ticker_hint_source for forensic
-    # trace so the hit isn't lost entirely.
+    # Resolve FIGI best-effort. Two sources of ticker, in priority order:
+    #   1. issuer_match.ticker — from SEC company_tickers.json lookup keyed on
+    #      the extracted caption party. Authoritative for US issuers.
+    #   2. ticker_hint — from the case_name paren regex. Hard-gated behind
+    #      OpenFIGI verification (audit 2026-04-23): the regex `[A-Z]{2,5}`
+    #      matches any 2–5 uppercase acronym ("Foo Corp (UNOPS) v. Bar LLC"
+    #      emits UNOPS — the UN Office for Project Services, not a ticker).
+    #      Only propagate to EntityHints when OpenFIGI confirms it resolves;
+    #      raw_payload still carries ticker_hint + ticker_hint_source for trace.
     issuer_figi: Optional[str] = None
-    resolved_ticker: Optional[str] = None
-    if ticker_hint:
+    resolved_paren_ticker: Optional[str] = None
+    ticker_for_resolve = (issuer_match.ticker if issuer_match else None) or ticker_hint
+    if ticker_for_resolve:
         try:
             from modal_workers.shared.openfigi_resolver import resolve_ticker
-            res = resolve_ticker(ticker_hint, exch_code="US")
+            res = resolve_ticker(ticker_for_resolve, exch_code="US")
             if res.resolved:
                 issuer_figi = res.issuer_figi
-                resolved_ticker = ticker_hint
-        except Exception:
+                # Only consider the paren hint "verified" if OpenFIGI resolved
+                # the *paren* ticker specifically (issuer_match path is already
+                # SEC-verified and doesn't need this gate).
+                if issuer_match is None and ticker_hint:
+                    resolved_paren_ticker = ticker_hint
+        except Exception:  # noqa: BLE001 — best-effort
             pass
 
-    # Parse filing_date to UTC datetime (v1 used "YYYY-MM-DDT00:00:00Z" string).
+    # Parse filing_date to UTC datetime.
     try:
         source_date = datetime.strptime(filing_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
@@ -228,15 +395,25 @@ def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal
 
     docket_url = f"https://www.courtlistener.com/docket/{docket_id}/" if docket_id else None
 
-    # source_content_hash keys off case_name|filing_date|court (v1 parity) but
-    # now uses the spec.md sha256:<64hex> prefix.
     source_content_hash = (
         f"sha256:{hashlib.sha256(f'{case_name}|{filing_date}|{court}'.encode()).hexdigest()}"
     )
-    # signal_id keys off docket_id|filing_date|signal_type (v1 parity, 32-char).
     signal_id = hashlib.sha256(
         f"{docket_id or '?'}:{filing_date or '?'}:{signal_type}".encode()
     ).hexdigest()[:32]
+
+    # Convergence key — cross-run dedup for the same party+court. The reactor
+    # edge function uses this to collapse repeat alerts.
+    party_normalized = (extracted_party or case_name).lower().strip()
+    party_normalized = re.sub(r"[^a-z0-9]+", "", party_normalized)[:64]
+    convergence_key = f"fed|{court}|{party_normalized}" if party_normalized else None
+
+    # Effective party_resolution_confidence for the rubric cap:
+    #  - Caption confidence (0–1) → 1–5 scale
+    #  - Bump if issuer_match resolved cleanly
+    prc = max(1, round(1 + party_confidence * 4))  # 0→1, 1.0→5
+    if issuer_match is not None:
+        prc = 5
 
     raw_payload: Dict[str, Any] = {
         "scanner_source": NAME,
@@ -253,19 +430,47 @@ def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal
         "ticker_hint": ticker_hint,
         "ticker_hint_source": "case_name_paren" if ticker_hint else None,
         "ticker_hint_present": bool(ticker_hint),
-        "case_family": _case_family_from_nos(str(nos)),
+        "case_family": nos_cfg["case_family"],
         "procedural_stage": procedural_stage,
         "procedural_stage_confidence": "high",
         "resolution_timeline_bucket": timeline_bucket,
         "headline": f"{case_name} -- {signal_type.replace('_', ' ')}",
         "summary": f"NOS {nos} filed {filing_date} in {court}",
+        # ---- new selectivity fields (read by rubric + fanout) ----
+        "extracted_party": extracted_party,
+        "party_resolution_confidence": prc,
+        "universe_resolved": issuer_match is not None,
+        "universe_match_kind": issuer_match.match_kind if issuer_match else None,
+        "universe_ticker": issuer_match.ticker if issuer_match else None,
+        "universe_cik": issuer_match.cik if issuer_match else None,
+        "universe_title": issuer_match.title if issuer_match else None,
+        "convergence_key": convergence_key,
+        # For the rubric to consume via signal["raw_data"]:
+        "nos_priority": nos_cfg.get("priority"),
     }
 
+    # Entity hints now carry the EXTRACTED party (not the full caption) plus
+    # the SEC-resolved ticker/CIK when available. This is the main fix for
+    # the "99% captions-as-names" entity-table pollution.
+    name_for_hint = (
+        issuer_match.title if issuer_match
+        else (extracted_party or case_name)
+    )
+    # Final ticker for entity hint: SEC-issuer-match wins (already authoritative);
+    # else the paren hint, but only if OpenFIGI verified it (resolved_paren_ticker).
+    # Unverified paren hints are intentionally NOT propagated — they pollute the
+    # entity table with non-issuer acronyms (UNOPS et al.). raw_payload still
+    # carries the raw ticker_hint for forensic trace.
+    entity_hint_ticker = (
+        issuer_match.ticker if issuer_match
+        else resolved_paren_ticker
+    )
     entity_hints = EntityHints(
         issuer_figi=issuer_figi,
-        ticker=resolved_ticker,
+        ticker=entity_hint_ticker,
         mic=None,  # US MIC not determinable from CourtListener payload alone
-        name=case_name,
+        cik=(issuer_match.cik if issuer_match else None),
+        name=name_for_hint,
         country="US",
     )
 
@@ -280,7 +485,7 @@ def _docket_to_signal(d: Dict[str, Any], scan_date: datetime) -> Optional[Signal
         issuer_figi=issuer_figi,
         entity_hints=entity_hints,
         thesis_direction=direction,
-        strength_estimate=3,
+        strength_estimate=int(nos_cfg.get("strength", 3)),
     )
 
 
@@ -304,8 +509,19 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     from modal_workers.shared.openfigi_resolver import set_cache_backend
     set_cache_backend(*client.openfigi_cache_backend())
 
+    # Load SEC issuer index once per run — used by _docket_to_signal to resolve
+    # extracted party names to public tickers/CIKs. Failure is non-fatal; the
+    # scanner falls back to name-only entity_hints (still better than the
+    # full-caption regression).
+    sec_user_agent = os.environ.get("SEC_USER_AGENT") or "Conan Scanner"
+    try:
+        issuer_index = IssuerIndex.load(client, user_agent=sec_user_agent)
+    except Exception:  # noqa: BLE001
+        issuer_index = None
+
     scan_date = datetime.now(timezone.utc)
     since = (scan_date - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
+    cfg_overrides = cfg.config or {}
 
     budget = max(10, cfg.timeout_soft_s - 5)  # leave headroom for final ops
     scan_start = time.time()
@@ -313,8 +529,25 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     signals: List[Signal] = []
     seen: set[str] = set()
     fetched_dockets = 0
+    universe_filtered = 0    # dockets dropped for failing universe match
+    disabled_nos_skipped: List[str] = []
 
+    # Only query NOS rows with priority != "off". Disabled rows are skipped
+    # upstream so we don't even issue the HTTP call — saves API budget.
+    active_nos = []
     for nos in sorted(TARGET_NOS):
+        merged = _resolve_nos_config(nos, cfg_overrides)
+        if merged and merged.get("priority") != "off":
+            active_nos.append(nos)
+        elif merged:
+            disabled_nos_skipped.append(nos)
+
+    if disabled_nos_skipped:
+        warnings.append(
+            f"courtlistener NOS disabled by config: {','.join(disabled_nos_skipped)}"
+        )
+
+    for nos in active_nos:
         if time.time() - scan_start > budget:
             warnings.append(
                 f"wall-clock budget ({budget}s) exceeded before NOS {nos}"
@@ -328,8 +561,18 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
         fetched_dockets += len(dockets)
         for d in dockets:
-            sig = _docket_to_signal(d, scan_date)
+            sig = _docket_to_signal(
+                d,
+                scan_date=scan_date,
+                issuer_index=issuer_index,
+                cfg_overrides=cfg_overrides,
+            )
             if sig is None:
+                # Could be disabled-NOS (already filtered) or universe miss.
+                # Count only universe-filter drops for observability.
+                case_name = d.get("caseName") or d.get("case_name") or ""
+                if case_name:
+                    universe_filtered += 1
                 continue
             if sig.source_content_hash in seen:
                 continue
@@ -344,4 +587,11 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         signals=signals,
         warnings=warnings,
         fetched_records=fetched_dockets,
+        run_metrics={
+            "courtlistener_fetched_dockets": fetched_dockets,
+            "courtlistener_signals_emitted": len(signals),
+            "courtlistener_universe_filtered": universe_filtered,
+            "courtlistener_disabled_nos": disabled_nos_skipped,
+            "courtlistener_issuer_index_loaded": issuer_index is not None,
+        },
     )

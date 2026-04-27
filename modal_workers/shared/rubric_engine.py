@@ -303,11 +303,35 @@ def apply_auto_caps(
                 caps.append(f"binary_catalyst.ev_floor (ev={ev:.2f})")
 
     elif profile == "litigation":
+        # 2026-04-24 selectivity tightening (courtlistener flood review):
+        #   1. Raise party_confidence_cap threshold from <3 to <4. With the
+        #      scanner now populating caption-extracted confidence + optional
+        #      SEC issuer resolution, the distribution is bimodal — either
+        #      clean (≥4) or junk (≤2). Threshold 4 captures more noise
+        #      without hurting clean extractions.
+        #   2. Add universe_miss_cap: litigation signals where no public-
+        #      issuer ticker/FIGI resolved AND the NOS isn't high-priority
+        #      (securities 850 / antitrust 410 / chancery matters) get
+        #      archived. Patent and contract noise dominates when we don't
+        #      recognize the defendant as a listed issuer.
         prc = dims.get("party_resolution_confidence", 5)
-        if prc < 3:
+        if prc < 4:
             if band in ("immediate", "watchlist"):
                 band = "archive"
                 caps.append("litigation.party_confidence_cap")
+
+        raw = signal.get("raw_data", {}) or {}
+        universe_resolved = bool(raw.get("universe_resolved"))
+        nos = str(raw.get("nos") or raw.get("nature_of_suit") or "")
+        signal_category = str(raw.get("signal_category") or "")
+        high_priority = (
+            nos in ("850", "410")
+            or signal_category == "delaware_chancery"
+        )
+        if (not universe_resolved) and (not high_priority):
+            if band in ("immediate", "watchlist"):
+                band = "archive"
+                caps.append("litigation.universe_miss_cap")
 
     elif profile == "takeover_candidate":
         raw = signal.get("raw_data", {})

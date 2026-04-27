@@ -17,7 +17,9 @@ def test_courtlistener_signal_includes_structured_stage_hints():
             "dateFiled": "2026-04-20",
             "id": 123,
         },
-        datetime(2026, 4, 21, tzinfo=timezone.utc),
+        scan_date=datetime(2026, 4, 21, tzinfo=timezone.utc),
+        issuer_index=None,
+        cfg_overrides={},
     )
 
     assert sig is not None

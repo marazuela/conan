@@ -229,11 +229,27 @@ interface EntityRow {
   primary_mic: string | null;
 }
 
+// 2026-04-24: when ticker is NULL (unresolved entity), the subject used to
+// render as "?.?" which was the most visible symptom of the caption-as-entity
+// bug. Fall back to a truncated entity name instead so operators can see at
+// a glance what's being alerted even without a ticker.
+function _labelForSubject(entity: EntityRow | null): string {
+  const ticker = entity?.primary_ticker;
+  const mic = entity?.primary_mic;
+  if (ticker) {
+    return `${ticker}.${mic ?? "?"}`;
+  }
+  const name = entity?.name ?? "";
+  if (name) {
+    return name.length > 40 ? `${name.slice(0, 40)}…` : name;
+  }
+  return "?.?";
+}
+
 function renderSubject(sig: Record<string, unknown>, entity: EntityRow | null): string {
   const band = (sig.band_with_bonus ?? sig.band) as string;
-  const ticker = entity?.primary_ticker ?? "?";
-  const mic = entity?.primary_mic ?? "?";
-  return `[IMMEDIATE] ${ticker}.${mic} — ${sig.signal_type} — ${band}`;
+  const label = _labelForSubject(entity);
+  return `[IMMEDIATE] ${label} — ${sig.signal_type} — ${band}`;
 }
 
 interface Rationale {
@@ -244,8 +260,7 @@ interface Rationale {
 }
 
 function renderHtml(sig: Record<string, unknown>, entity: EntityRow | null, rat: Rationale | null): string {
-  const ticker = entity?.primary_ticker ?? "?";
-  const mic = entity?.primary_mic ?? "?";
+  const label = _labelForSubject(entity);
   const name = entity?.name ?? "Unknown entity";
   const oneLiner = rat?.one_liner ?? (sig.signal_type as string);
   const band = (sig.band_with_bonus ?? sig.band) as string;
@@ -259,7 +274,7 @@ function renderHtml(sig: Record<string, unknown>, entity: EntityRow | null, rat:
   const dashSignal = `${DASHBOARD_URL}/signals/${sig.signal_id}`;
   return `<!DOCTYPE html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;">
-  <h1 style="color:#8b0000;margin-bottom:4px;">${escapeHtml(ticker)}.${escapeHtml(mic)} — ${escapeHtml(oneLiner)}</h1>
+  <h1 style="color:#8b0000;margin-bottom:4px;">${escapeHtml(label)} — ${escapeHtml(oneLiner)}</h1>
   <p style="color:#555;margin-top:0;">${escapeHtml(name)} · ${escapeHtml(sig.scoring_profile as string)}</p>
   <table style="width:100%;border-collapse:collapse;margin:16px 0;">
     <tr><td>Band</td><td><strong>${band}</strong> (score ${score} = ${baseScore} + ${convergenceBonus})</td></tr>
@@ -277,8 +292,7 @@ function renderHtml(sig: Record<string, unknown>, entity: EntityRow | null, rat:
 }
 
 function renderText(sig: Record<string, unknown>, entity: EntityRow | null, rat: Rationale | null): string {
-  const ticker = entity?.primary_ticker ?? "?";
-  const mic = entity?.primary_mic ?? "?";
+  const label = _labelForSubject(entity);
   const oneLiner = rat?.one_liner ?? (sig.signal_type as string);
   const band = (sig.band_with_bonus ?? sig.band) as string;
   const score = sig.score_with_bonus ?? sig.score;
@@ -286,7 +300,7 @@ function renderText(sig: Record<string, unknown>, entity: EntityRow | null, rat:
   const bonus = sig.convergence_bonus ?? 0;
   const catalystDate = rat?.catalyst_date_iso ?? "—";
   return [
-    `[IMMEDIATE] ${ticker}.${mic} — ${sig.signal_type}`,
+    `[IMMEDIATE] ${label} — ${sig.signal_type}`,
     "",
     oneLiner,
     "",
