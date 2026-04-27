@@ -474,6 +474,8 @@
         "c_suite_open_market_buy": "short_positioning",
         "ten_percent_holder_buy": "short_positioning"
       },
+      "top_signal_limit": 25,
+      "daily_promotion_limit": 5,
       "endpoint_primary": "https://efts.sec.gov/LATEST/search-index",
       "endpoint_secondary": "https://www.sec.gov/Archives/edgar/data/",
       "timeout_soft_s": 120,
@@ -497,17 +499,25 @@
         "chancery_revlon_claim_filed": "litigation",
         "chancery_motion_to_expedite_granted": "litigation",
         "chancery_injunction_granted_blocking_deal": "litigation",
-        "chancery_opinion_released": "litigation"
+        "chancery_opinion_released": "litigation",
+        "chancery_complaint_filed": "litigation"
       },
-      "endpoint_primary": "https://courts.delaware.gov/opinions/index.aspx?ag=court%20of%20chancery",
-      "endpoint_secondary": "https://courts.delaware.gov/help/onlineservices/docketsearch.aspx",
+      "endpoint_primary": "https://courtconnect.courts.delaware.gov/cc/cconnect/ck_public_qry_main.cp_main_idx",
+      "endpoint_secondary": "https://courts.delaware.gov/opinions/index.aspx?ag=court%20of%20chancery",
       "timeout_soft_s": 90,
       "timeout_hard_s": 180,
       "last_run_utc": null,
       "last_run_signals": 0,
       "last_run_status": null,
       "strategy_spec": "strategies/lit_delaware_chancery.md",
-      "notes": "Added 2026-04-22 S70. Delaware Court of Chancery monitor per D-016. Primary surface is the published-opinions page (courts.delaware.gov/opinions, filtered to Court of Chancery); CourtConnect docket-search is the secondary surface with a browser-style UA to survive session-cookie gating. No RSS (D-016 removed rss.aspx). Graceful degradation: if CourtConnect returns a CAPTCHA or frameset it cannot parse, the scanner completes with opinions-only coverage and emits a warning. Emits into litigation profile with auto-cap on low party_resolution_confidence (litigation.party_confidence_cap caps immediate/watchlist -> archive). Dedup key: (case_number, signal_type, source_date). Runs 21 UTC daily alongside SEC enforcement + courtlistener."
+      "config": {
+        "opinions_lookback_days": 14,
+        "chancery_ag_filter": "court of chancery",
+        "courtconnect_enabled": true,
+        "courtconnect_max_parties": 40,
+        "courtconnect_watchlist": []
+      },
+      "notes": "Added 2026-04-22 S70. Delaware Court of Chancery monitor per D-016. Two surfaces: CourtConnect docket-search (courtconnect.courts.delaware.gov, Oracle PL/SQL gateway on the Avenu Contexte platform, seeded party search — Q-002 resolved 2026-04-23) and the opinions page (courts.delaware.gov/opinions). CourtConnect uses a 4-hop session + disclaimer flow with browser-style UA (D-015). Search form requires `last_name` so we seed from: (A) opinion-derived party names, (B) issuers with recent announced-merger signals (best-effort Supabase query), (C) config.courtconnect_watchlist. Per-run query cap = courtconnect_max_parties (default 40). Kill-switch: set config.courtconnect_enabled=false. Graceful degradation: if CourtConnect hits a CAPTCHA or 403, scanner finishes with opinions-only coverage. Emits into litigation profile with auto-cap on low party_resolution_confidence (litigation.party_confidence_cap caps immediate/watchlist -> archive). Dedup key: (case_number, signal_type, source_date) — opinions and CourtConnect share the same key so the same fact never double-emits. Runs 21 UTC daily alongside SEC enforcement + courtlistener."
     }
   ]
 }
