@@ -23,7 +23,7 @@ Affiliate dedup (per profile_short_positioning.md:57):
     Americas) collapse to a single holder via first-two-token normalization.
 
 Scoring profile: short_positioning. Dim estimation is supplied via an
-`insider_cluster: True` routing key consumed by `dim_estimator._estimate_short_positioning`;
+`insider_cluster: True` routing key consumed by `dim_estimator.project_short_positioning_heuristic`;
 the estimator applies the Form 4 rubric (C-suite-weighted cluster tier) rather than
 the ESMA holder-count tier.
 
@@ -53,6 +53,8 @@ from modal_workers.scanners.edgar_filing_monitor import (
     _http_get,
     _rate_limiter,
 )
+from modal_workers.shared.dim_estimator import project_short_positioning_heuristic
+from modal_workers.shared.rubric_engine import weighted_total
 from modal_workers.shared.scanner_base import MissingAuthError, ScannerResult, Signal
 from modal_workers.shared.supabase_client import (
     EntityHints,
@@ -78,6 +80,21 @@ MIN_NET_VALUE_USD = 50_000
 # ceiling we must stay bounded. EFTS returns up to 100 hits/query; with 14d window
 # across all issuers the raw count is typically 1.5k-3k. We cap to 500 per run.
 MAX_FILINGS_PER_RUN = 500
+
+# Post-detection emission cap mirrors esma_short_scanner. Without it Form 4
+# yielded uncapped emissions to short_positioning while ESMA was throttled to 25,
+# inflating short candidate volume. cfg.config.top_signal_limit overrides;
+# 0 disables.
+TOP_SIGNAL_LIMIT_DEFAULT = 25
+
+# Signal-type ranking priority for top_signal_limit selection. Cluster signals
+# carry more conviction than solo events; sells beat solo buys.
+_SIGNAL_TYPE_PRIORITY: Dict[str, int] = {
+    "insider_cluster_buy": 4,
+    "insider_cluster_sell": 4,
+    "c_suite_open_market_buy": 2,
+    "ten_percent_holder_buy": 2,
+}
 
 # -------- Section 16 transaction codes ------------------------------------------
 # Reference: SEC Form 4 instructions, Table II.
@@ -495,6 +512,60 @@ def _iso_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
+def _coerce_signal_limit(value: Any, default: int) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _project_form4_score(sig: Signal) -> float:
+    """Heuristic ranking score for top_signal_limit selection only.
+
+    Uses the preserved short_positioning heuristic (Form 4 cluster branch).
+    Score is NOT persisted — actual dim resolution happens via signal_resolver
+    after emission, since short_positioning is registered to `_estimate_none`.
+    """
+    estimate = project_short_positioning_heuristic(sig.raw_payload)
+    if estimate is None:
+        return 0.0
+    return float(weighted_total(estimate.dimensions, "short_positioning"))
+
+
+def _form4_signal_priority(sig: Signal) -> Tuple[int, float, int, float, str, str]:
+    raw = sig.raw_payload
+    holder_count = raw.get("holder_count") or 0
+    total_value = raw.get("total_value_usd") or 0.0
+    return (
+        _SIGNAL_TYPE_PRIORITY.get(sig.signal_type, 0),
+        _project_form4_score(sig),
+        int(holder_count),
+        float(total_value),
+        sig.source_date.isoformat(),
+        sig.signal_id,
+    )
+
+
+def _apply_form4_top_signal_limit(
+    signals: List[Signal],
+    limit: int,
+) -> Tuple[List[Signal], List[Signal]]:
+    if limit == 0 or len(signals) <= limit:
+        return signals, []
+    ranked = sorted(signals, key=_form4_signal_priority, reverse=True)
+    return ranked[:limit], ranked[limit:]
+
+
+def _form4_signal_type_breakdown(signals: List[Signal]) -> str:
+    counts: Dict[str, int] = {}
+    for sig in signals:
+        counts[sig.signal_type] = counts.get(sig.signal_type, 0) + 1
+    return ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+
+
 # ---------------------------------------------------------------------------
 # scan entrypoint
 # ---------------------------------------------------------------------------
@@ -705,7 +776,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         ]
 
         raw_payload: Dict[str, Any] = {
-            # Routing key: dim_estimator._estimate_short_positioning branches
+            # Routing key: dim_estimator.project_short_positioning_heuristic branches
             # on this to apply the Form 4 rubric rather than the ESMA rubric.
             "insider_cluster": True,
             "direction": direction,
@@ -793,17 +864,34 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             strength_estimate=strength,
         ))
 
+    pre_cap_count = len(signals)
+    top_signal_limit = _coerce_signal_limit(
+        cfg.config.get("top_signal_limit") if cfg.config else None,
+        TOP_SIGNAL_LIMIT_DEFAULT,
+    )
+    kept_signals, dropped_signals = _apply_form4_top_signal_limit(
+        signals, top_signal_limit,
+    )
+    if dropped_signals:
+        warnings.append(
+            f"top_signal_limit: kept {len(kept_signals)}/{pre_cap_count} "
+            f"(limit={top_signal_limit}); dropped_by_type: "
+            f"{_form4_signal_type_breakdown(dropped_signals)}"
+        )
+
     status = "partial" if (budget_exhausted or warnings) else "ok"
 
     return ScannerResult(
         scanner=NAME,
         status=status,
-        signals=signals,
+        signals=kept_signals,
         warnings=warnings,
         fetched_records=fetched,
         run_metrics={
             "filings_parsed": parsed,
             "10b5_1_skipped_txns": skipped_10b5_1,
-            "clusters_emitted": len(signals),
+            "clusters_emitted": pre_cap_count,
+            "clusters_kept": len(kept_signals),
+            "top_signal_capped": len(dropped_signals),
         },
     )

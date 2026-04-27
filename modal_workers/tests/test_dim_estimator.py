@@ -6,8 +6,10 @@ Three paths per estimable profile:
   - partial evidence → produces dims with conservative-3 fills
   - no evidence → returns None (signal stays unscored)
 
-Profiles without estimators (activist_governance, merger_arb, litigation)
-always return None regardless of payload content.
+Profiles without estimators (activist_governance, merger_arb, litigation,
+short_positioning) always return None from `estimate_dimensions` regardless
+of payload content. short_positioning preserves its heuristic under
+`project_short_positioning_heuristic` for ESMA's internal top-N ranking only.
 """
 from __future__ import annotations
 
@@ -15,12 +17,22 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from modal_workers.shared.dim_estimator import DimensionEstimate, estimate_dimensions
+from modal_workers.shared.dim_estimator import (
+    DimensionEstimate,
+    estimate_dimensions,
+    project_short_positioning_heuristic,
+)
 from modal_workers.shared.rubric_engine import WEIGHTS
 
 
 def _estimate(profile: str, payload: dict) -> DimensionEstimate:
     estimate = estimate_dimensions(profile, payload)
+    assert estimate is not None
+    return estimate
+
+
+def _short_heuristic(payload: dict) -> DimensionEstimate:
+    estimate = project_short_positioning_heuristic(payload)
     assert estimate is not None
     return estimate
 
@@ -34,7 +46,7 @@ def test_unknown_profile_returns_none():
 
 
 def test_unscored_profiles_return_none():
-    for profile in ("activist_governance", "merger_arb", "litigation"):
+    for profile in ("activist_governance", "merger_arb", "litigation", "short_positioning"):
         assert estimate_dimensions(profile, {"anything": "here"}) is None
 
 
@@ -45,9 +57,32 @@ def test_empty_payload_always_returns_none():
 
 # ----------------------------------------------------------------------
 # short_positioning
+#
+# Public `estimate_dimensions("short_positioning", ...)` always returns None
+# (signals emit unscored; AI fills via signal_resolver). The heuristic is
+# preserved under `project_short_positioning_heuristic` for ESMA's internal
+# ranking and the tests here lock that contract in place.
 # ----------------------------------------------------------------------
 
-def test_short_positioning_high_crowding_high_trend():
+def test_short_positioning_public_estimator_always_returns_none():
+    """No payload — no matter how rich — should produce a heuristic estimate
+    on the public estimator path. The +9-point default-fill baseline is what
+    we are explicitly avoiding (audit 2026-04-27 calibration rework)."""
+    rich = {
+        "total_disclosed_pct": 12.0,
+        "position_pct": 4.0,
+        "change_pct": 1.0,
+        "regulators": ["FCA", "BaFin", "AMF"],
+        "adv_usd": 75_000_000,
+    }
+    assert estimate_dimensions("short_positioning", rich) is None
+    assert estimate_dimensions("short_positioning", {}) is None
+    assert estimate_dimensions(
+        "short_positioning", {"insider_cluster": True, "c_suite_count": 3, "holder_count": 3},
+    ) is None
+
+
+def test_short_heuristic_high_crowding_high_trend():
     payload = {
         "total_disclosed_pct": 12.0,
         "position_pct": 4.0,
@@ -55,7 +90,7 @@ def test_short_positioning_high_crowding_high_trend():
         "regulators": ["FCA", "BaFin", "AMF"],
         "adv_usd": 75_000_000,
     }
-    estimate = _estimate("short_positioning", payload)
+    estimate = _short_heuristic(payload)
     assert estimate.dimensions["crowding_intensity"] == 5
     assert estimate.dimensions["trend_direction"] == 5
     assert estimate.dimensions["size_vs_float"] == 5
@@ -69,7 +104,7 @@ def test_short_positioning_high_crowding_high_trend():
     assert estimate.requires_resolution is True
 
 
-def test_short_positioning_aggregate_crowding_payload_derives_more_than_neutral():
+def test_short_heuristic_aggregate_crowding_payload_derives_more_than_neutral():
     today = datetime.now(timezone.utc).date()
     payload = {
         "holder_count": 4,
@@ -82,7 +117,7 @@ def test_short_positioning_aggregate_crowding_payload_derives_more_than_neutral(
             {"position_pct": 1.5, "position_date": (today - timedelta(days=8)).isoformat()},
         ],
     }
-    estimate = _estimate("short_positioning", payload)
+    estimate = _short_heuristic(payload)
     assert estimate.dimensions["crowding_intensity"] == 5
     assert estimate.dimensions["trend_direction"] == 5
     assert estimate.dimensions["size_vs_float"] == 4
@@ -93,32 +128,30 @@ def test_short_positioning_aggregate_crowding_payload_derives_more_than_neutral(
     ]
 
 
-def test_short_positioning_unwinding_position():
-    estimate = _estimate("short_positioning", {"position_pct": 0.6, "change_pct": -0.8})
+def test_short_heuristic_unwinding_position():
+    estimate = _short_heuristic({"position_pct": 0.6, "change_pct": -0.8})
     assert estimate.dimensions["crowding_intensity"] == 1
     assert estimate.dimensions["trend_direction"] == 1
     assert estimate.dimensions["size_vs_float"] == 2
 
 
-def test_short_positioning_no_position_data_returns_none():
+def test_short_heuristic_no_position_data_returns_none():
     payload = {"regulator": "FCA", "holder_name": "Acme Capital"}
-    assert estimate_dimensions("short_positioning", payload) is None
+    assert project_short_positioning_heuristic(payload) is None
 
 
-def test_short_positioning_all_dims_present():
-    estimate = _estimate("short_positioning", {"position_pct": 2.0, "change_pct": 0.0})
+def test_short_heuristic_all_dims_present():
+    estimate = _short_heuristic({"position_pct": 2.0, "change_pct": 0.0})
     assert set(estimate.dimensions.keys()) == set(WEIGHTS["short_positioning"].keys())
 
 
-def test_short_positioning_relative_bumper_behaviour():
-    estimate = _estimate(
-        "short_positioning",
+def test_short_heuristic_relative_bumper_behaviour():
+    estimate = _short_heuristic(
         {"position_pct": 0.8, "previous_position_pct": 0.5, "change_pct": 0.3},
     )
     assert estimate.dimensions["trend_direction"] == 4
 
-    estimate = _estimate(
-        "short_positioning",
+    estimate = _short_heuristic(
         {"position_pct": 2.5, "previous_position_pct": 5.0, "change_pct": -2.5},
     )
     assert estimate.dimensions["trend_direction"] == 1
@@ -266,23 +299,24 @@ def test_binary_catalyst_no_timing_returns_none():
 # ----------------------------------------------------------------------
 
 def test_estimator_to_rubric_engine_produces_scored_signal():
+    """End-to-end via takeover_candidate (an estimable profile). short_positioning
+    no longer goes through this path — it emits unscored and is AI-resolved."""
     from modal_workers.shared.rubric_engine import score_signal
 
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     payload = {
-        "holder_count": 4,
-        "total_disclosed_pct": 8.0,
-        "regulators": ["FCA", "BaFin"],
-        "holders": [
-            {"position_pct": 2.5, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
-            {"position_pct": 2.0, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
-            {"position_pct": 1.8, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
-            {"position_pct": 1.7, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
-        ],
+        "patterns_hit": 4,
+        "pattern_names": ["strategic_review", "pe_take_private"],
+        "primary_filing": {"file_date": today},
+        "pe_filer_type": "strategic",
+        "pe_filer_name": "BigCorp Industries",
+        "valuation_discount_pct": 22,
+        "adv_usd": 18_000_000,
     }
-    estimate = _estimate("short_positioning", payload)
+    estimate = _estimate("takeover_candidate", payload)
     out = score_signal(
         {
-            "scoring_profile": "short_positioning",
+            "scoring_profile": "takeover_candidate",
             "raw_data": {**payload, "dimensions": estimate.dimensions},
         }
     )
@@ -301,18 +335,38 @@ def test_unscored_profile_leaves_signal_unscored():
     assert out["band"] is None
 
 
+def test_short_positioning_emits_unscored_through_full_pipeline():
+    """Public estimator returns None → score_signal returns score=None/band=None
+    even with rich payload. This is the calibration fix's whole point."""
+    from modal_workers.shared.rubric_engine import score_signal
+
+    payload = {
+        "holder_count": 4,
+        "total_disclosed_pct": 8.0,
+        "regulators": ["FCA", "BaFin"],
+        "holders": [
+            {"position_pct": 2.5, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
+            {"position_pct": 2.0, "position_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
+        ],
+    }
+    assert estimate_dimensions("short_positioning", payload) is None
+    out = score_signal({"scoring_profile": "short_positioning", "raw_data": payload})
+    assert out["score"] is None
+    assert out["band"] is None
+
+
 # ----------------------------------------------------------------------
 # scoring_meta — data_freshness plumbing
 # ----------------------------------------------------------------------
 
 def test_scoring_meta_without_data_freshness_omits_key():
-    estimate = _estimate("short_positioning", {"position_pct": 2.0, "change_pct": 0.0})
+    estimate = _short_heuristic({"position_pct": 2.0, "change_pct": 0.0})
     meta = estimate.scoring_meta("heuristic")
     assert "data_freshness" not in meta
 
 
 def test_scoring_meta_propagates_data_freshness_block():
-    estimate = _estimate("short_positioning", {"position_pct": 2.0, "change_pct": 0.0})
+    estimate = _short_heuristic({"position_pct": 2.0, "change_pct": 0.0})
     freshness = {"market_snapshot": {"status": "live", "age_seconds": 42, "source": "yfinance"}}
     meta = estimate.scoring_meta("heuristic", data_freshness=freshness)
     assert meta["data_freshness"] == freshness
@@ -329,14 +383,13 @@ def test_scoring_meta_propagates_data_freshness_block():
 # `supported_dims` / `defaulted_dims` — those labels ARE the contract.
 # ----------------------------------------------------------------------
 
-_HEURISTIC_PROFILES = ["short_positioning", "takeover_candidate", "binary_catalyst"]
-_RESOLVER_ONLY_PROFILES = ["activist_governance", "merger_arb", "litigation"]
+_HEURISTIC_PROFILES = ["takeover_candidate", "binary_catalyst"]
+_RESOLVER_ONLY_PROFILES = [
+    "activist_governance", "merger_arb", "litigation", "short_positioning",
+]
 
 # Dims each profile CAN support when evidence is present in raw_payload.
 _PROFILE_SUPPORTABLE_DIMS = {
-    "short_positioning": {
-        "crowding_intensity", "trend_direction", "size_vs_float", "liquidity",
-    },
     "takeover_candidate": {
         "setup_strength", "edge_freshness", "strategic_buyer_clarity",
         "valuation_cushion", "liquidity",
@@ -351,7 +404,6 @@ _PROFILE_SUPPORTABLE_DIMS = {
 # must NEVER appear in supported_dims. Anything a scanner can't honestly
 # quantify stays here.
 _PROFILE_ALWAYS_DEFAULTED_DIMS = {
-    "short_positioning": {"catalyst_proximity", "historical_analog"},
     "takeover_candidate": set(),
     "binary_catalyst": {"market_mispricing"},
 }
@@ -360,19 +412,6 @@ _PROFILE_ALWAYS_DEFAULTED_DIMS = {
 def _max_evidence_payload(profile: str) -> dict:
     """Payloads that exercise every supportable dim for the profile."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if profile == "short_positioning":
-        return {
-            "holder_count": 6,
-            "total_disclosed_pct": 12.0,
-            "regulators": ["FCA", "BaFin", "AMF"],
-            "holders": [
-                {"position_pct": 3.0, "position_date": today},
-                {"position_pct": 2.5, "position_date": today},
-                {"position_pct": 2.0, "position_date": today},
-                {"position_pct": 1.5, "position_date": today},
-            ],
-            "adv_usd": 75_000_000,
-        }
     if profile == "takeover_candidate":
         return {
             "patterns_hit": 4,

@@ -24,7 +24,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from modal_workers.scanners import insider_form4_scanner as ifs
-from modal_workers.shared.dim_estimator import estimate_dimensions
+from modal_workers.shared.dim_estimator import (
+    estimate_dimensions,
+    project_short_positioning_heuristic,
+)
+from modal_workers.shared.scanner_base import Signal
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +221,14 @@ class TestParseForm4:
 # ---------------------------------------------------------------------------
 
 class TestForm4DimEstimator:
+    """Form 4 cluster heuristic — exercised via `project_short_positioning_heuristic`.
+
+    The public `estimate_dimensions("short_positioning", ...)` is now
+    `_estimate_none` (signals emit unscored, AI fills via signal_resolver), but
+    the heuristic remains live for ESMA + Form 4 internal top_signal_limit
+    ranking. These tests lock its calibration for that ranking surface.
+    """
+
     def _payload(self, **kw) -> dict:
         base = {
             "insider_cluster": True,
@@ -235,26 +247,33 @@ class TestForm4DimEstimator:
         base.update(kw)
         return base
 
-    def test_three_csuite_cluster_scores_5(self):
+    def test_public_estimator_returns_none_even_with_rich_form4_payload(self):
+        """Form 4 payloads must NOT produce heuristic dims through the public path —
+        signals emit unscored and AI fills the dims."""
         est = estimate_dimensions("short_positioning", self._payload(
+            holder_count=3, c_suite_count=3))
+        assert est is None
+
+    def test_three_csuite_cluster_scores_5(self):
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=3, c_suite_count=3))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 5
 
     def test_two_csuite_plus_vp_scores_4(self):
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=3, c_suite_count=2, vp_count=1))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 4
 
     def test_vp_director_cluster_no_csuite_scores_3(self):
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=3, vp_count=2, director_only_count=1))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 3
 
     def test_two_minor_insiders_scores_2(self):
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=2))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 2
@@ -262,34 +281,34 @@ class TestForm4DimEstimator:
     def test_solo_csuite_scores_3_not_2(self):
         """Solo C-suite buy routed to ten_percent / c_suite signal_type upstream;
         ensure rubric still produces a meaningful (not minimum) tier so the
-        emitted single-holder signal scores into watchlist+."""
-        est = estimate_dimensions("short_positioning", self._payload(
+        emitted single-holder signal ranks above noise in top_signal_limit."""
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=1, c_suite_count=1))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 3
 
     def test_ten_percent_holder_counts_as_csuite_tier(self):
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=3, ten_percent_holder_count=3))
         assert est is not None
         assert est.dimensions["crowding_intensity"] == 5
 
     def test_size_vs_float_by_percentage(self):
         # 1% of $1B market cap = $10M → tier 5
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=2, c_suite_count=2,
             total_value_usd=10_000_000, market_cap=1_000_000_000))
         assert est.dimensions["size_vs_float"] == 5
 
         # 0.1% = $1M → tier 3
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=2, c_suite_count=2,
             total_value_usd=1_000_000, market_cap=1_000_000_000))
         assert est.dimensions["size_vs_float"] == 3
 
     def test_defaulted_dims_flag_requires_resolution(self):
         # catalyst_proximity + historical_analog are unknown from Form 4 alone.
-        est = estimate_dimensions("short_positioning", self._payload(
+        est = project_short_positioning_heuristic(self._payload(
             holder_count=2, c_suite_count=2))
         assert est is not None
         assert "catalyst_proximity" in est.defaulted_dims
@@ -299,7 +318,7 @@ class TestForm4DimEstimator:
     def test_empty_cluster_returns_none(self):
         # All zeros → not a real cluster.
         payload = {"insider_cluster": True, "direction": "buy"}
-        assert estimate_dimensions("short_positioning", payload) is None
+        assert project_short_positioning_heuristic(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -538,3 +557,76 @@ class TestScanEndToEnd:
 
         assert result.status == "ok"
         assert result.signals == []
+
+
+# ---------------------------------------------------------------------------
+# top_signal_limit ranking + cap (parity with esma_short_scanner; was missing
+# pre 2026-04-27 — Form 4 emissions were uncapped, inflating short volume).
+# ---------------------------------------------------------------------------
+
+def _form4_signal(signal_id: str, signal_type: str, raw_payload: dict) -> Signal:
+    now = datetime.now(timezone.utc)
+    return Signal(
+        signal_id=signal_id,
+        source_content_hash=f"sha256:{signal_id}",
+        source_date=now,
+        scan_date=now,
+        signal_type=signal_type,
+        raw_payload=raw_payload,
+    )
+
+
+class TestForm4TopSignalLimit:
+    def _cluster_payload(self, *, csuite=0, vp=0, holders=2, total_value=500_000):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return {
+            "insider_cluster": True,
+            "direction": "buy",
+            "holder_count": holders,
+            "c_suite_count": csuite,
+            "vp_count": vp,
+            "director_only_count": 0,
+            "ten_percent_holder_count": 0,
+            "earliest_txn_date": today,
+            "latest_txn_date": today,
+            "total_value_usd": total_value,
+            "market_cap": 1_000_000_000,
+        }
+
+    def test_cap_keeps_highest_priority_signals(self):
+        strong = _form4_signal(
+            "strong",
+            "insider_cluster_buy",
+            self._cluster_payload(csuite=3, holders=3, total_value=10_000_000),
+        )
+        weak = _form4_signal(
+            "weak",
+            "c_suite_open_market_buy",
+            self._cluster_payload(csuite=1, holders=1, total_value=100_000),
+        )
+        kept, dropped = ifs._apply_form4_top_signal_limit([strong, weak], 1)
+        assert [s.signal_id for s in kept] == ["strong"]
+        assert [s.signal_id for s in dropped] == ["weak"]
+
+    def test_zero_disables_cap(self):
+        a = _form4_signal("a", "insider_cluster_buy", self._cluster_payload())
+        b = _form4_signal("b", "insider_cluster_sell", self._cluster_payload())
+        kept, dropped = ifs._apply_form4_top_signal_limit([a, b], 0)
+        assert {s.signal_id for s in kept} == {"a", "b"}
+        assert dropped == []
+
+    def test_below_cap_passes_through(self):
+        a = _form4_signal("a", "insider_cluster_buy", self._cluster_payload())
+        kept, dropped = ifs._apply_form4_top_signal_limit([a], 25)
+        assert kept == [a]
+        assert dropped == []
+
+    def test_coerce_signal_limit_handles_garbage(self):
+        # cfg.config may carry stringified or invalid values from the registry
+        # JSON without crashing the run.
+        assert ifs._coerce_signal_limit(None, 25) == 25
+        assert ifs._coerce_signal_limit("42", 25) == 42
+        assert ifs._coerce_signal_limit("nope", 25) == 25
+        assert ifs._coerce_signal_limit(-1, 25) == 25
+        assert ifs._coerce_signal_limit(True, 25) == 25  # booleans are not ints here
+        assert ifs._coerce_signal_limit(0, 25) == 0  # explicit "disabled"

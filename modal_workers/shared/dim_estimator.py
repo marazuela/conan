@@ -157,6 +157,17 @@ def _materialize_estimate(
 # ---------------------------------------------------------------------------
 # short_positioning
 #
+# Public estimator (`_ESTIMATORS["short_positioning"]`) is `_estimate_none`:
+# scanner payloads from ESMA and Form 4 never supply `catalyst_proximity` or
+# `historical_analog`, so heuristic-defaulting them to 3 added a structural
+# +9-point baseline to every short signal vs. AI-resolved profiles. We now
+# emit unscored (score=NULL/band=NULL) and let signal_resolver AI-fill all
+# six dims with full raw_data context — same flow as activist_governance.
+#
+# The heuristic below is preserved under `project_short_positioning_heuristic`
+# for ESMA scanner's internal top-N ranking only — it must NOT be used to
+# populate persisted dims.
+#
 # ESMA / FCA short-position scanner payload (see esma_short_scanner.py):
 #   position_pct, previous_position_pct, change_pct, regulator, holder_name
 #   (for crowding signals: total_disclosed_pct, regulators list, holder_count)
@@ -482,6 +493,20 @@ def _estimate_short_positioning(raw: Dict[str, Any]) -> Optional[DimensionEstima
     return _materialize_estimate("short_positioning", supported)
 
 
+def project_short_positioning_heuristic(
+    raw_payload: Dict[str, Any],
+) -> Optional[DimensionEstimate]:
+    """Public access to the short_positioning heuristic for INTERNAL ranking only.
+
+    Scanner code (esma_short_scanner._project_short_score) uses this to rank
+    pending emissions before applying top_signal_limit. It must NOT be used to
+    populate persisted dims — `estimate_dimensions("short_positioning", ...)`
+    is registered to `_estimate_none` so signals emit unscored and AI fills
+    all six dims via signal_resolver.
+    """
+    return _estimate_short_positioning(raw_payload or {})
+
+
 # ---------------------------------------------------------------------------
 # takeover_candidate
 #
@@ -754,7 +779,10 @@ def _estimate_none(_: Dict[str, Any]) -> None:
 
 
 _ESTIMATORS = {
-    "short_positioning": _estimate_short_positioning,
+    # short_positioning emits unscored — see comment block above
+    # `_estimate_short_positioning`. The heuristic is still callable via
+    # `project_short_positioning_heuristic` for ESMA's internal ranking.
+    "short_positioning": _estimate_none,
     "takeover_candidate": _estimate_takeover_candidate,
     "binary_catalyst": _estimate_binary_catalyst,
     "activist_governance": _estimate_none,

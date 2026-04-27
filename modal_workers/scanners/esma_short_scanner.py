@@ -58,6 +58,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -67,7 +68,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from modal_workers.shared.dim_estimator import estimate_dimensions
+from modal_workers.shared.dim_estimator import project_short_positioning_heuristic
 from modal_workers.shared.rubric_engine import score_signal
 from modal_workers.shared.scanner_base import Signal, ScannerResult
 from modal_workers.shared.supabase_client import EntityHints, ScannerConfig, SupabaseClient
@@ -87,7 +88,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-REQUEST_TIMEOUT = 25  # per-request; lower than v1's 45 to fit 60s soft budget
+REQUEST_TIMEOUT = 45  # per-request; back to v1's value after ESMA endpoint slowness from 2026-04-24 caused 5 consecutive ReadTimeout errors. Soft budget is 1170s so 45s per request fits easily.
 ALL_REGULATORS = ["fca", "amf", "afm", "bafin"]
 
 POSITION_DISCLOSURE_THRESHOLD = 1.0  # new position must be >= this pct
@@ -97,6 +98,11 @@ CROWDED_SHORT_MIN_HOLDERS = 6
 CROWDING_MIN_TOTAL_PCT = 5.0         # sum(position_pct) across crowded holders
 DEDUP_WINDOW_DAYS = 7
 TOP_SIGNAL_LIMIT_DEFAULT = 25
+# Drop crowding holders whose latest disclosure date is older than this.
+# Pre-2026-04-27, BNP Paribas filings from 2017 and Atalan from 2025-08 were
+# emitted as live signals and killed by thesis_writer as "stale". 90d covers
+# the standard quarterly refile cadence — a real short refiles within that.
+CROWDING_MAX_HOLDER_STALENESS_DAYS = 90
 
 REGULATOR_SOURCE_URLS: Dict[str, str] = {
     "FCA": "https://www.fca.org.uk/publication/data/short-positions-daily-update.xlsx",
@@ -253,7 +259,9 @@ def _fetch_amf(warnings: List[str]) -> List[Dict[str, Any]]:
         isin = row[4].strip().strip('"')
         start_date = row[5].strip().strip('"')
         pub_end = row[7].strip().strip('"')
-        if pub_end:  # position closed — skip
+        # Closed positions sometimes carry whitespace-only end dates; treat
+        # those the same as a real date (audit F-101, 2026-04-27).
+        if pub_end and pub_end.strip():  # position closed — skip
             continue
         if not holder or not isin:
             continue
@@ -429,6 +437,71 @@ def _build_position_index(positions: List[Dict[str, Any]]) -> Dict[str, Dict[str
     return index
 
 
+# Affiliate-collapse regex matches the org-suffix list used by
+# insider_form4_scanner._reporter_normalized — kept in sync (audit 2026-04-27,
+# F-detect-crowded). When holders' raw names differ only by entity suffix
+# ("Elliott Investment Management LP" vs "Elliott Investment Management L.P."
+# vs "Elliott Capital Advisors LLC"), they collapse to the same first token
+# and count as ONE distinct holder, not three.
+_HOLDER_ORG_INDICATORS = re.compile(
+    r"\b("
+    r"llc|l\.l\.c\.?|ltd|lp|l\.p\.?|inc\.?|corp\.?|company|co\.?|plc|"
+    r"sa|s\.a\.?|ag|gmbh|n\.?v\.?|s\.?a\.?s\.?|trust|holdings?|partners?|"
+    r"fund|funds|capital|management|advisors?|investments?|group|"
+    r"americas|international|europe|asia|global|bank|asset|securities?|"
+    r"associates|ventures|equities?|equity|llp|kgaa|spa|s\.r\.l\.?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_holder(name: Optional[str]) -> str:
+    """Canonical key for holder-affiliate dedup across regulators.
+
+    ESMA crowding signals were inflating `holder_count` because the same fund
+    files under variant names — different regulators, different entity suffix
+    spellings, different affiliated funds. The DLQ bears witness: Elliott
+    dual-filed FCA+AFM, Citadel filed under three affiliates, Atalan counted
+    six times. Mirrors `insider_form4_scanner._reporter_normalized`.
+
+    Org names → first-token after stripping common entity-suffix words.
+    Person names (no suffix tokens, no comma) → full lowercased form.
+    Empty / None → "" (callers should drop these before counting).
+    """
+    if not name:
+        return ""
+    original = name.strip()
+    if not original:
+        return ""
+    is_org = bool(_HOLDER_ORG_INDICATORS.search(original)) or "," in original
+    s = _HOLDER_ORG_INDICATORS.sub(" ", original)
+    s = re.sub(r"[,\./]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    tokens = s.split()
+    if not tokens:
+        return original.lower()
+    if is_org:
+        return tokens[0]
+    return " ".join(tokens)
+
+
+def _is_position_fresh(position_date: Optional[str], today: datetime) -> bool:
+    """True when position_date is within CROWDING_MAX_HOLDER_STALENESS_DAYS.
+
+    Missing / unparseable dates fail-open to True — better to surface a real
+    crowd with one undated holder than to silently drop a legitimate cluster.
+    Operators see the row in the dashboard and can dismiss; a silent drop
+    yields no signal at all.
+    """
+    if not position_date:
+        return True
+    try:
+        d = datetime.strptime(position_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return (today - d).days <= CROWDING_MAX_HOLDER_STALENESS_DAYS
+
+
 def _dedup_positions(positions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # Feeds occasionally include multiple active rows for the same (holder, isin)
     # — observed in FCA's "Current" sheet (amended filings left alongside originals).
@@ -460,19 +533,33 @@ def _diff_vs_prior(current: List[Dict[str, Any]],
 
 
 def _detect_crowded(positions: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    today = datetime.now(timezone.utc)
     by_isin: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for p in positions:
-        if p.get("isin"):
-            by_isin[p["isin"]].append(p)
+        if not p.get("isin"):
+            continue
+        # Drop stale disclosures up front (90d horizon). A holder whose
+        # latest filing is 6+ months old isn't part of a "current" crowd.
+        # 2026-04-27 audit DLQ: BNP 2017, Atalan 2025-08, Marshall Wace
+        # post-catalyst. Fail-open on missing/unparseable dates.
+        if not _is_position_fresh(p.get("position_date"), today):
+            continue
+        by_isin[p["isin"]].append(p)
+
     crowded: Dict[str, List[Dict[str, Any]]] = {}
     for isin, pos in by_isin.items():
-        # Count distinct holders, not filing rows. Upstream _dedup_positions
-        # already collapses (regulator, holder, isin) to one row per regulator,
-        # but the same holder may appear across multiple regulators (dual-filing
-        # under FCA+AFM is common for cross-listed issuers), and historically
-        # a single holder with many dated filings was counted as N "holders".
-        # Both cases are fake crowding and trigger downstream ITRK declines.
-        unique_holders = {p.get("holder_name") for p in pos if p.get("holder_name")}
+        # Count DISTINCT NORMALIZED holders, not filing rows. Same fund filed
+        # under variant entity suffixes ("Elliott Investment Management LP" vs
+        # "Elliott Investment Management L.P." vs cross-regulator dual-filing
+        # under affiliated funds) collapse to one holder via _normalize_holder.
+        # Pre-fix: fake crowds were emitted and killed downstream as
+        # "single holder dual-filed" — see audit/findings_2026-04-27.md DLQ.
+        unique_holders = {
+            _normalize_holder(p.get("holder_name"))
+            for p in pos
+            if p.get("holder_name")
+        }
+        unique_holders.discard("")
         if len(unique_holders) < CROWDED_SHORT_MIN_HOLDERS:
             continue
         total_pct = sum((p.get("position_pct") or 0.0) for p in pos)
@@ -517,13 +604,34 @@ def _dedup_hash(regulator: str, isin: str, holder: str, signal_type: str,
 # Cache IO (Supabase Storage-backed)
 # ---------------------------------------------------------------------------
 
-def _load_dedup(client: SupabaseClient) -> Dict[str, str]:
+def _load_dedup(
+    client: SupabaseClient,
+    warnings: Optional[List[str]] = None,
+) -> Dict[str, str]:
     raw = client.read_cache("esma", "dedup.json")
     if raw is None:
         return {}
     try:
         return json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError) as e:
+        # Silent fall-through to {} would re-emit 7 days of duplicate signals
+        # without any operator visibility (audit F-113, 2026-04-27). Stash the
+        # corrupt blob alongside the cache for forensics, and surface a warning.
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            client.write_cache(
+                "esma",
+                f"dedup.corrupt-{ts}.json",
+                raw if isinstance(raw, (bytes, bytearray)) else str(raw).encode("utf-8"),
+                content_type="application/octet-stream",
+            )
+        except Exception:  # noqa: BLE001 — forensics write is best-effort
+            pass
+        if warnings is not None:
+            warnings.append(
+                f"esma dedup cache parse failure ({type(e).__name__}: {e}); "
+                f"resetting (corrupt copy preserved as dedup.corrupt-{ts}.json)"
+            )
         return {}
 
 
@@ -534,7 +642,10 @@ def _save_dedup(client: SupabaseClient, log: Dict[str, str]) -> None:
 
 
 def _prune_dedup(log: Dict[str, str]) -> Dict[str, str]:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=DEDUP_WINDOW_DAYS * 3)
+    # Prune horizon must equal DEDUP_WINDOW_DAYS, not a multiple of it.
+    # A longer horizon keeps stale entries past the novelty window and
+    # suppresses legitimate re-emissions (audit F-111, 2026-04-27).
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DEDUP_WINDOW_DAYS)
     pruned: Dict[str, str] = {}
     for h, iso in log.items():
         try:
@@ -629,7 +740,14 @@ def _coerce_signal_limit(value: Any, default: int) -> int:
 
 
 def _project_short_score(sig: Signal) -> float:
-    estimate = estimate_dimensions("short_positioning", sig.raw_payload)
+    """Internal heuristic ranking score for top_signal_limit selection.
+
+    Calls the preserved short_positioning heuristic directly (the public
+    `estimate_dimensions("short_positioning", ...)` returns None now —
+    short_positioning emits unscored and is AI-resolved). Score here is
+    used only to rank pending emissions; it is NOT persisted.
+    """
+    estimate = project_short_positioning_heuristic(sig.raw_payload)
     if estimate is None:
         return 0.0
     scored = score_signal({
@@ -757,14 +875,25 @@ def _build_crowding_signal(isin: str, positions: List[Dict[str, Any]],
     )
     signal_id = f"esma_{hashlib.sha256(f'CROWDING|{isin}|{membership_key}'.encode()).hexdigest()[:24]}"
 
-    strength = 4 if len(positions) >= 5 else 3
+    # Count distinct *normalized* holders, not filing rows. `len(positions)`
+    # over-reported when one fund filed under variant names or dual-filed
+    # across regulators — downstream thesis_writer killed those as fake
+    # crowding (audit/findings_2026-04-27.md DLQ).
+    unique_holder_count = len({
+        _normalize_holder(p.get("holder_name"))
+        for p in positions
+        if p.get("holder_name")
+    } - {""})
+
+    strength = 4 if unique_holder_count >= 5 else 3
     if len(regulators) >= 3:  # cross-regulator crowding is the strongest signal
         strength = max(strength, 4)
 
     raw_payload: Dict[str, Any] = {
         "isin": isin,
         "target_company": target_company,
-        "holder_count": len(positions),
+        "holder_count": unique_holder_count,
+        "filing_row_count": len(positions),
         "regulators": regulators,
         "total_disclosed_pct": round(total_pct, 2),
         "holders": holders,
@@ -890,7 +1019,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     crowded = _detect_crowded(all_current)
 
     # --- Dedup log ---
-    dedup_log = _prune_dedup(_load_dedup(client))
+    dedup_log = _prune_dedup(_load_dedup(client, warnings))
     novel_window = timedelta(days=DEDUP_WINDOW_DAYS)
 
     # --- Batch OpenFIGI resolution: one API call for all unique ISINs ---
