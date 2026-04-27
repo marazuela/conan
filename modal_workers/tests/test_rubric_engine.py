@@ -19,6 +19,7 @@ from modal_workers.shared.rubric_engine import (
     apply_auto_caps,
     build_scoring_meta,
     classify_band,
+    flatten_persisted_dimensions,
     rescore_with_dims,
     score_signal,
     dimensions_with_provenance,
@@ -475,6 +476,114 @@ class TestTakeoverCandidateCaps:
         band, caps = apply_auto_caps(signal, {}, "takeover_candidate", "watchlist")
         assert band == "watchlist"
         assert caps == []
+
+
+class TestFlattenPersistedDimensions:
+    """flatten_persisted_dimensions is the inverse of dimensions_with_provenance.
+
+    The reactor reads `signals.dimensions` (envelope shape written by
+    signal_resolver) and POSTs it to the rubric_apply_caps Modal endpoint.
+    Without flattening, `apply_auto_caps` sees {dim: {value: int}} — litigation
+    raises TypeError on `dict < int`, merger_arb silently evaluates False.
+    """
+
+    def test_strips_provenance_key(self):
+        assert flatten_persisted_dimensions({"_provenance": "ai_resolved"}) == {}
+
+    def test_flat_ints_pass_through(self):
+        assert flatten_persisted_dimensions({"spread_size": 5, "liquidity": 3}) == {
+            "spread_size": 5,
+            "liquidity": 3,
+        }
+
+    def test_envelope_shape_extracts_value(self):
+        persisted = {
+            "party_resolution_confidence": {"value": 2, "provenance": "ai_resolved"},
+            "financial_materiality": {"value": 5, "provenance": "ai_resolved"},
+            "_provenance": "ai_resolved",
+        }
+        assert flatten_persisted_dimensions(persisted) == {
+            "party_resolution_confidence": 2,
+            "financial_materiality": 5,
+        }
+
+    def test_mixed_envelope_and_flat(self):
+        dims = {
+            "party_resolution_confidence": {"value": 1, "provenance": "ai_resolved"},
+            "legacy_flat_dim": 4,
+            "_provenance": "mixed",
+        }
+        assert flatten_persisted_dimensions(dims) == {
+            "party_resolution_confidence": 1,
+            "legacy_flat_dim": 4,
+        }
+
+    def test_floats_truncate_to_int(self):
+        assert flatten_persisted_dimensions({"foo": 3.7}) == {"foo": 3}
+        assert flatten_persisted_dimensions({"foo": {"value": 3.2}}) == {"foo": 3}
+
+    def test_bools_drop(self):
+        assert flatten_persisted_dimensions({"foo": True, "bar": False}) == {}
+
+    def test_nested_bool_value_drops(self):
+        assert flatten_persisted_dimensions({"foo": {"value": True}}) == {}
+
+    def test_empty_and_none(self):
+        assert flatten_persisted_dimensions({}) == {}
+        assert flatten_persisted_dimensions(None) == {}
+
+    def test_missing_value_key_drops_entry(self):
+        # An envelope without `value` is malformed; skip rather than raise.
+        assert flatten_persisted_dimensions({"foo": {"provenance": "x"}}) == {}
+
+    def test_idempotent(self):
+        once = flatten_persisted_dimensions({
+            "foo": {"value": 2, "provenance": "ai_resolved"},
+            "_provenance": "ai_resolved",
+        })
+        twice = flatten_persisted_dimensions(once)
+        assert once == twice == {"foo": 2}
+
+    def test_reproduces_live_litigation_bug(self):
+        """The 34dfb2dd... signal was in an infinite 500-loop. Its persisted
+        dimensions payload, passed straight through to apply_auto_caps,
+        raised `TypeError: '<' not supported between instances of 'dict' and 'int'`.
+        After flatten, apply_auto_caps fires the party_confidence_cap as designed."""
+        persisted = {
+            "party_resolution_confidence": {"value": 2, "provenance": "ai_resolved"},
+            "financial_materiality": {"value": 5, "provenance": "ai_resolved"},
+            "legal_outcome_probability": {"value": 4, "provenance": "ai_resolved"},
+            "market_pricing": {"value": 4, "provenance": "ai_resolved"},
+            "resolution_timeline": {"value": 3, "provenance": "ai_resolved"},
+            "liquidity": {"value": 3, "provenance": "ai_resolved"},
+            "_provenance": "ai_resolved",
+        }
+        flat = flatten_persisted_dimensions(persisted)
+        band, caps = apply_auto_caps(
+            {"raw_data": {}}, flat, "litigation", "immediate",
+        )
+        assert band == "archive"
+        assert caps == ["litigation.party_confidence_cap"]
+
+    def test_reproduces_live_merger_arb_silent_bug(self):
+        """With envelope dims, `dims.get("break_risk", 5) == 1` silently
+        evaluated False because `{"value":1,...} != 1`, so rule_B never fired
+        even when break_risk was 1 and deal_certainty was 2. After flatten,
+        the cap fires as designed."""
+        persisted = {
+            "break_risk": {"value": 1, "provenance": "ai_resolved"},
+            "deal_certainty": {"value": 2, "provenance": "ai_resolved"},
+            "spread_size": {"value": 4, "provenance": "ai_resolved"},
+            "annualized_return": {"value": 3, "provenance": "ai_resolved"},
+            "liquidity": {"value": 3, "provenance": "ai_resolved"},
+            "_provenance": "ai_resolved",
+        }
+        flat = flatten_persisted_dimensions(persisted)
+        band, caps = apply_auto_caps(
+            {"raw_data": {}}, flat, "merger_arb", "immediate",
+        )
+        assert band == "watchlist"
+        assert caps == ["merger_arb.rule_B_break_risk_dominance"]
 
 
 class TestProfilesWithoutAutoCaps:
