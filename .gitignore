@@ -18,6 +18,11 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# Modal workers runtime caches (openfigi_cache, scanner snapshots, etc.)
+# Auto-created by modal_workers/shared/openfigi_resolver.py on import.
+# Override location with OPENFIGI_CACHE_DIR env var (Modal sets this).
+modal_workers/working/
+
 # Node (should not appear at this level, but guard)
 node_modules/
 
