@@ -340,6 +340,30 @@ def _canonical_action(transaction: str) -> str:
 # Scraper
 # ---------------------------------------------------------------------------
 
+# Capitol Trades pages are publication-date-sorted, so empties usually mean EOF.
+# But a transient render glitch can produce one empty page mid-history; tolerate
+# one before stopping so we don't silently drop the rest of the dataset (F-108).
+_EMPTY_STREAK_LIMIT = 2
+_FETCH_RETRY_BACKOFF_S = 2.0
+
+
+def _fetch_and_parse(url: str, headers: Dict[str, str],
+                     warnings: List[str], page: int) -> Optional[BeautifulSoup]:
+    """One retry on transient fetch/parse failure. Returns None after both fail."""
+    last_error: Optional[str] = None
+    for attempt in (1, 2):
+        try:
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            return BeautifulSoup(resp.text, "html.parser")
+        except Exception as e:  # noqa: BLE001
+            last_error = f"{type(e).__name__}: {e}"
+            if attempt < 2:
+                time.sleep(_FETCH_RETRY_BACKOFF_S)
+    warnings.append(f"fetch/parse page {page} failed after retry: {last_error}")
+    return None
+
+
 def _fetch_trades(max_pages: int, budget_deadline: float,
                   warnings: List[str]) -> List[Dict[str, Any]]:
     """Scrape trades from Capitol Trades. Pages are publication-date-sorted,
@@ -347,6 +371,7 @@ def _fetch_trades(max_pages: int, budget_deadline: float,
     all_trades: List[Dict[str, Any]] = []
     headers = {"User-Agent": USER_AGENT}
 
+    empty_streak = 0
     last_page = 0
     for page in range(1, max_pages + 1):
         if time.time() > budget_deadline:
@@ -354,60 +379,60 @@ def _fetch_trades(max_pages: int, budget_deadline: float,
             break
 
         url = f"{CAPITOL_TRADES_URL}?page={page}"
-        try:
-            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-        except Exception as e:  # noqa: BLE001
-            warnings.append(f"fetch page {page}: {type(e).__name__}: {e}")
-            break
-
-        try:
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except Exception as e:  # noqa: BLE001
-            warnings.append(f"parse page {page}: {type(e).__name__}: {e}")
+        soup = _fetch_and_parse(url, headers, warnings, page)
+        if soup is None:
             break
 
         table = soup.find("table")
         if not table:
-            warnings.append(f"no table on page {page}")
+            warnings.append(
+                f"no table on page {page} "
+                f"(possible bot protection or HTML schema change)"
+            )
             break
 
         rows = table.find_all("tr")[1:]  # skip header
         if not rows:
-            break
+            empty_streak += 1
+            warnings.append(
+                f"page {page} has no rows (empty_streak={empty_streak})"
+            )
+            if empty_streak >= _EMPTY_STREAK_LIMIT:
+                break
+        else:
+            empty_streak = 0
+            for row in rows:
+                cells = row.find_all("td")
+                if len(cells) < 8:
+                    continue
 
-        for row in rows:
-            cells = row.find_all("td")
-            if len(cells) < 8:
-                continue
+                politician_text = cells[0].get_text(strip=True) if cells[0] else ""
+                issuer_text = cells[1].get_text(strip=True) if cells[1] else ""
+                traded_date_text = cells[3].get_text(strip=True) if cells[3] else ""
+                owner = cells[5].get_text(strip=True) if len(cells) > 5 else ""
+                trade_type = cells[6].get_text(strip=True) if len(cells) > 6 else ""
+                size_range = cells[7].get_text(strip=True) if len(cells) > 7 else ""
 
-            politician_text = cells[0].get_text(strip=True) if cells[0] else ""
-            issuer_text = cells[1].get_text(strip=True) if cells[1] else ""
-            traded_date_text = cells[3].get_text(strip=True) if cells[3] else ""
-            owner = cells[5].get_text(strip=True) if len(cells) > 5 else ""
-            trade_type = cells[6].get_text(strip=True) if len(cells) > 6 else ""
-            size_range = cells[7].get_text(strip=True) if len(cells) > 7 else ""
+                politician = _parse_politician_cell(politician_text)
+                ticker = _extract_ticker(issuer_text)
+                issuer_name = _extract_issuer_name(issuer_text)
+                traded_date = _parse_trade_date(traded_date_text)
 
-            politician = _parse_politician_cell(politician_text)
-            ticker = _extract_ticker(issuer_text)
-            issuer_name = _extract_issuer_name(issuer_text)
-            traded_date = _parse_trade_date(traded_date_text)
+                if not ticker or ticker == "N/A":
+                    continue
 
-            if not ticker or ticker == "N/A":
-                continue
-
-            all_trades.append({
-                "politician_name": politician["name"],
-                "party": politician["party"],
-                "chamber": politician["chamber"],
-                "state": politician["state"],
-                "ticker": ticker,
-                "issuer_name": issuer_name,
-                "transaction_date": traded_date or "",
-                "owner": owner,
-                "transaction": trade_type,
-                "size_range": size_range,
-            })
+                all_trades.append({
+                    "politician_name": politician["name"],
+                    "party": politician["party"],
+                    "chamber": politician["chamber"],
+                    "state": politician["state"],
+                    "ticker": ticker,
+                    "issuer_name": issuer_name,
+                    "transaction_date": traded_date or "",
+                    "owner": owner,
+                    "transaction": trade_type,
+                    "size_range": size_range,
+                })
 
         last_page = page
         if page < max_pages:
