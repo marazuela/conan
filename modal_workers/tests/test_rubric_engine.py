@@ -223,6 +223,92 @@ class TestBinaryCatalystEvFloor:
         assert caps == []
 
 
+class TestBinaryCatalystMegacapAbsorptionCap:
+    """2026-04-27 cap — large-sponsor PDUFA noise was reaching immediate band
+    despite the AI correctly setting magnitude=1 (sub-1% of parent market cap).
+    Reference live signal_ids: b85dc455…, 52f581d2…, a1530983… (AbbVie/Sanofi/
+    AstraZeneca, all $100B+)."""
+
+    PROFILE = "binary_catalyst"
+
+    def _call(self, *, mcap, magnitude, band="immediate", extra_raw=None):
+        raw = {"market_cap_usd": mcap}
+        if extra_raw:
+            raw.update(extra_raw)
+        return apply_auto_caps({"raw_data": raw}, {"magnitude": magnitude}, self.PROFILE, band)
+
+    def test_megacap_low_magnitude_caps_immediate_to_watchlist(self):
+        # AbbVie-shaped: $130B cap, AI assessed magnitude=1.
+        band, caps = self._call(mcap=130_000_000_000, magnitude=1)
+        assert band == "watchlist"
+        assert caps == ["binary_catalyst.megacap_absorption_cap"]
+
+    def test_megacap_magnitude_2_also_caps(self):
+        band, caps = self._call(mcap=51_000_000_000, magnitude=2)
+        assert band == "watchlist"
+        assert caps == ["binary_catalyst.megacap_absorption_cap"]
+
+    def test_megacap_with_truly_binary_magnitude_3_does_not_cap(self):
+        # JNJ-Stelara-LOE-shaped: megacap but the readout is genuinely binary.
+        band, caps = self._call(mcap=400_000_000_000, magnitude=3)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_sub_threshold_sponsor_does_not_cap(self):
+        # $40B parent — small enough that magnitude=1 might still move it.
+        band, caps = self._call(mcap=40_000_000_000, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_threshold_boundary_strictly_greater_than(self):
+        # Exactly $50B → not greater than threshold, no cap.
+        band, caps = self._call(mcap=50_000_000_000, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_already_watchlist_band_not_demoted_further(self):
+        band, caps = self._call(mcap=130_000_000_000, magnitude=1, band="watchlist")
+        assert band == "watchlist"
+        assert caps == []
+
+    def test_missing_market_cap_skips_cap(self):
+        # Scanners without a market_snapshot (e.g. unresolved sponsor) don't fire.
+        band, caps = apply_auto_caps(
+            {"raw_data": {}}, {"magnitude": 1}, self.PROFILE, "immediate"
+        )
+        assert band == "immediate"
+        assert caps == []
+
+    def test_null_market_cap_skips_cap(self):
+        band, caps = self._call(mcap=None, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_missing_magnitude_skips_cap(self):
+        # No magnitude dim resolved yet — defensive: don't cap on partial data.
+        band, caps = apply_auto_caps(
+            {"raw_data": {"market_cap_usd": 130_000_000_000}},
+            {},
+            self.PROFILE,
+            "immediate",
+        )
+        assert band == "immediate"
+        assert caps == []
+
+    def test_megacap_cap_composes_with_ev_floor(self):
+        # Both caps fire on the same payload. ev_floor downgrades immediate→watchlist
+        # first; megacap_absorption_cap's `band == "immediate"` gate then fails, so
+        # only ev_floor lands in caps. Documents observed precedence.
+        signal = {"raw_data": {
+            "market_cap_usd": 130_000_000_000,
+            "approval_probability": 0.3, "upside_pct": 20, "downside_pct": 20,
+        }}
+        band, caps = apply_auto_caps(signal, {"magnitude": 1}, self.PROFILE, "immediate")
+        assert band == "watchlist"
+        assert any("binary_catalyst.ev_floor" in c for c in caps)
+        assert "binary_catalyst.megacap_absorption_cap" not in caps
+
+
 class TestLitigationPartyConfidence:
     # 2026-04-24: threshold raised from <3 to <4. Tests pass
     # `universe_resolved=True` to isolate party_confidence_cap behaviour from

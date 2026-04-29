@@ -247,6 +247,16 @@ def validate_scoring_meta(meta: Any) -> List[str]:
 RISK_FREE_RATE = 0.043  # 10Y UST as of 2026-04-16 (carried from v1)
 EV_FLOOR = 5.0          # percent (binary_catalyst)
 
+# 2026-04-27: AbbVie / Sanofi / AstraZeneca PDUFA signals were landing in the
+# immediate band at 31–36 with `magnitude=1` correctly set by the AI. The
+# rubric formula still let approval_probability=5 (×2.5) + catalyst_timeline=5
+# (×1.0) dominate, and thesis_writer was killing them downstream as "no
+# asymmetry on $130B parent stock." The cap moves them to watchlist before they
+# burn AI cycles. A truly binary readout on a megacap (e.g. JNJ Stelara LOE)
+# also gets capped — acceptable: the watchlist signal still flows for manual
+# promotion.
+MEGACAP_ABSORPTION_THRESHOLD_USD = 50_000_000_000
+
 
 def _coerce_patterns_hit(v: Any) -> int:
     """Normalise takeover_candidate raw_data.patterns_hit to an int.
@@ -286,6 +296,8 @@ _CAP_NARRATIVES: Dict[str, str] = {
         "Break-risk dominant with low deal certainty",
     "binary_catalyst.ev_floor":
         "Expected value below 5% floor",
+    "binary_catalyst.megacap_absorption_cap":
+        "Megacap parent absorbs binary catalyst (low-magnitude readout)",
     "litigation.party_confidence_cap":
         "Party-resolution confidence too low (caption parse weak)",
     "litigation.universe_miss_cap":
@@ -345,14 +357,27 @@ def apply_auto_caps(
                 caps.append("merger_arb.rule_B_break_risk_dominance")
 
     elif profile == "binary_catalyst":
-        p_approval = signal.get("raw_data", {}).get("approval_probability")
-        upside = signal.get("raw_data", {}).get("upside_pct")
-        downside = signal.get("raw_data", {}).get("downside_pct")
+        raw = signal.get("raw_data", {}) or {}
+        p_approval = raw.get("approval_probability")
+        upside = raw.get("upside_pct")
+        downside = raw.get("downside_pct")
         if p_approval is not None and upside is not None and downside is not None:
             ev = p_approval * upside - (1 - p_approval) * abs(downside)
             if ev < EV_FLOOR and band == "immediate":
                 band = "watchlist"
                 caps.append(f"binary_catalyst.ev_floor (ev={ev:.2f})")
+
+        mcap = raw.get("market_cap_usd")
+        magnitude = dims.get("magnitude")
+        if (
+            isinstance(mcap, (int, float))
+            and mcap > MEGACAP_ABSORPTION_THRESHOLD_USD
+            and isinstance(magnitude, int)
+            and magnitude < 3
+            and band == "immediate"
+        ):
+            band = "watchlist"
+            caps.append("binary_catalyst.megacap_absorption_cap")
 
     elif profile == "litigation":
         # 2026-04-24 selectivity tightening (courtlistener flood review):
