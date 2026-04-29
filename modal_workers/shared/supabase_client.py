@@ -97,6 +97,11 @@ class SupabaseError(RuntimeError):
         self.body = body
 
 
+# PostgREST URL-length safety for `signal_id=in.(...)` pre-filter in insert_signals.
+# A 32-char signal_id × 200 ≈ 6.5KB request line — well under Kong's 8KB default.
+_SIGNAL_ID_FILTER_CHUNK = 200
+
+
 class SupabaseClient:
     def __init__(self, url: Optional[str] = None, service_key: Optional[str] = None, timeout: float = 15.0):
         self.url = (url or os.environ["SUPABASE_URL"]).rstrip("/")
@@ -562,12 +567,39 @@ class SupabaseClient:
         (signal_id), which isn't the dedup axis we want (scanner may regenerate a
         fresh signal_id for the same content, so we'd happily insert duplicates).
         The ESMA run that surfaced this produced ERROR 42P10 on some PostgREST
-        configurations; pinning the conflict target removes that ambiguity."""
+        configurations; pinning the conflict target removes that ambiguity.
+
+        Pre-filter on signal_id: deterministic-id scanners (e.g. courtlistener)
+        regenerate the same signal_id on re-fetch but a different source_content_hash
+        whenever upstream metadata on the docket changes. That bypasses the
+        (hash, profile) on_conflict target and triggers a 23505 PK violation on
+        the bulk insert. We GET existing signal_ids first and drop already-present
+        rows from the batch — preserves the (hash, profile) dedup for non-
+        deterministic-id scanners while making deterministic-id scanners
+        idempotent across re-runs."""
         if not signals:
             return []
+
+        proposed_ids = [s["signal_id"] for s in signals]
+        existing_ids: set[str] = set()
+        for i in range(0, len(proposed_ids), _SIGNAL_ID_FILTER_CHUNK):
+            chunk = proposed_ids[i : i + _SIGNAL_ID_FILTER_CHUNK]
+            existing = self._rest(
+                "GET", "signals",
+                params={
+                    "select": "signal_id",
+                    "signal_id": f"in.({','.join(chunk)})",
+                },
+            ) or []
+            existing_ids.update(r["signal_id"] for r in existing)
+
+        fresh = [s for s in signals if s["signal_id"] not in existing_ids]
+        if not fresh:
+            return []
+
         rows = self._rest("POST", "signals",
                           params={"on_conflict": "source_content_hash,scoring_profile"},
-                          json_body=signals,
+                          json_body=fresh,
                           prefer="return=representation,resolution=ignore-duplicates")
         if rows is None:
             return []
@@ -576,10 +608,6 @@ class SupabaseClient:
     # ------------------------------------------------------------------
     # Price tracking (signal_price_snapshots + outcomes mirror)
     # ------------------------------------------------------------------
-
-    # Same chunking guideline as insert_signals: keep `signal_id=in.(...)` lists
-    # bounded so the request line stays well under Kong's 8KB cap.
-    _PRICE_TRACKER_IN_CHUNK = 200
 
     def load_price_tracking_subjects(self, window_days: int = 35) -> List[Dict[str, Any]]:
         """Return a flat list of subjects the price tracker should evaluate.
@@ -594,7 +622,6 @@ class SupabaseClient:
           {kind: 'candidate'|'signal', signal_id, candidate_id, ticker, mic,
            thesis_direction, created_at (iso str)}
         """
-        chunk_size = self._PRICE_TRACKER_IN_CHUNK
         cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
         subjects: List[Dict[str, Any]] = []
 
@@ -622,8 +649,8 @@ class SupabaseClient:
         sig_dir: Dict[str, str] = {}
         if cand_to_signal:
             sig_ids = sorted(set(cand_to_signal.values()))
-            for i in range(0, len(sig_ids), chunk_size):
-                chunk = sig_ids[i:i + chunk_size]
+            for i in range(0, len(sig_ids), _SIGNAL_ID_FILTER_CHUNK):
+                chunk = sig_ids[i:i + _SIGNAL_ID_FILTER_CHUNK]
                 rows = self._rest("GET", "signals", params={
                     "select": "signal_id,thesis_direction",
                     "signal_id": f"in.({','.join(chunk)})",
@@ -657,8 +684,8 @@ class SupabaseClient:
         promoted_signal_ids: set[str] = set()
         if sig_rows:
             ids = [r["signal_id"] for r in sig_rows]
-            for i in range(0, len(ids), chunk_size):
-                chunk = ids[i:i + chunk_size]
+            for i in range(0, len(ids), _SIGNAL_ID_FILTER_CHUNK):
+                chunk = ids[i:i + _SIGNAL_ID_FILTER_CHUNK]
                 rows = self._rest("GET", "thesis_jobs", params={
                     "select": "signal_id",
                     "signal_id": f"in.({','.join(chunk)})",
@@ -668,8 +695,8 @@ class SupabaseClient:
 
         entity_map: Dict[str, Dict[str, Any]] = {}
         entity_ids = sorted({r["entity_id"] for r in sig_rows if r.get("entity_id")})
-        for i in range(0, len(entity_ids), chunk_size):
-            chunk = entity_ids[i:i + chunk_size]
+        for i in range(0, len(entity_ids), 200):
+            chunk = entity_ids[i:i + 200]
             in_clause = ",".join(f'"{eid}"' for eid in chunk)
             rows = self._rest("GET", "entities", params={
                 "select": "id,primary_ticker,primary_mic",
@@ -697,19 +724,16 @@ class SupabaseClient:
         return subjects
 
     def upsert_price_snapshot(self, row: Dict[str, Any]) -> None:
-        """Insert-or-update a row in signal_price_snapshots, keyed on the partial
-        unique index for the relevant subject column. Caller is responsible for
-        passing exactly one of signal_id / candidate_id."""
-        if row.get("signal_id"):
-            on_conflict = "signal_id,horizon_days"
-        elif row.get("candidate_id"):
-            on_conflict = "candidate_id,horizon_days"
-        else:
+        """Insert-or-update a row in signal_price_snapshots, keyed on the
+        (subject_kind, subject_key, horizon_days) UNIQUE constraint. Caller
+        passes exactly one of signal_id / candidate_id; the table's generated
+        columns derive subject_kind / subject_key automatically."""
+        if not row.get("signal_id") and not row.get("candidate_id"):
             raise ValueError("upsert_price_snapshot requires signal_id OR candidate_id")
         self._rest_with_retry(
             "POST",
             "signal_price_snapshots",
-            params={"on_conflict": on_conflict},
+            params={"on_conflict": "subject_kind,subject_key,horizon_days"},
             json_body=row,
             prefer="resolution=merge-duplicates,return=minimal",
         )
@@ -725,14 +749,20 @@ class SupabaseClient:
         hasn't transitioned to a terminal lifecycle state) — PostgREST returns
         an empty result and we don't surface that as an error.
 
-        Sets `labeled_at = now()` to mark automation provenance. Does not write
-        `labeled_by` — that column references auth.users and we're a service
-        role; absence + labeled_at being set is the convention for automation.
+        Sets `labeled_at` to the current ISO UTC timestamp to mark automation
+        provenance (PostgREST treats JSON strings as text — sending the literal
+        `"now()"` would write the text into a timestamptz column, not call the
+        SQL function). Does not write `labeled_by` — that column references
+        auth.users and we're a service role; absence + labeled_at being set is
+        the convention for automation.
         """
         if horizon_days not in (1, 7, 30):
             raise ValueError(f"horizon_days must be 1/7/30, got {horizon_days}")
         column = f"realized_move_{horizon_days}d"
-        body: Dict[str, Any] = {column: signed_move_pct, "labeled_at": "now()"}
+        body: Dict[str, Any] = {
+            column: signed_move_pct,
+            "labeled_at": datetime.now(timezone.utc).isoformat(),
+        }
         self._rest_with_retry(
             "PATCH",
             "outcomes",
