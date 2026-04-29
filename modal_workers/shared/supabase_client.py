@@ -31,7 +31,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -572,6 +572,174 @@ class SupabaseClient:
         if rows is None:
             return []
         return [r["signal_id"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Price tracking (signal_price_snapshots + outcomes mirror)
+    # ------------------------------------------------------------------
+
+    # Same chunking guideline as insert_signals: keep `signal_id=in.(...)` lists
+    # bounded so the request line stays well under Kong's 8KB cap.
+    _PRICE_TRACKER_IN_CHUNK = 200
+
+    def load_price_tracking_subjects(self, window_days: int = 35) -> List[Dict[str, Any]]:
+        """Return a flat list of subjects the price tracker should evaluate.
+
+        Each subject is a candidate (any state) created within the window OR a
+        signal in band_with_bonus IN ('immediate','watchlist') that hasn't been
+        promoted to a candidate. Direction is resolved via the thesis_jobs link
+        for candidates, and read directly off `signals.thesis_direction` for
+        signals; defaults to 'long' if missing.
+
+        Subject shape:
+          {kind: 'candidate'|'signal', signal_id, candidate_id, ticker, mic,
+           thesis_direction, created_at (iso str)}
+        """
+        chunk_size = self._PRICE_TRACKER_IN_CHUNK
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        subjects: List[Dict[str, Any]] = []
+
+        # ---- Candidates ----
+        cand_rows = self._rest("GET", "candidates", params={
+            "select": "id,ticker,mic,created_at",
+            "ticker": "not.is.null",
+            "created_at": f"gte.{cutoff}",
+            "limit": "5000",
+        }) or []
+
+        cand_to_signal: Dict[str, str] = {}
+        if cand_rows:
+            cand_ids = [r["id"] for r in cand_rows]
+            in_clause = ",".join(f'"{cid}"' for cid in cand_ids)
+            tj_rows = self._rest("GET", "thesis_jobs", params={
+                "select": "candidate_id,signal_id",
+                "candidate_id": f"in.({in_clause})",
+                "status": "eq.promoted",
+            }) or []
+            for r in tj_rows:
+                if r.get("candidate_id") and r.get("signal_id"):
+                    cand_to_signal[r["candidate_id"]] = r["signal_id"]
+
+        sig_dir: Dict[str, str] = {}
+        if cand_to_signal:
+            sig_ids = sorted(set(cand_to_signal.values()))
+            for i in range(0, len(sig_ids), chunk_size):
+                chunk = sig_ids[i:i + chunk_size]
+                rows = self._rest("GET", "signals", params={
+                    "select": "signal_id,thesis_direction",
+                    "signal_id": f"in.({','.join(chunk)})",
+                }) or []
+                for r in rows:
+                    sig_dir[r["signal_id"]] = r.get("thesis_direction") or "long"
+
+        for c in cand_rows:
+            direction = "long"
+            sid = cand_to_signal.get(c["id"])
+            if sid:
+                direction = sig_dir.get(sid, "long")
+            subjects.append({
+                "kind": "candidate",
+                "signal_id": None,
+                "candidate_id": c["id"],
+                "ticker": c["ticker"],
+                "mic": c.get("mic"),
+                "thesis_direction": direction,
+                "created_at": c["created_at"],
+            })
+
+        # ---- Watchlist/immediate signals not yet promoted ----
+        sig_rows = self._rest("GET", "signals", params={
+            "select": "signal_id,entity_id,thesis_direction,created_at",
+            "band_with_bonus": "in.(immediate,watchlist)",
+            "created_at": f"gte.{cutoff}",
+            "limit": "5000",
+        }) or []
+
+        promoted_signal_ids: set[str] = set()
+        if sig_rows:
+            ids = [r["signal_id"] for r in sig_rows]
+            for i in range(0, len(ids), chunk_size):
+                chunk = ids[i:i + chunk_size]
+                rows = self._rest("GET", "thesis_jobs", params={
+                    "select": "signal_id",
+                    "signal_id": f"in.({','.join(chunk)})",
+                    "status": "eq.promoted",
+                }) or []
+                promoted_signal_ids.update(r["signal_id"] for r in rows if r.get("signal_id"))
+
+        entity_map: Dict[str, Dict[str, Any]] = {}
+        entity_ids = sorted({r["entity_id"] for r in sig_rows if r.get("entity_id")})
+        for i in range(0, len(entity_ids), chunk_size):
+            chunk = entity_ids[i:i + chunk_size]
+            in_clause = ",".join(f'"{eid}"' for eid in chunk)
+            rows = self._rest("GET", "entities", params={
+                "select": "id,primary_ticker,primary_mic",
+                "id": f"in.({in_clause})",
+            }) or []
+            for r in rows:
+                entity_map[r["id"]] = r
+
+        for r in sig_rows:
+            if r["signal_id"] in promoted_signal_ids:
+                continue
+            ent = entity_map.get(r.get("entity_id"))
+            if not ent or not ent.get("primary_ticker"):
+                continue
+            subjects.append({
+                "kind": "signal",
+                "signal_id": r["signal_id"],
+                "candidate_id": None,
+                "ticker": ent["primary_ticker"],
+                "mic": ent.get("primary_mic"),
+                "thesis_direction": r.get("thesis_direction") or "long",
+                "created_at": r["created_at"],
+            })
+
+        return subjects
+
+    def upsert_price_snapshot(self, row: Dict[str, Any]) -> None:
+        """Insert-or-update a row in signal_price_snapshots, keyed on the partial
+        unique index for the relevant subject column. Caller is responsible for
+        passing exactly one of signal_id / candidate_id."""
+        if row.get("signal_id"):
+            on_conflict = "signal_id,horizon_days"
+        elif row.get("candidate_id"):
+            on_conflict = "candidate_id,horizon_days"
+        else:
+            raise ValueError("upsert_price_snapshot requires signal_id OR candidate_id")
+        self._rest_with_retry(
+            "POST",
+            "signal_price_snapshots",
+            params={"on_conflict": on_conflict},
+            json_body=row,
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    def update_outcome_realized_move(
+        self,
+        candidate_id: str,
+        horizon_days: int,
+        signed_move_pct: Optional[float],
+    ) -> None:
+        """PATCH the candidate's outcomes row with the signed realized move at
+        the given horizon. No-op when no outcomes row exists yet (the candidate
+        hasn't transitioned to a terminal lifecycle state) — PostgREST returns
+        an empty result and we don't surface that as an error.
+
+        Sets `labeled_at = now()` to mark automation provenance. Does not write
+        `labeled_by` — that column references auth.users and we're a service
+        role; absence + labeled_at being set is the convention for automation.
+        """
+        if horizon_days not in (1, 7, 30):
+            raise ValueError(f"horizon_days must be 1/7/30, got {horizon_days}")
+        column = f"realized_move_{horizon_days}d"
+        body: Dict[str, Any] = {column: signed_move_pct, "labeled_at": "now()"}
+        self._rest_with_retry(
+            "PATCH",
+            "outcomes",
+            params={"candidate_id": f"eq.{candidate_id}"},
+            json_body=body,
+            prefer="return=minimal",
+        )
 
     # ------------------------------------------------------------------
     # Storage (scanner-caches bucket)

@@ -948,3 +948,23 @@ def timing_auditor_once() -> dict:
     return timing_auditor()
 
 
+# ==========================================================================
+# Daily price tracker — feeds signal_price_snapshots and the
+# outcomes.realized_move_{1d,7d,30d} columns the timing/precision auditors
+# read. Cron pinned to 23:30 UTC (~18:30 ET) so the US daily close is settled
+# in yfinance before we fetch.
+# ==========================================================================
+
+@app.function(image=image, schedule=modal.Cron("30 23 * * *"), timeout=1800,
+              secrets=[scanner_secrets, supabase_secrets])
+def evaluate_ticker_movement() -> dict:
+    from modal_workers.evaluators.price_tracker import run_price_tracker
+    return run_price_tracker()
+
+
+@app.function(image=image, timeout=1800, secrets=[scanner_secrets, supabase_secrets])
+def evaluate_ticker_movement_once() -> dict:
+    from modal_workers.evaluators.price_tracker import run_price_tracker
+    return run_price_tracker()
+
+
