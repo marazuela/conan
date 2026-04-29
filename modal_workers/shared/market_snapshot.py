@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Optional, Tuple
 
 from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError
 
@@ -295,3 +295,62 @@ def _fetch_market_snapshot(ticker: str, mic: Optional[str]) -> Dict[str, Any]:
     if not any(snapshot.get(key) is not None for key in ("adv_usd", "market_cap_usd", "valuation_cushion_pct")):
         return _unavailable_snapshot(ticker, mic)
     return snapshot
+
+
+# ---------------------------------------------------------------------------
+# Historical close lookup — used by the daily price_tracker evaluator.
+# Process-local LRU only (no Storage cache): the value of a single past close
+# never changes once the day has settled, so the win is bounded; for a worker
+# pod that runs once a day the LRU is enough to dedupe within a run.
+# ---------------------------------------------------------------------------
+
+_CLOSE_MEMO: Dict[Tuple[str, str, str], Optional[float]] = {}
+
+
+def fetch_close_on_date(
+    ticker: str,
+    mic: Optional[str],
+    target: date,
+    *,
+    forward_window_days: int = 5,
+) -> Optional[float]:
+    """Return the close price for `ticker` on the first trading day at or after
+    `target`. Forward-fills weekends/holidays up to `forward_window_days`.
+
+    Returns None when:
+      - yfinance is unavailable / errors,
+      - ticker has no rows in the requested window,
+      - `target` is in the future (yfinance returns empty).
+    """
+    if not ticker:
+        return None
+    symbol = _symbol_for(ticker, mic)
+    cache_key = (symbol, target.isoformat(), str(forward_window_days))
+    if cache_key in _CLOSE_MEMO:
+        return _CLOSE_MEMO[cache_key]
+
+    try:
+        import yfinance as yf  # type: ignore
+    except ImportError:
+        _CLOSE_MEMO[cache_key] = None
+        return None
+
+    end = target + timedelta(days=forward_window_days + 1)
+    try:
+        hist = yf.Ticker(symbol).history(
+            start=target.isoformat(),
+            end=end.isoformat(),
+            auto_adjust=True,
+        )
+    except Exception:
+        _CLOSE_MEMO[cache_key] = None
+        return None
+
+    close: Optional[float] = None
+    if hist is not None and hasattr(hist, "__contains__") and "Close" in hist:
+        closes = hist["Close"].dropna()
+        if len(closes) > 0:
+            close = _coerce_float(closes.iloc[0])
+
+    _CLOSE_MEMO[cache_key] = close
+    return close
