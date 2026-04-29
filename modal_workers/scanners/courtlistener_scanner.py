@@ -542,10 +542,11 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         elif merged:
             disabled_nos_skipped.append(nos)
 
-    if disabled_nos_skipped:
-        warnings.append(
-            f"courtlistener NOS disabled by config: {','.join(disabled_nos_skipped)}"
-        )
+    # Disabled NOS codes are an intentional config state (set in scanners.config
+    # by the operator). They surface in the metrics block so dashboards can show
+    # which NOS are off — but they are not "warnings" that should force the run
+    # to status=partial. Real warnings (fetch failures, wall-clock timeout,
+    # auth_required) still trigger partial via the warnings.append calls below.
 
     for nos in active_nos:
         if time.time() - scan_start > budget:

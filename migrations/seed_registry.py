@@ -159,7 +159,7 @@ class Seeder:
 # --------------------------------------------------------------------
 
 def build_sources() -> List[Dict[str, Any]]:
-    """One row per unique source kind across the 17 scanners."""
+    """One row per unique source kind across the 19 scanners."""
     kinds_seen = set(SCANNER_TO_SOURCE_KIND.values())
     rows = []
     for kind in sorted(kinds_seen):

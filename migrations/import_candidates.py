@@ -613,11 +613,18 @@ def reconcile_candidates(
     dry_run: bool = False,
     tickers: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    client = client or SupabaseClient()
+    # On --dry-run with no caller-supplied client, skip Supabase entirely so the
+    # spec parser can be exercised offline without SUPABASE_URL / SERVICE_ROLE_KEY.
+    if client is None and not dry_run:
+        client = SupabaseClient()
     specs = load_legacy_candidate_specs(tickers)
     tickers_to_load = [spec["ticker"] for spec in specs]
-    existing_by_ticker = _fetch_existing_candidates(client, tickers_to_load)
-    entities_by_ticker = _fetch_entities(client, tickers_to_load)
+    existing_by_ticker = (
+        _fetch_existing_candidates(client, tickers_to_load) if client else {}
+    )
+    entities_by_ticker = (
+        _fetch_entities(client, tickers_to_load) if client else {}
+    )
     rows, summary = build_candidate_upsert_rows(specs, existing_by_ticker, entities_by_ticker)
 
     upserted = 0
