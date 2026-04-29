@@ -305,6 +305,60 @@ def _validate_reasoning_tags(situation: str, why_underpriced: str, steelman: str
         )
 
 
+# Coherence-bridging tokens between `situation` and `why_underpriced`. The
+# motivating failure mode: a thesis with a coherent situation paragraph and a
+# separately-coherent why_underpriced paragraph that describe DIFFERENT theses
+# (e.g. takeover-target situation paired with FDA-narrative why). v2's other
+# checks (length, boilerplate, reasoning-tag coverage) all pass on such drafts
+# because each field is internally well-formed.
+#
+# Extraction targets named-entity-ish tokens that bridge the two fields:
+#   1. Multi-word proper nouns ("Vanguard Total Stock Market")
+#   2. ALL-CAPS acronyms 3+ chars (FDA, SEC, PDUFA), incl. SEC form codes
+#   3. Mixed-case proper nouns 4+ chars (Drug, Vanguard, Texas)
+#   4. SEC form codes with leading digits (8-K, 13D, 10-Q)
+#   5. ISO dates and quarter bands
+# Pure numbers are excluded — too noisy. Common short capitalized words
+# ("The", "And") fall outside the 4+ char and ALL-CAPS gates.
+_COHERENCE_TOKEN_RE = re.compile(
+    r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|"
+    r"\b[A-Z]{3,}(?:-[A-Z0-9]+)?|"
+    r"\b\d+-?[A-Z]+\b|"
+    r"\b[A-Z][a-z]{3,}|"
+    r"\b\d{4}-\d{2}-\d{2}\b|"
+    r"\b(?:Q[1-4]|H[12])\s+\d{4}\b"
+)
+
+
+def _extract_coherence_tokens(s: str) -> set:
+    if not s:
+        return set()
+    return {m.group(0).lower() for m in _COHERENCE_TOKEN_RE.finditer(s)}
+
+
+def _validate_situation_coherence(situation: str, why_underpriced: str,
+                                  reasons: List[str]) -> None:
+    """Reject theses where the situation describes a different event than the
+    why-underpriced paragraph references. Requires at least one coherence-
+    bridging token from situation to appear in why_underpriced.
+
+    A degenerate situation (no extractable named entities) skips this check —
+    other v1/v2 validators (length, boilerplate, reasoning-tag coverage) will
+    surface the underlying quality problem with a more specific reason.
+    """
+    sit_tokens = _extract_coherence_tokens(situation)
+    if not sit_tokens:
+        return
+    why_tokens = _extract_coherence_tokens(why_underpriced)
+    if not (sit_tokens & why_tokens):
+        sample = ", ".join(sorted(sit_tokens)[:5])
+        reasons.append(
+            f"coherence_fail_situation_unrelated_to_underpriced: no overlapping "
+            f"named entities between situation and why_underpriced "
+            f"(situation tokens e.g. [{sample}])"
+        )
+
+
 def _validate_structured_kill(kc: Any, reasons: List[str]) -> None:
     if not isinstance(kc, list) or len(kc) < 3:
         got = len(kc) if isinstance(kc, list) else 0
@@ -370,6 +424,11 @@ def assess_thesis_v2(thesis: Optional[Dict[str, Any]]) -> Tuple[bool, List[str]]
         thesis.get("situation") or "",
         thesis.get("why_underpriced") or "",
         thesis.get("steelman") or "",
+        reasons,
+    )
+    _validate_situation_coherence(
+        thesis.get("situation") or "",
+        thesis.get("why_underpriced") or "",
         reasons,
     )
 
