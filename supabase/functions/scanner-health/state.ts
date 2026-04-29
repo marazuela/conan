@@ -148,7 +148,11 @@ export function deriveScannerState(
   const hasRunningRun = runningRunCount > 0;
   const latestObservedRun = effectiveLatestRun(input, recentRuns);
   const effectiveStatus = latestObservedRun?.status ?? input.last_run_status;
-  const criticalFlag = flags.find((flag) => flag.severity === "critical");
+  // critical and error both surface as red. Prefer critical when both exist
+  // so the message reflects the higher-severity flag.
+  const redFlag =
+    flags.find((flag) => flag.severity === "critical") ??
+    flags.find((flag) => flag.severity === "error");
   const warnFlag = flags.find((flag) => flag.severity === "warn");
   const probeIssue = input.last_probe_status && input.last_probe_status !== "ok";
 
@@ -172,10 +176,10 @@ export function deriveScannerState(
     );
   }
 
-  if (criticalFlag) {
+  if (redFlag) {
     return stateResponse(
       "error",
-      `critical flag: ${summarizeFlag(criticalFlag) ?? "operator attention required"}`,
+      `${redFlag.severity} flag: ${summarizeFlag(redFlag) ?? "operator attention required"}`,
       "red",
       extras,
     );
