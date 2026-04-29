@@ -23,6 +23,13 @@ Deviations from v1:
     resolution happens downstream via openfigi_resolver in the reactor; the
     scanner does not attempt inline OpenFIGI lookup (no ticker to pass).
   - strength_estimate: 3 default; 4 if indication base rate >= 0.60; 5 if >= 0.80.
+  - Already-approved-drug filter (DLQ batch 2026-04-27): after the triage gate,
+    each trial's drug interventions are checked against the openFDA Orange Book
+    (drugsfda endpoint, no auth) for an approved (status=AP) submission whose
+    sponsor matches the trial's lead sponsor. Matches are dropped — those are
+    label-extensions or geographic-bridging studies, not binary catalysts.
+    Lookup failures fail open (signal emitted, warning attached); cached in
+    scanner-caches/fda/orange_book/<drug>.json with a 7-day TTL.
 
 IO contract:
   scan(cfg: ScannerConfig) -> ScannerResult
@@ -33,6 +40,7 @@ IO contract:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -41,7 +49,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from modal_workers.shared.scanner_base import Signal, ScannerResult
-from modal_workers.shared.supabase_client import EntityHints, ScannerConfig, SupabaseClient
+from modal_workers.shared.supabase_client import (
+    EntityHints,
+    ScannerConfig,
+    SupabaseClient,
+    SupabaseError,
+)
 
 # ---------------------------------------------------------------------------
 # Constants (verbatim from v1)
@@ -52,6 +65,37 @@ NAME = "pre_phase3_readout_scanner"
 CLINICALTRIALS_URL = "https://clinicaltrials.gov/api/v2/studies"
 USER_AGENT = "InvestmentResearch research@example.com"
 REQUEST_TIMEOUT = 15
+
+# openFDA Orange Book / drugsfda lookup — used to filter out label-extension
+# and geographic-bridging trials whose drug is already on the market for the
+# same sponsor (DLQ batch 2026-04-27: AbbVie / Sanofi MenQuadfi / AstraZeneca
+# all scored 31–36 and were correctly killed by the thesis_writer for
+# insufficient_signal — no asymmetry on a megacap with an approved drug).
+OPENFDA_DRUGSFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+APPROVED_CHECK_TIMEOUT = 10
+APPROVED_CACHE_TTL_S = 7 * 24 * 3600  # 7d — Orange Book changes slowly
+
+# Tokens that appear in both CT.gov sponsor names and FDA sponsor_name but
+# carry no identity signal. Stripped before the substring-match check.
+_SPONSOR_NOISE_TOKENS = {
+    "inc", "inc.", "incorporated", "llc", "ltd", "ltd.", "limited",
+    "plc", "corp", "corp.", "corporation", "company", "co", "co.",
+    "ag", "sa", "s.a.", "sas", "s.a.s.", "se", "nv", "n.v.", "ab",
+    "holdings", "holding", "group",
+    "pharmaceutical", "pharmaceuticals", "pharma", "pharmacia",
+    "biosciences", "biotechnology", "biotech", "therapeutics",
+    "laboratories", "labs", "research", "rsch", "rd",
+    "global", "international", "intl", "usa", "us", "north", "america",
+    "the", "and", "&",
+}
+
+# Intervention "names" that are clearly not a candidate drug to check.
+_INTERVENTION_NOISE = re.compile(
+    r"^(placebo|matching placebo|sham|standard of care|soc|"
+    r"physician'?s? choice|best supportive care|bsc|usual care|no treatment|"
+    r"saline|vehicle)\b",
+    re.IGNORECASE,
+)
 
 # Readout window
 READOUT_LOOKAHEAD_DAYS = 90   # primary completion within 90d
@@ -198,7 +242,8 @@ def _fetch_phase3_readout_trials(budget_s: float,
             "fields": (
                 "NCTId,BriefTitle,OfficialTitle,OverallStatus,Phase,EnrollmentCount,"
                 "StartDate,CompletionDate,PrimaryCompletionDate,"
-                "LeadSponsorName,LeadSponsorClass,Condition,InterventionName,"
+                "LeadSponsorName,LeadSponsorClass,Condition,"
+                "InterventionName,InterventionType,"
                 "PrimaryOutcomeMeasure,StudyType,DesignAllocation,DesignPrimaryPurpose"
             ),
         }
@@ -227,6 +272,192 @@ def _fetch_phase3_readout_trials(budget_s: float,
 
 
 # ---------------------------------------------------------------------------
+# Intervention extraction + sponsor normalisation
+# ---------------------------------------------------------------------------
+
+# Drug-bearing intervention types in CT.gov v2 (DEVICE / PROCEDURE / BEHAVIORAL
+# / OTHER are not Orange Book candidates and are skipped).
+_DRUG_INTERVENTION_TYPES = {"DRUG", "BIOLOGICAL", "COMBINATION_PRODUCT", "GENETIC"}
+
+
+def _extract_drug_interventions(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Pick out the drug-like interventions from CT.gov's armsInterventionsModule.
+    Filters out placebo/SOC/sham control arms which would never appear as the
+    sponsor's own approved drug."""
+    out: List[Dict[str, str]] = []
+    for iv in raw or []:
+        name = (iv.get("name") or "").strip()
+        itype = (iv.get("type") or "").strip().upper()
+        if not name:
+            continue
+        if itype and itype not in _DRUG_INTERVENTION_TYPES:
+            continue
+        if _INTERVENTION_NOISE.match(name):
+            continue
+        out.append({"name": name, "type": itype})
+    return out
+
+
+def _normalize_sponsor(name: str) -> str:
+    """Lowercase, strip punctuation, drop generic corporate-suffix tokens.
+    Used only for substring matching between CT.gov leadSponsor.name and
+    openFDA's sponsor_name field."""
+    if not name:
+        return ""
+    cleaned = re.sub(r"[^a-z0-9 ]+", " ", name.lower())
+    tokens = [t for t in cleaned.split() if t and t not in _SPONSOR_NOISE_TOKENS]
+    return " ".join(tokens).strip()
+
+
+def _sponsor_matches(ct_sponsor: str, fda_sponsor: str) -> bool:
+    """True if the two sponsor names plausibly refer to the same entity (or
+    parent/subsidiary). Conservative: requires substring containment after
+    noise-token stripping. Empty inputs never match."""
+    a, b = _normalize_sponsor(ct_sponsor), _normalize_sponsor(fda_sponsor)
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
+# ---------------------------------------------------------------------------
+# openFDA Orange Book approval check (cached)
+# ---------------------------------------------------------------------------
+
+def _approval_cache_key(drug_name: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", drug_name.lower().strip())[:64]
+    return f"orange_book/{safe}.json"
+
+
+def _read_approval_cache(client: Optional[SupabaseClient],
+                         drug_name: str) -> Optional[List[Dict[str, Any]]]:
+    if client is None:
+        return None
+    try:
+        raw = client.read_cache("fda", _approval_cache_key(drug_name), timeout=3.0)
+    except SupabaseError:
+        return None
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if time.time() - float(payload.get("cached_at", 0)) > APPROVED_CACHE_TTL_S:
+        return None
+    return payload.get("results") or []
+
+
+def _write_approval_cache(client: Optional[SupabaseClient], drug_name: str,
+                          results: List[Dict[str, Any]]) -> None:
+    if client is None:
+        return
+    try:
+        client.write_cache(
+            "fda", _approval_cache_key(drug_name),
+            json.dumps({"cached_at": time.time(), "results": results}).encode("utf-8"),
+            content_type="application/json",
+        )
+    except SupabaseError:
+        pass  # best-effort
+
+
+def _fetch_drug_approvals(drug_name: str,
+                          client: Optional[SupabaseClient]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """openFDA drugsfda lookup. Returns (results, error). Cached in
+    scanner-caches/fda/orange_book/<drug>.json."""
+    cached = _read_approval_cache(client, drug_name)
+    if cached is not None:
+        return cached, None
+    params = {
+        "search": (
+            f'(openfda.brand_name:"{drug_name}"'
+            f' OR openfda.generic_name:"{drug_name}"'
+            f' OR openfda.substance_name:"{drug_name}")'
+        ),
+        "limit": 5,
+    }
+    try:
+        resp = requests.get(
+            OPENFDA_DRUGSFDA_URL, params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=APPROVED_CHECK_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        return [], f"openFDA request failed: {type(e).__name__}: {e}"
+    if resp.status_code == 404:
+        # openFDA returns 404 for "no results matched your query" — treat as miss, cache it.
+        _write_approval_cache(client, drug_name, [])
+        return [], None
+    if resp.status_code >= 400:
+        return [], f"openFDA HTTP {resp.status_code}"
+    try:
+        data = resp.json()
+    except ValueError:
+        return [], "openFDA non-JSON response"
+    results: List[Dict[str, Any]] = []
+    for r in data.get("results", []):
+        results.append({
+            "application_number": r.get("application_number", ""),
+            "sponsor_name": r.get("sponsor_name", ""),
+            "submissions": [
+                {
+                    "type": s.get("submission_type", ""),
+                    "status": s.get("submission_status", ""),
+                    "status_date": s.get("submission_status_date", ""),
+                }
+                for s in (r.get("submissions") or [])
+            ],
+        })
+    _write_approval_cache(client, drug_name, results)
+    return results, None
+
+
+def _is_already_approved(intervention_name: str, ct_sponsor: str,
+                         client: Optional[SupabaseClient]
+                         ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Check Orange Book for `intervention_name` and return match-info if any
+    record is both (a) approved (status=AP) AND (b) sponsored by the same
+    company as `ct_sponsor`. Returns (match, error)."""
+    if not intervention_name or len(intervention_name) < 3:
+        return None, None
+    results, err = _fetch_drug_approvals(intervention_name, client)
+    if err is not None:
+        return None, err
+    for r in results:
+        fda_sponsor = r.get("sponsor_name", "") or ""
+        if not _sponsor_matches(ct_sponsor, fda_sponsor):
+            continue
+        for sub in r.get("submissions", []):
+            if (sub.get("status") or "").upper() == "AP":
+                return {
+                    "drug_name": intervention_name,
+                    "application_number": r.get("application_number", ""),
+                    "fda_sponsor_name": fda_sponsor,
+                    "approval_date": sub.get("status_date", ""),
+                    "submission_type": sub.get("type", ""),
+                }, None
+    return None, None
+
+
+def _check_trial_drug_approved(scored: Dict[str, Any],
+                               client: Optional[SupabaseClient]
+                               ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """For each drug intervention in the scored trial, look up the Orange Book.
+    Returns (first_match, warnings). A non-None match means the trial is a
+    label-extension or geographic-bridging study and should be dropped."""
+    warnings: List[str] = []
+    sponsor = scored.get("sponsor_name") or ""
+    for iv in scored.get("interventions") or []:
+        match, err = _is_already_approved(iv["name"], sponsor, client)
+        if err:
+            warnings.append(f"{iv['name']}: {err}")
+            continue
+        if match:
+            return match, warnings
+    return None, warnings
+
+
+# ---------------------------------------------------------------------------
 # Scoring + triage
 # ---------------------------------------------------------------------------
 
@@ -239,6 +470,7 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
     sponsor_mod = proto.get("sponsorCollaboratorsModule", {}).get("leadSponsor", {})
     conditions_mod = proto.get("conditionsModule", {})
     outcomes_mod = proto.get("outcomesModule", {})
+    arms_mod = proto.get("armsInterventionsModule", {}) or {}
 
     nct_id = ident.get("nctId", "")
     brief_title = ident.get("briefTitle", "")
@@ -248,6 +480,7 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
     sponsor_class = sponsor_mod.get("class", "")  # INDUSTRY, NIH, etc.
     conditions = conditions_mod.get("conditions", []) or []
     enrollment = (design.get("enrollmentInfo") or {}).get("count")
+    interventions = _extract_drug_interventions(arms_mod.get("interventions") or [])
 
     # Indication + base-rate from Supabase table
     base_key, matched_indications = _map_conditions_to_base_key(conditions)
@@ -294,6 +527,7 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
         "days_until_readout": days_until,
         "enrollment": enrollment,
         "conditions": conditions,
+        "interventions": interventions,
         "primary_outcomes": primary_outcomes[:3],
         "base_rate_key": base_key,
         "base_rate_approval": approval_prob,
@@ -364,6 +598,7 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
         "enrollment": scored["enrollment"],
         "meaningful_enrollment": isinstance(scored["enrollment"], int) and scored["enrollment"] >= 200,
         "conditions": scored["conditions"],
+        "interventions": scored.get("interventions", []),
         "primary_outcomes": scored["primary_outcomes"],
         "single_primary_endpoint": len(scored["primary_outcomes"]) == 1,
         "industry_sponsored": scored["sponsor_class"] == "INDUSTRY",
@@ -433,6 +668,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     warnings.extend(fetch_warnings)
 
     below_gate = 0
+    skipped_already_approved = 0
     for t in trials:
         if time.time() - scan_start > budget:
             warnings.append(f"wall-clock budget ({budget}s) exceeded during scoring")
@@ -455,6 +691,24 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             below_gate += 1
             continue
 
+        # Already-approved-drug filter (DLQ batch 2026-04-27): if the trial's
+        # drug is already on the market for the same sponsor, this is a
+        # label-extension / geographic-bridging study, not a binary catalyst.
+        # Fail-open on Orange Book lookup errors — we'd rather emit a
+        # sometimes-noisy signal than silently drop legit ones.
+        approved_match, approved_warnings = _check_trial_drug_approved(scored, client)
+        for w in approved_warnings:
+            warnings.append(f"orange_book[{nct}] {w}")
+        if approved_match is not None:
+            skipped_already_approved += 1
+            warnings.append(
+                f"skipped {nct}: {approved_match['drug_name']} already approved "
+                f"(NDA/BLA {approved_match['application_number']}, "
+                f"sponsor='{approved_match['fda_sponsor_name']}', "
+                f"approval_date={approved_match['approval_date']})"
+            )
+            continue
+
         sig = _build_signal(scored, scan_date)
         if sig is None:
             continue
@@ -470,4 +724,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         signals=signals,
         warnings=warnings,
         fetched_records=len(trials),
+        run_metrics={
+            "below_gate": below_gate,
+            "skipped_already_approved": skipped_already_approved,
+        },
     )
