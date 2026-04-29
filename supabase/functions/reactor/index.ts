@@ -250,8 +250,9 @@ async function processSignal(sig: SignalRow) {
   // merge in any new caps that fired on the bonus-adjusted band. Order-insensitive per spec §10.4.
   const mergedCaps = Array.from(new Set([...(winnerRow.auto_caps_triggered ?? []), ...capped.auto_caps_triggered]));
 
-  // --- Step 7: UPDATE the winner.
-  await stampRow(winnerRow.signal_id, convergence_key, verdict.bonus, scoreWithBonus, finalBand, mergedCaps);
+  // --- Step 7: UPDATE the winner. Carry through demotion_reason from the post-bonus
+  // cap-apply (curator-readable surface; auto_caps_triggered remains the rule_id contract).
+  await stampRow(winnerRow.signal_id, convergence_key, verdict.bonus, scoreWithBonus, finalBand, mergedCaps, capped.demotion_reason ?? null);
 
   // --- Cross-update: any prior row in the group that has non-null convergence_bonus and is
   // NOT the new winner gets its convergence fields cleared. This matches v1's
@@ -361,14 +362,24 @@ async function resolveConvergenceKey(sig: SignalRow): Promise<string> {
 
   if (sig.entity_id) {
     // Walk entity_identifiers in priority order (lower = higher priority).
+    // Skip `name_normalized` here — see the disambiguation fallback below.
+    // Future: when scanner-caches/litigation/party_resolution_cache.json grows
+    // beyond its litigation seed, an additional name → canonical (cik/figi)
+    // resolution step can sit between this query and the entity:<uuid> fallback.
     const { data, error } = await sb
       .from("entity_identifiers")
       .select("id_type,id_value")
       .eq("entity_id", sig.entity_id)
+      .neq("id_type", "name_normalized")
       .order("priority", { ascending: true })
       .limit(1);
     if (error) throw error;
     if (data && data.length > 0) return `${data[0].id_type}:${data[0].id_value}`;
+    // Entity is identified but only via fuzzy name. Use the entity uuid as the
+    // convergence key — guarantees no false merge across two distinct entities
+    // that happen to share a normalized name (the "AMERICAN" / "NATIONAL"
+    // common-name collision risk).
+    return `entity:${sig.entity_id}`;
   }
 
   return `unidentified:${sig.signal_id}`;
@@ -441,7 +452,7 @@ async function fetchSignalFull(signal_id: string): Promise<FullSignal | null> {
 async function rubricApplyCaps(
   row: FullSignal,
   band: Band,
-): Promise<{ band: Band; auto_caps_triggered: string[] }> {
+): Promise<{ band: Band; auto_caps_triggered: string[]; demotion_reason: string | null }> {
   const body = {
     signal: { raw_data: row.raw_payload ?? {} },
     dimensions: row.dimensions ?? {},
@@ -454,8 +465,8 @@ async function rubricApplyCaps(
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`rubric_apply_caps ${r.status}: ${await r.text()}`);
-  const j = (await r.json()) as { band: Band; auto_caps_triggered: string[] };
-  return j;
+  const j = (await r.json()) as { band: Band; auto_caps_triggered: string[]; demotion_reason?: string | null };
+  return { band: j.band, auto_caps_triggered: j.auto_caps_triggered, demotion_reason: j.demotion_reason ?? null };
 }
 
 async function stampRow(
@@ -465,6 +476,7 @@ async function stampRow(
   score_with_bonus: number,
   band_with_bonus: Band,
   auto_caps_triggered?: string[],
+  demotion_reason?: string | null,
 ) {
   const patch: Record<string, unknown> = {
     convergence_key,
@@ -474,6 +486,9 @@ async function stampRow(
     convergence_evaluated_at: new Date().toISOString(),
   };
   if (auto_caps_triggered) patch.auto_caps_triggered = auto_caps_triggered;
+  // Always set demotion_reason when caller passes it (including explicit null,
+  // which clears stale narratives if a cap stops firing on re-evaluation).
+  if (demotion_reason !== undefined) patch.demotion_reason = demotion_reason;
   const { error } = await sb.from("signals").update(patch).eq("signal_id", signal_id);
   if (error) throw error;
 }
