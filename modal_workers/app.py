@@ -5,7 +5,7 @@ Surface (Phase 3 — full scanner fleet):
   - `rubric_apply_caps`  — web endpoint RPC'd by the reactor edge function on every
     signals.INSERT to apply auto-caps without porting rubric logic to TypeScript.
   - `health`             — trivial GET for dashboard + smoke tests.
-  - 17 scanner functions — each as `<name>_once` (on-demand callable).
+  - 19 scanner functions — each as `<name>_once` (on-demand callable).
   - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`, `dispatch_weekly`.
     `dispatch_release_times` fires at 06/08/13/17/21 UTC and reads
     `scanners.scheduled_hour_utc` from the registry to decide which daily
@@ -85,13 +85,17 @@ compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUT
 @app.function(image=image, timeout=10)
 @modal.fastapi_endpoint(method="POST", label="rubric-apply-caps")
 def rubric_apply_caps(payload: dict) -> dict:
-    from modal_workers.shared.rubric_engine import apply_auto_caps
+    from modal_workers.shared.rubric_engine import apply_auto_caps, compute_demotion_reason
     signal = payload.get("signal") or {}
     dimensions = payload.get("dimensions") or {}
     profile = payload["profile"]
     band = payload["band"]
     new_band, caps = apply_auto_caps(signal, dimensions, profile, band)
-    return {"band": new_band, "auto_caps_triggered": caps}
+    return {
+        "band": new_band,
+        "auto_caps_triggered": caps,
+        "demotion_reason": compute_demotion_reason(caps),
+    }
 
 
 # ----------------------------------------------------------------------

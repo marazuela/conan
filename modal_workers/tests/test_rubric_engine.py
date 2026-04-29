@@ -460,7 +460,7 @@ def test_score_signal_produces_expected_shape():
               "raw_data": {"dimensions": {"spread_size": 4, "deal_certainty": 4,
                                           "annualized_return": 4, "break_risk": 4, "liquidity": 4}}}
     out = score_signal(signal)
-    assert set(out.keys()) == {"scoring_profile", "dimensions", "score", "band", "auto_caps_triggered"}
+    assert set(out.keys()) == {"scoring_profile", "dimensions", "score", "band", "auto_caps_triggered", "demotion_reason"}
     # 4 * (3 + 2.5 + 2 + 1.5 + 1) = 4 * 10 = 40
     assert out["score"] == 40.0
     assert out["band"] == "immediate"
@@ -551,6 +551,53 @@ def test_score_signal_takeover_candidate_discard_via_post_edge():
     assert out["score"] == 50.0
     assert out["band"] == "discard"
     assert out["auto_caps_triggered"] == ["takeover_candidate.post_edge_disqualified"]
+
+
+def test_compute_demotion_reason_maps_known_caps_to_narrative():
+    from modal_workers.shared.rubric_engine import compute_demotion_reason
+    # No caps -> None
+    assert compute_demotion_reason([]) is None
+    # Bare rule_id -> narrative + parenthesised cap
+    assert compute_demotion_reason(["litigation.party_confidence_cap"]) == \
+        "Party-resolution confidence too low (caption parse weak) (litigation.party_confidence_cap)"
+    # Parameterised cap -> stem-based lookup, full cap preserved in parens
+    out = compute_demotion_reason(["binary_catalyst.ev_floor (ev=2.34)"])
+    assert out is not None and "Expected value below 5% floor" in out and "(ev=2.34)" in out
+    # First cap wins when multiple fire
+    assert compute_demotion_reason([
+        "litigation.party_confidence_cap",
+        "litigation.universe_miss_cap",
+    ]).startswith("Party-resolution confidence too low")
+    # Unknown cap -> verbatim fallback
+    assert compute_demotion_reason(["unknown.future_cap"]) == "unknown.future_cap"
+
+
+def test_score_signal_demotion_reason_set_iff_caps_fire():
+    """demotion_reason must be NULL when no cap fires and a narrative when one does."""
+    # No caps: clean merger_arb at score=40 immediate.
+    clean = score_signal({
+        "scoring_profile": "merger_arb",
+        "raw_data": {"dimensions": {
+            "spread_size": 4, "deal_certainty": 4, "annualized_return": 4,
+            "break_risk": 4, "liquidity": 4,
+        }},
+    })
+    assert clean["band"] == "immediate"
+    assert clean["auto_caps_triggered"] == []
+    assert clean["demotion_reason"] is None
+    # Caps fire: takeover post-edge disqualifier.
+    capped = score_signal({
+        "scoring_profile": "takeover_candidate",
+        "raw_data": {
+            "definitive_merger_agreement": True,
+            "patterns_hit": 5,
+            "dimensions": {"setup_strength": 5, "edge_freshness": 5, "valuation_cushion": 5,
+                           "strategic_buyer_clarity": 5, "liquidity": 5},
+        },
+    })
+    assert capped["band"] == "discard"
+    assert capped["demotion_reason"] is not None
+    assert "post-edge" in capped["demotion_reason"].lower()
 
 
 # ----------------------------------------------------------------------

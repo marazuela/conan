@@ -24,7 +24,7 @@ Any change to WEIGHTS or auto-caps MUST:
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 
 # --------------------------------------------------------------------
@@ -268,6 +268,58 @@ def _coerce_patterns_hit(v: Any) -> int:
     return 0
 
 
+# --------------------------------------------------------------------
+# Cap → narrative mapping for signals.demotion_reason
+#
+# The rule_id strings in auto_caps_triggered are the machine contract
+# (replay tests, dashboards). compute_demotion_reason() turns them into a
+# short curator-readable phrase persisted to signals.demotion_reason. New
+# caps must register here AND in apply_auto_caps below; an unmapped cap
+# falls back to the rule_id verbatim, which still surfaces *something*
+# but loses the human gloss.
+# --------------------------------------------------------------------
+
+_CAP_NARRATIVES: Dict[str, str] = {
+    "merger_arb.rule_A_sub_scale_return":
+        "Annualized return below risk-free + 3% threshold",
+    "merger_arb.rule_B_break_risk_dominance":
+        "Break-risk dominant with low deal certainty",
+    "binary_catalyst.ev_floor":
+        "Expected value below 5% floor",
+    "litigation.party_confidence_cap":
+        "Party-resolution confidence too low (caption parse weak)",
+    "litigation.universe_miss_cap":
+        "Defendant outside public-issuer universe (NOS not high-priority)",
+    "takeover_candidate.post_edge_disqualified":
+        "Definitive merger agreement filed — signal is post-edge",
+    "takeover_candidate.prior_rejection_cap":
+        "Issuer rejected prior offer within last 6 months",
+    "takeover_candidate.going_concern_cap":
+        "Going-concern warning present (distress overshadows takeover thesis)",
+    "takeover_candidate.below_triage_gate":
+        "Below triage gate (insufficient pattern hits)",
+}
+
+
+def compute_demotion_reason(caps: List[str]) -> Optional[str]:
+    """Return a short narrative for the first triggered cap, else None.
+
+    `caps` is the auto_caps_triggered list from apply_auto_caps. Each entry
+    starts with a stable rule_id and may include a parameterised suffix
+    (e.g. `binary_catalyst.ev_floor (ev=2.34)`). We split on first space
+    to recover the rule_id stem, look it up in `_CAP_NARRATIVES`, and
+    append the full cap entry in parens so the parameter survives.
+    """
+    if not caps:
+        return None
+    primary = caps[0]
+    stem = primary.split(" ", 1)[0]
+    narrative = _CAP_NARRATIVES.get(stem)
+    if narrative is None:
+        return primary
+    return f"{narrative} ({primary})"
+
+
 def apply_auto_caps(
     signal: Dict[str, Any],
     dims: Dict[str, int],
@@ -408,6 +460,7 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
             "score": None,
             "band": None,
             "auto_caps_triggered": [],
+            "demotion_reason": None,
             "missing_dimensions": missing,
         }
 
@@ -428,6 +481,7 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
         "score": score,
         "band": band,
         "auto_caps_triggered": caps,
+        "demotion_reason": compute_demotion_reason(caps),
     }
 
 
@@ -494,6 +548,7 @@ def rescore_with_dims(
         "score": result["score"],
         "band": result["band"],
         "auto_caps_triggered": result["auto_caps_triggered"],
+        "demotion_reason": result.get("demotion_reason"),
     }
 
 

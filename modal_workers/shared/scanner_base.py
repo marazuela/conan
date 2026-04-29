@@ -279,6 +279,7 @@ def _signal_to_row(
         "score": scored["score"],
         "band": scored["band"],
         "auto_caps_triggered": scored["auto_caps_triggered"],
+        "demotion_reason": scored.get("demotion_reason"),
         "raw_payload": sig.raw_payload,
         "extensions": extensions,
     }
