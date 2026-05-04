@@ -23,6 +23,13 @@ venv/
 # Override location with OPENFIGI_CACHE_DIR env var (Modal sets this).
 modal_workers/working/
 
+# Cowork scheduled-task run logs (thesis_writer, signal_resolver, etc.).
+# Tracked .md files in tasks/ are intentional; *.json runs are runtime output.
+tasks/*.json
+
+# Legacy unified_system reconcile / debug reports.
+unified_system/unified_system/working/
+
 # Node (should not appear at this level, but guard)
 node_modules/
 
