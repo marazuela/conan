@@ -58,6 +58,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from modal_workers.shared.biotech_base_rates import (
+    DEFAULT_APPROVAL_PROB,
+    load_base_rates,
+    map_conditions_to_base_key,
+)
 from modal_workers.shared.scanner_base import MissingAuthError, Signal, ScannerResult
 from modal_workers.shared.supabase_client import (
     EntityHints,
@@ -118,6 +123,16 @@ DATE_CHANGE_SIGNAL_WINDOW_DAYS = 14
 # v1 populates when a CRL lands.
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
+
+# Approval-probability modifiers applied to the indication base rate. Sourced from
+# config/phase3_approval_base_rates.json _trial_design_adjustments block (currently
+# unwired into the rubric's trial_design_adjustments JSONB column — see plan
+# "Out of scope" item).
+PRIORITY_REVIEW_LIFT = 0.05
+BREAKTHROUGH_LIFT = 0.04
+ACCELERATED_LIFT = 0.03
+RESUBMISSION_PENALTY = 0.10  # Class-2 resubmissions historically score worse
+PROB_MIN, PROB_MAX = 0.0, 0.95
 
 
 # ---------------------------------------------------------------------------
@@ -249,35 +264,8 @@ def _add_to_watchlist(entries: List[dict], ticker: str, drug_name: str,
 # EDGAR 8-K PDUFA auto-discovery
 # ---------------------------------------------------------------------------
 
-def _discover_pdufa_from_edgar(existing_watchlist: List[dict],
-                               user_agent: str,
-                               lookback_days: int = 90) -> List[dict]:
-    """Query EFTS for 8-K filings mentioning "PDUFA" + "action date" and extract dates.
-
-    Returns a list of {ticker, company_name, cik, pdufa_date, file_date, is_new} dicts.
-    New = ticker not already on the watchlist (any status).
-    """
-    today = datetime.now(timezone.utc)
-    start = (today - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    end = today.strftime("%Y-%m-%d")
-
-    try:
-        r = requests.get(EDGAR_EFTS_URL, params={
-            "q": '"PDUFA" "action date"',
-            "dateRange": "custom",
-            "startdt": start,
-            "enddt": end,
-            "forms": "8-K",
-            "from": 0,
-            "size": 50,
-        }, headers={"User-Agent": user_agent}, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        hits = r.json().get("hits", {}).get("hits", [])
-    except Exception as e:
-        logger.warning(f"EDGAR PDUFA discovery failed: {e}")
-        return []
-
-    # Dedup by ticker (keep first / most recent filing)
+def _hits_to_company_index(hits: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    """Index EFTS hits by ticker (first display-name parenthetical group)."""
     companies: Dict[str, Dict[str, str]] = {}
     for h in hits:
         src = h.get("_source", {})
@@ -296,18 +284,47 @@ def _discover_pdufa_from_edgar(existing_watchlist: List[dict],
                 "file_date": src.get("file_date", ""),
                 "file_id": h.get("_id", ""),
             }
+    return companies
 
+
+def _discover_pdufa_from_edgar(existing_watchlist: List[dict],
+                               user_agent: str,
+                               lookback_days: int = 90) -> List[dict]:
+    """Query EFTS for 8-K filings mentioning "PDUFA" + "action date" and extract dates.
+
+    Returns a list of {ticker, company_name, cik, pdufa_date, file_date, is_new} dicts.
+    New = ticker not already on the watchlist (any status).
+    """
+    from modal_workers.shared.edgar_efts import efts_search
+
+    today = datetime.now(timezone.utc)
+    start = (today - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
+
+    try:
+        # 6-K covers foreign-listed biotech ADRs (AZN, NVS, RHHBY, BAYRY) which
+        # don't file 8-Ks. 10-Q catches PDUFA mentions buried in "Subsequent
+        # Events" sections without a parallel 8-K.
+        hits = efts_search(
+            '"PDUFA" "action date"', start, end,
+            forms="8-K,6-K,10-Q", size=50, user_agent=user_agent,
+        )
+    except Exception as e:
+        logger.warning(f"EDGAR PDUFA discovery failed: {e}")
+        return []
+
+    companies = _hits_to_company_index(hits)
     existing_tickers = {e.get("ticker") for e in existing_watchlist}
     discovered: List[dict] = []
 
     for ticker, info in companies.items():
-        pdufa_date = _extract_pdufa_date_from_filing(
+        date_iso, drug_candidate = _parse_filing_for_pdufa(
             info["file_id"], info["cik"], info["adsh"], user_agent=user_agent,
         )
-        if not pdufa_date:
+        if not date_iso:
             continue
         try:
-            pd = datetime.strptime(pdufa_date, "%Y-%m-%d")
+            pd = datetime.strptime(date_iso, "%Y-%m-%d")
             if pd < today.replace(tzinfo=None):
                 continue
         except ValueError:
@@ -317,51 +334,242 @@ def _discover_pdufa_from_edgar(existing_watchlist: List[dict],
             "ticker": ticker,
             "company_name": info["name"],
             "cik": info["cik"],
-            "pdufa_date": pdufa_date,
+            "pdufa_date": date_iso,
+            "drug_name": drug_candidate,
             "file_date": info["file_date"],
             "source": "edgar_8k",
             "is_new": ticker not in existing_tickers,
         })
-        time.sleep(0.12)  # SEC rate limit headroom
 
     return discovered
 
 
+# INN suffix patterns — high-precision drug-class endings used by the WHO
+# International Nonproprietary Name nomenclature. Curated for low false-positive
+# rate against English: short generic stems (`ide`, `vir`, `stat`) are excluded
+# because they hit common words ("outside", "thermostat"); only their longer
+# class-specific variants are kept ("vastatin", "navir", "glutide", etc.).
+# Coverage is intentionally partial — any drug whose INN stem isn't here will
+# leave the entry at "(auto-discovered)" for the AI thesis writer to fill in.
+_INN_SUFFIXES = (
+    # Monoclonal antibodies
+    "mab", "zumab", "ximab", "umab", "lumab",
+    # Kinase / pathway inhibitors
+    "tinib", "afenib", "rafenib", "lisib", "ciclib", "sertib",
+    # Statins
+    "vastatin",
+    # Antivirals (specific class stems only)
+    "navir", "tegravir", "ciclovir", "fovir", "buvir", "asvir", "pravir", "cabir",
+    # GLP-1 / peptide therapeutics
+    "glutide", "lutide", "tide",
+    # Antifungals / antiparasitics
+    "conazole", "prazole",
+    # Cardiovascular
+    "sartan", "olol", "dipine",
+    # Diabetes
+    "formin", "gliflozin", "gliptin",
+    # CNS
+    "azepam", "azolam", "melteon", "stigmine",
+    # Cytokines / immunomodulators
+    "kira", "leukin", "cept",
+    # Oligonucleotides / RNA therapeutics
+    "rsen", "drisen", "siran", "mersen",
+    # Cortisol receptor antagonists
+    "corilant",
+    # Renin inhibitors
+    "kiren",
+)
+# INN names are conventionally lowercase but sentence-case is also common.
+# Match both. The leading non-word boundary anchors the start; the suffix
+# alternation must be the final stem.
+_DRUG_NAME_RE = re.compile(
+    r"\b([A-Za-z]{3,20}(?:" + "|".join(_INN_SUFFIXES) + r"))\b",
+)
+# Branded codeified names like "VK2735" or "AXS-05" — high-precision and very
+# common in biotech 8-K subjects.
+_DRUG_CODE_RE = re.compile(r"\b([A-Z]{2,5}-?\d{2,5})\b")
+
+# Tokens that match an INN suffix but are common English words — filter out.
+_DRUG_NAME_BLOCKLIST = {
+    "report", "import", "support", "account", "amount", "submit",
+    "permit", "consult", "result", "default", "agreement",
+}
+
+
+def _extract_drug_name(text: str) -> Optional[str]:
+    """Return the most likely drug name from an 8-K body, or None.
+
+    Two-pass strategy: INN-suffix match (`relacorilant`, `tovorafenib`) wins; if
+    none, fall back to a code form (`VK2735`, `AXS-05`). Confined to the first
+    20 KB of text since drug names appear in the lede, not exhibits.
+    """
+    head = text[:20_000]
+    for m in _DRUG_NAME_RE.finditer(head):
+        candidate = m.group(1)
+        if candidate.lower() in _DRUG_NAME_BLOCKLIST:
+            continue
+        return candidate
+    m = _DRUG_CODE_RE.search(head)
+    return m.group(1) if m else None
+
+
+def _parse_filing_for_pdufa(file_id: str, cik: str, adsh: str,
+                            *, user_agent: str) -> tuple[Optional[str], Optional[str]]:
+    """Fetch an 8-K/6-K/10-Q body and extract (PDUFA date, drug name candidate).
+
+    Either or both fields may be None. The text is fetched once for both
+    extractions to avoid duplicate body downloads.
+    """
+    from modal_workers.shared.edgar_efts import fetch_filing_text
+    text = fetch_filing_text(file_id, cik, adsh, user_agent=user_agent)
+    if text is None:
+        return None, None
+    # \b anchors prevent matches like "non-PDUFA" / "future action date" (audit F-114).
+    date_patterns = [
+        r"\bPDUFA\b[^.]{0,200}?(?:\baction date\b|\btarget date\b|\bdate\b)[^.]{0,100}?(?:of|for|is|set for|assigned|to)\s*(\w+ \d{1,2},?\s*\d{4})",
+        r"(?:\baction date\b|\btarget date\b)[^.]{0,100}?(\w+ \d{1,2},?\s*\d{4})",
+    ]
+    date_iso: Optional[str] = None
+    for pat in date_patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            raw = m.group(1).strip()
+            for fmt in ("%B %d, %Y", "%B %d %Y"):
+                try:
+                    date_iso = datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    continue
+            if date_iso:
+                break
+    drug = _extract_drug_name(text)
+    return date_iso, drug
+
+
 def _extract_pdufa_date_from_filing(file_id: str, cik: str, adsh: str,
                                     *, user_agent: str) -> Optional[str]:
-    """Fetch an 8-K body and regex-extract the PDUFA target action date."""
-    parts = file_id.split(":")
-    if len(parts) != 2:
-        return None
-    filename = parts[1]
-    cik_clean = cik.lstrip("0") or "0"
-    adsh_nodash = adsh.replace("-", "")
-    url = f"https://www.sec.gov/Archives/edgar/data/{cik_clean}/{adsh_nodash}/{filename}"
+    """Backwards-compat shim — returns just the date. Prefer
+    `_parse_filing_for_pdufa` which also returns a drug name candidate."""
+    date_iso, _drug = _parse_filing_for_pdufa(file_id, cik, adsh, user_agent=user_agent)
+    return date_iso
+
+
+# ---------------------------------------------------------------------------
+# EDGAR 8-K CRL discovery (Phase 2b)
+# ---------------------------------------------------------------------------
+
+CRL_LOOKBACK_DAYS = 30
+CRL_PDUFA_MATCH_WINDOW_DAYS_BEFORE = 30
+CRL_PDUFA_MATCH_WINDOW_DAYS_AFTER = 7
+PRESUMED_CRL_MIN_DAYS_PAST = 3
+PRESUMED_CRL_AP_LOOKBACK_DAYS = 30
+
+
+def _discover_crls_from_edgar(watchlist: List[dict],
+                              user_agent: str,
+                              lookback_days: int = CRL_LOOKBACK_DAYS) -> List[str]:
+    """Find recent 8-K / 6-K filings mentioning "complete response letter" and
+    flip matching active watchlist entries to status='crl'.
+
+    Returns the list of tickers newly marked as CRL. Mutates watchlist in place.
+    Match criteria: ticker on the watchlist with status=='active' and
+    pdufa_date within [today − 30d, today + 7d].
+    """
+    from modal_workers.shared.edgar_efts import efts_search
+
+    today = datetime.now(timezone.utc)
+    start = (today - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
 
     try:
-        r = requests.get(url, headers={"User-Agent": user_agent}, timeout=REQUEST_TIMEOUT)
-        if r.status_code != 200:
-            return None
-        text = re.sub(r"<[^>]+>", " ", r.text)
-        text = re.sub(r"&[^;]+;", " ", text)
-        text = re.sub(r"\s+", " ", text)
+        hits = efts_search(
+            '"complete response letter"', start, end,
+            forms="8-K,6-K", size=50, user_agent=user_agent,
+        )
+    except Exception as e:
+        logger.warning(f"EDGAR CRL discovery failed: {e}")
+        return []
 
-        patterns = [
-            r"PDUFA[^.]{0,200}?(?:action date|target date|date)[^.]{0,100}?(?:of|for|is|set for|assigned|to)\s*(\w+ \d{1,2},?\s*\d{4})",
-            r"(?:action date|target date)[^.]{0,100}?(\w+ \d{1,2},?\s*\d{4})",
-        ]
-        for pat in patterns:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                date_str = m.group(1).strip()
-                for fmt in ("%B %d, %Y", "%B %d %Y"):
-                    try:
-                        return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-                    except ValueError:
-                        continue
-        return None
-    except Exception:
-        return None
+    companies = _hits_to_company_index(hits)
+    today_d = today.date()
+    newly_marked: List[str] = []
+
+    for ticker, info in companies.items():
+        for entry in watchlist:
+            if entry.get("ticker") != ticker:
+                continue
+            if entry.get("status") != "active":
+                continue
+            try:
+                pdufa_dt = datetime.strptime(entry.get("pdufa_date", ""), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            window_start = today_d - timedelta(days=CRL_PDUFA_MATCH_WINDOW_DAYS_BEFORE)
+            window_end = today_d + timedelta(days=CRL_PDUFA_MATCH_WINDOW_DAYS_AFTER)
+            if not (window_start <= pdufa_dt <= window_end):
+                continue
+            file_date = info.get("file_date", "") or today_d.isoformat()
+            entry["status"] = "crl"
+            entry["crl_date"] = file_date
+            entry["notes"] = (entry.get("notes", "") +
+                f" | AUTO-DETECTED: CRL per 8-K filed {file_date}.")
+            newly_marked.append(ticker)
+            break  # one entry per ticker — break out of watchlist loop
+
+    return newly_marked
+
+
+def _apply_presumed_crl(watchlist: List[dict], client: SupabaseClient,
+                        user_agent: str) -> List[str]:
+    """Promote stale active entries to status='presumed_crl'.
+
+    Trigger: pdufa_date is at least 3 days past, status=='active', and openFDA
+    shows no AP submission in the trailing 30d window. Used as a fallback after
+    `_discover_crls_from_edgar` so post-PDUFA passes don't keep emitting
+    'pdufa_imminent' indefinitely.
+    """
+    today = datetime.now(timezone.utc).date()
+    promoted: List[str] = []
+    for entry in watchlist:
+        if entry.get("status") != "active":
+            continue
+        try:
+            pdufa_dt = datetime.strptime(entry.get("pdufa_date", ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        days_past = (today - pdufa_dt).days
+        if days_past < PRESUMED_CRL_MIN_DAYS_PAST:
+            continue
+
+        drug_name = entry.get("drug_name", "")
+        if not drug_name or drug_name == "(auto-discovered)":
+            # Without a drug name we can't reliably check openFDA. Promote
+            # anyway since the PDUFA passed without resolution.
+            entry["status"] = "presumed_crl"
+            entry["notes"] = (entry.get("notes", "") +
+                " | AUTO-DETECTED: PDUFA passed without openFDA AP signal "
+                "(presumed_crl; drug name unknown).")
+            promoted.append(entry.get("ticker", ""))
+            continue
+
+        result = _check_fda_approval_status(drug_name, user_agent, client)
+        ap_within_window = False
+        if result and result.get("approved"):
+            try:
+                approval_dt = datetime.strptime(result.get("approval_date", ""), "%Y%m%d").date()
+                if (today - approval_dt).days <= PRESUMED_CRL_AP_LOOKBACK_DAYS:
+                    ap_within_window = True
+            except (ValueError, TypeError):
+                pass
+
+        if ap_within_window:
+            continue
+        entry["status"] = "presumed_crl"
+        entry["notes"] = (entry.get("notes", "") +
+            f" | AUTO-DETECTED: PDUFA {entry.get('pdufa_date')} passed "
+            f"({days_past}d ago) with no openFDA AP — presumed_crl.")
+        promoted.append(entry.get("ticker", ""))
+    return promoted
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +774,50 @@ def _first_approval(results: List[dict], clean_name: str) -> Optional[dict]:
     return None
 
 
+def _extract_designations(history: Any) -> Dict[str, bool]:
+    """Surface FDA designation flags from openFDA submission rows.
+
+    Looks at the latest non-AP submission (the in-flight NDA/sNDA the PDUFA refers to),
+    then falls back to any submission. Returns booleans for priority_review,
+    breakthrough_designation, accelerated_approval, orphan_drug.
+    """
+    flags = {
+        "priority_review": False,
+        "breakthrough_designation": False,
+        "accelerated_approval": False,
+        "orphan_drug": False,
+    }
+    if not isinstance(history, list):
+        return flags
+
+    candidate_subs: List[dict] = []
+    fallback_subs: List[dict] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        for sub in item.get("submissions") or []:
+            if not isinstance(sub, dict):
+                continue
+            status = sub.get("status") or sub.get("submission_status") or ""
+            (fallback_subs if status == "AP" else candidate_subs).append(sub)
+        product_type = (item.get("product_type") or "").lower()
+        if "orphan" in product_type:
+            flags["orphan_drug"] = True
+
+    for sub in candidate_subs or fallback_subs:
+        rp = (sub.get("review_priority") or "").upper()
+        if rp == "PRIORITY":
+            flags["priority_review"] = True
+        sub_type = (sub.get("type") or sub.get("submission_type") or "").upper()
+        if "AA" in sub_type or "ACCELERATED" in sub_type:
+            flags["accelerated_approval"] = True
+        if (sub.get("breakthrough_designation") is True
+                or "BREAKTHROUGH" in (sub.get("submission_class_code_description") or "").upper()):
+            flags["breakthrough_designation"] = True
+
+    return flags
+
+
 # ---------------------------------------------------------------------------
 # Enrichment + approval cross-check
 # ---------------------------------------------------------------------------
@@ -606,6 +858,7 @@ def _enrich_watchlist(entries: List[dict], client: SupabaseClient,
             approvals = _search_drug_approvals(drug_name, client)
             if approvals:
                 enrichment["fda_history"] = approvals
+                enrichment["designations"] = _extract_designations(approvals)
             call_count += 1
 
         entry["enrichment"] = enrichment
@@ -658,14 +911,19 @@ def _run_approval_crosscheck(watchlist: List[dict], user_agent: str,
 
 def _days_until(date_str: str) -> Optional[int]:
     try:
-        target = datetime.strptime(date_str, "%Y-%m-%d")
-        return (target - datetime.now()).days
+        target = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return (target - datetime.now(timezone.utc)).days
     except (ValueError, TypeError):
         return None
 
 
 def _assess_strength(entry: dict) -> int:
-    """Score 2-5 based on data quality. v1 parity."""
+    """Score 2-5 based on data quality.
+
+    is_resubmission is no longer a +1 bump — historically Class-2 resubmissions
+    underperform de novo NDAs, and the penalty now lives on approval_probability
+    (RESUBMISSION_PENALTY). priority_review is +1 here as a quality marker.
+    """
     strength = 2
     enrichment = entry.get("enrichment", {}) or {}
     trials_list = enrichment.get("trials") or []
@@ -674,7 +932,8 @@ def _assess_strength(entry: dict) -> int:
         strength += 1
         if trial.get("status") in ("COMPLETED", "ACTIVE_NOT_RECRUITING"):
             strength += 1
-    if entry.get("is_resubmission"):
+    designations = (enrichment.get("designations") or {})
+    if designations.get("priority_review"):
         strength += 1
     adcom_vote = entry.get("adcom_vote")
     if adcom_vote and isinstance(adcom_vote, str):
@@ -728,7 +987,7 @@ def _classify_subtype(entry: dict, days: int) -> str:
     (clinical_readout is emitted when the enrichment trial has PrimaryCompletion within window.)
     """
     status = entry.get("status", "")
-    if status in ("approved",) or entry.get("crl_date"):
+    if status in ("approved", "crl", "presumed_crl") or entry.get("crl_date"):
         return SIGNAL_TYPE_DECISION
     date_change_kind = _recent_pdufa_date_change_kind(entry)
     if date_change_kind == "advanced":
@@ -745,8 +1004,8 @@ def _classify_subtype(entry: dict, days: int) -> str:
     if trial:
         pc = trial.get("completion_date") or ""
         try:
-            pc_dt = datetime.strptime(pc[:10], "%Y-%m-%d")
-            pc_days = (pc_dt - datetime.now()).days
+            pc_dt = datetime.strptime(pc[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            pc_days = (pc_dt - datetime.now(timezone.utc)).days
             # Readout imminent if completion within 30d and the trial isn't completed yet.
             if 0 <= pc_days <= 30 and trial.get("status") != "COMPLETED":
                 return SIGNAL_TYPE_READOUT
@@ -764,7 +1023,7 @@ def _thesis_direction(entry: dict) -> str:
     if entry.get("crl_date"):
         return DIRECTION_SHORT
     status = entry.get("status", "")
-    if status in ("rejected", "crl", "resolved_crl"):
+    if status in ("rejected", "crl", "resolved_crl", "presumed_crl"):
         return DIRECTION_SHORT
     if _recent_pdufa_date_change_kind(entry) == "delayed":
         return DIRECTION_SHORT
@@ -776,6 +1035,51 @@ def _thesis_direction(entry: dict) -> str:
 
 def _signal_hash(ticker: str, drug: str, pdufa_date: str, subtype: str) -> str:
     return f"sha256:{hashlib.sha256(f'{ticker}|{drug}|{pdufa_date}|{subtype}'.encode()).hexdigest()}"
+
+
+def _collect_conditions(entry: dict, trial: Any) -> List[str]:
+    out: List[str] = []
+    if isinstance(trial, dict):
+        for c in trial.get("conditions") or []:
+            if isinstance(c, str) and c:
+                out.append(c)
+    indication = entry.get("indication") or ""
+    if indication:
+        out.append(indication)
+    return out
+
+
+def _apply_designation_modifiers(base_prob: float, designations: Dict[str, bool],
+                                 is_resubmission: bool) -> float:
+    prob = base_prob
+    if designations.get("priority_review"):
+        prob += PRIORITY_REVIEW_LIFT
+    if designations.get("breakthrough_designation"):
+        prob += BREAKTHROUGH_LIFT
+    if designations.get("accelerated_approval"):
+        prob += ACCELERATED_LIFT
+    if is_resubmission:
+        prob -= RESUBMISSION_PENALTY
+    return max(PROB_MIN, min(PROB_MAX, prob))
+
+
+def _magnitude_defaults_for(market_cap_usd: Optional[float]) -> tuple[float, float]:
+    """Return (upside_pct, downside_pct) defaults for a binary catalyst, scaled by mcap.
+
+    Calibrated against observed biotech PDUFA reactions. The legacy 50/35 default
+    over-rates magnitude on megacaps where a single drug rarely moves the stock
+    more than a few percent. None or unknown mcap → legacy default.
+    """
+    if market_cap_usd is None:
+        return 50.0, 35.0
+    mc_mm = market_cap_usd / 1_000_000.0
+    if mc_mm < 1_000:        # < $1B small-cap single-asset
+        return 60.0, 40.0
+    if mc_mm < 10_000:       # $1-10B mid-cap
+        return 30.0, 20.0
+    if mc_mm < 50_000:       # $10-50B large-cap
+        return 12.0, 8.0
+    return 4.0, 3.0          # > $50B megacap
 
 
 def _build_signal(entry: dict, days: int, scan_date: datetime,
@@ -802,6 +1106,15 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
     enrichment = entry.get("enrichment", {}) or {}
     trial = enrichment.get("trial") or ((enrichment.get("trials") or [None])[0])
     fda_history = (enrichment.get("fda_history") or [])[:3]
+    designations = enrichment.get("designations") or {}
+
+    base_rates = load_base_rates(client)
+    conditions = _collect_conditions(entry, trial)
+    base_key, matched_indications = map_conditions_to_base_key(conditions)
+    base_prob = float(base_rates.get(base_key, base_rates.get("default", DEFAULT_APPROVAL_PROB)))
+    is_resubmission = bool(entry.get("is_resubmission", False))
+    approval_probability = _apply_designation_modifiers(base_prob, designations, is_resubmission)
+
     raw_payload: Dict[str, Any] = {
         "ticker": ticker,
         "company_name": entry.get("company_name", ""),
@@ -815,7 +1128,7 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
         "nda_type": entry.get("nda_type", ""),
         "application_number": entry.get("application_number", ""),
         "phase3_nctid": entry.get("phase3_nctid", ""),
-        "is_resubmission": entry.get("is_resubmission", False),
+        "is_resubmission": is_resubmission,
         "adcom_date": entry.get("adcom_date"),
         "adcom_vote": entry.get("adcom_vote"),
         "adcom_support_ratio": _adcom_support_ratio(entry.get("adcom_vote")),
@@ -823,11 +1136,24 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
         "status": entry.get("status"),
         "trial_status": trial.get("status") if isinstance(trial, dict) else None,
         "approval_history_count": _approval_history_count(fda_history),
+        # Approval-probability dim consumers (dim_estimator binary_catalyst).
+        "base_rate_key": base_key,
+        "matched_indications": matched_indications,
+        "approval_probability": approval_probability,
+        # Magnitude dim + biotech_enricher EV inputs (parity with pre_phase3_readout_scanner).
+        "upside_pct": 50.0,
+        "downside_pct": 35.0,
+        # Designation flags (also lift strength_estimate via _assess_strength).
+        "priority_review": bool(designations.get("priority_review")),
+        "breakthrough_designation": bool(designations.get("breakthrough_designation")),
+        "accelerated_approval": bool(designations.get("accelerated_approval")),
+        "orphan_drug": bool(designations.get("orphan_drug")),
         "notes": entry.get("notes", ""),
         "enrichment": {
             "trial": enrichment.get("trial"),
             "trials_top": (enrichment.get("trials") or [])[:2],
             "fda_history": fda_history,
+            "designations": designations,
         },
         "headline": f"{ticker} {drug} PDUFA {pdufa_date_str} (T-{days}d)",
     }
@@ -840,6 +1166,13 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
         except Exception as e:
             from modal_workers.observability import record_snapshot_fetch_failure
             record_snapshot_fetch_failure(client, scanner_name="fda_pdufa_pipeline", ticker=ticker, exc=e)
+
+    # Override magnitude defaults from snapshot mcap (after the snapshot.update so
+    # we read the freshly-set value). 50/35 over-rates magnitude on megacaps where
+    # a single PDUFA rarely moves the stock more than a few percent.
+    upside_pct, downside_pct = _magnitude_defaults_for(raw_payload.get("market_cap_usd"))
+    raw_payload["upside_pct"] = upside_pct
+    raw_payload["downside_pct"] = downside_pct
 
     nct = entry.get("phase3_nctid", "")
     source_url = (f"https://clinicaltrials.gov/study/{nct}" if nct
@@ -879,11 +1212,18 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
 # ---------------------------------------------------------------------------
 
 def scan(cfg: ScannerConfig) -> ScannerResult:
+    do_enrich = bool(cfg.config.get("enrich", True))
+    do_discover = bool(cfg.config.get("auto_discover", True))
+    do_crosscheck = bool(cfg.config.get("approval_crosscheck", True))
+
     user_agent = os.environ.get("SEC_USER_AGENT")
-    if not user_agent:
+    if not user_agent and do_discover:
         raise MissingAuthError(
             "SEC_USER_AGENT env var missing — required for EDGAR 8-K PDUFA auto-discovery. "
-            "Set via Modal secret `scanner-secrets`.")
+            "Set via Modal secret `scanner-secrets` or set cfg.config.auto_discover=false.")
+    # openFDA endpoints accept any reasonable User-Agent; fall back so the
+    # crosscheck can still run when discovery is gated off.
+    openfda_user_agent = user_agent or "InvestmentResearch research@example.com"
 
     client = SupabaseClient()
 
@@ -898,10 +1238,6 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     budget = max(10, cfg.timeout_soft_s - 5)  # leave 5s for final writes
     scan_start = time.time()
     budget_deadline = scan_start + budget
-
-    do_enrich = bool(cfg.config.get("enrich", True))
-    do_discover = bool(cfg.config.get("auto_discover", True))
-    do_crosscheck = bool(cfg.config.get("approval_crosscheck", True))
 
     warnings: List[str] = []
     fetched_records = 0
@@ -942,7 +1278,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                                 e["cik"] = d["cik"]
                                 break
                 watchlist_dirty = True
-            # Refresh dates on existing entries when 8-K is newer.
+            # Refresh dates + drug-name on existing entries when 8-K is newer.
             for d in discovered:
                 if d.get("is_new"):
                     continue
@@ -957,6 +1293,22 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                             f" | Date updated {old_date}->{d['pdufa_date']} "
                             f"per 8-K filed {d['file_date']}")
                         watchlist_dirty = True
+            # Promote auto-discovered entries with a parsed drug-name candidate.
+            # Runs against the full discovered set (new + existing) so an entry
+            # added on a prior scan can pick up the drug name on a later parse.
+            for d in discovered:
+                drug_candidate = d.get("drug_name") or ""
+                if not drug_candidate:
+                    continue
+                for e in watchlist:
+                    if (e.get("ticker") == d["ticker"]
+                            and e.get("drug_name") == "(auto-discovered)"
+                            and e.get("status") in ("active",)):
+                        e["drug_name"] = drug_candidate
+                        e["notes"] = (e.get("notes", "") +
+                            f" | Drug name auto-extracted from 8-K: {drug_candidate}")
+                        watchlist_dirty = True
+                        break
         except Exception as e:
             warnings.append(f"auto-discovery failed: {e}")
 
@@ -966,13 +1318,33 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     if do_crosscheck and time.time() < budget_deadline:
         try:
             newly_approved = _run_approval_crosscheck(
-                watchlist, user_agent=user_agent, client=client,
+                watchlist, user_agent=openfda_user_agent, client=client,
                 budget_deadline=min(budget_deadline, time.time() + 15),
             )
             if newly_approved:
                 watchlist_dirty = True
         except Exception as e:
             warnings.append(f"approval crosscheck failed: {e}")
+
+    # ------------------------------------------------------------------
+    # 3b. CRL discovery via 8-K / 6-K full-text + presumed_crl fallback
+    # ------------------------------------------------------------------
+    if do_discover and user_agent and time.time() < budget_deadline:
+        try:
+            crl_marked = _discover_crls_from_edgar(watchlist, user_agent=user_agent)
+            fetched_records += len(crl_marked)
+            if crl_marked:
+                watchlist_dirty = True
+        except Exception as e:
+            warnings.append(f"CRL discovery failed: {e}")
+
+    if do_crosscheck and time.time() < budget_deadline:
+        try:
+            presumed = _apply_presumed_crl(watchlist, client, openfda_user_agent)
+            if presumed:
+                watchlist_dirty = True
+        except Exception as e:
+            warnings.append(f"presumed_crl sweep failed: {e}")
 
     # ------------------------------------------------------------------
     # 4. Enrichment (budget-guarded)
@@ -990,6 +1362,24 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             warnings.append(f"enrichment failed: {e}")
 
     # ------------------------------------------------------------------
+    # 4b. AdCom calendar hydration from Federal Register (Phase 3)
+    # ------------------------------------------------------------------
+    if cfg.config.get("adcom_hydration", True) and time.time() < budget_deadline:
+        try:
+            from modal_workers.shared.fda_advisory_calendar import (
+                fetch_advisory_committee_meetings,
+                hydrate_watchlist_adcom_dates,
+            )
+            meetings = fetch_advisory_committee_meetings(
+                lookback_days=30, lookahead_days=120, client=client,
+            )
+            adcom_updated = hydrate_watchlist_adcom_dates(watchlist, meetings)
+            if adcom_updated:
+                watchlist_dirty = True
+        except Exception as e:
+            warnings.append(f"adcom hydration failed: {e}")
+
+    # ------------------------------------------------------------------
     # 5. Build signals
     # ------------------------------------------------------------------
     signals: List[Signal] = []
@@ -999,8 +1389,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             break
 
         status = entry.get("status", "")
-        # Emit for active entries + fda_decision-eligible statuses (approved/crl).
-        if status not in ("active", "approved", "crl", "resolved_crl"):
+        # Emit for active entries + fda_decision-eligible statuses (approved/crl/presumed_crl).
+        if status not in ("active", "approved", "crl", "resolved_crl", "presumed_crl"):
             continue
 
         pdufa_date = entry.get("pdufa_date", "")
