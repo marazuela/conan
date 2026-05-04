@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 from modal_workers.shared.dim_estimator import estimate_dimensions
 from modal_workers.shared.rubric_engine import (
+    RUBRIC_VERSION,
     WEIGHTS,
     build_scoring_meta,
     dimensions_with_provenance,
@@ -197,7 +198,10 @@ def _signal_to_row(
     client: SupabaseClient,
 ) -> Dict[str, Any]:
     profile = _resolve_profile(sig, cfg)
-    rubric_version_id = client.load_rubric_version_id(profile)
+    rubric_version_id = client.load_rubric_version_id(
+        profile,
+        rubric_version=RUBRIC_VERSION,
+    )
 
     # Estimate dims from raw_payload if the scanner didn't pre-populate them.
     # Profiles whose scanner output lacks the data to estimate honestly

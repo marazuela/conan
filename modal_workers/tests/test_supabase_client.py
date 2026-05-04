@@ -85,6 +85,49 @@ def test_reap_orphan_runs_reconciles_scanner_timeout(monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# rubric lookup — exact code version vs active admin lookup
+# ----------------------------------------------------------------------
+
+def test_load_rubric_version_id_queries_exact_version_when_provided(monkeypatch):
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params})
+        return [{"id": "rubric-v1"}]
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    assert client.load_rubric_version_id("takeover_candidate", rubric_version=1) == "rubric-v1"
+    assert captured == [{
+        "method": "GET",
+        "path": "rubrics",
+        "params": {
+            "profile": "eq.takeover_candidate",
+            "select": "id",
+            "limit": 1,
+            "rubric_version": "eq.1",
+            "order": "effective_at.desc,id.desc",
+        },
+    }]
+
+
+def test_load_rubric_version_id_orders_active_lookup_defensively(monkeypatch):
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append(params)
+        return [{"id": "rubric-active"}]
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    assert client.load_rubric_version_id("litigation") == "rubric-active"
+    assert captured[0]["superseded_at"] == "is.null"
+    assert captured[0]["order"] == "rubric_version.desc,effective_at.desc,id.desc"
+
+
+# ----------------------------------------------------------------------
 # insert_signals — pre-filter on signal_id (PK 23505 guard)
 # ----------------------------------------------------------------------
 

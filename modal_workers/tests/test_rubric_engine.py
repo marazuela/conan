@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from modal_workers.shared.rubric_engine import (
+    RUBRIC_VERSION,
     WEIGHTS,
     UnknownScoringProfile,
     apply_auto_caps,
@@ -34,6 +35,10 @@ def test_weights_has_six_profiles():
         "merger_arb", "activist_governance", "binary_catalyst",
         "short_positioning", "litigation", "takeover_candidate",
     }
+
+
+def test_rubric_version_is_pinned_to_seeded_v1_weights():
+    assert RUBRIC_VERSION == 1
 
 
 def test_merger_arb_weights():
@@ -497,11 +502,11 @@ def test_score_signal_missing_profile_defaults_to_activist_governance():
     assert out["scoring_profile"] == "activist_governance"
 
 
-def test_score_signal_unknown_profile_defaults_to_activist_governance():
+def test_score_signal_unknown_profile_raises():
     full = {k: 3 for k in WEIGHTS["activist_governance"]}
     signal = {"scoring_profile": "nonexistent", "raw_data": {"dimensions": full}}
-    out = score_signal(signal)
-    assert out["scoring_profile"] == "activist_governance"
+    with pytest.raises(UnknownScoringProfile):
+        score_signal(signal)
 
 
 def test_score_signal_clamps_dimensions_to_one_five():

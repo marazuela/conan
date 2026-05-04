@@ -288,6 +288,7 @@ def _build_backfill_patch(
             "scoring_profile": profile,
             "raw_data": {**raw_payload, "dimensions": estimate.dimensions},
         },
+        provenance="heuristic",
     )
     return {
         "dimensions": estimate.with_provenance("heuristic"),

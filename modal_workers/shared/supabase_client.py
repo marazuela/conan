@@ -19,7 +19,7 @@ Public API matches spec.md §7.1 with the subset needed by Phase 1 scanners:
   .resolve_or_create_entity(hints) -> str # returns entity_id
   .read_cache(prefix, key) -> Optional[bytes]
   .write_cache(prefix, key, data)
-  .load_rubric_version_id(profile) -> str # current active version
+  .load_rubric_version_id(profile, rubric_version=None) -> str
 
 Not covered yet (deferred to reactor edge function / candidate-gate proxy):
   .update_signal_convergence() — reactor writes convergence_* columns directly in SQL.
@@ -386,20 +386,46 @@ class SupabaseClient:
     # Rubric lookup
     # ------------------------------------------------------------------
 
-    def load_rubric_version_id(self, profile: str) -> str:
-        """Active rubric_version_id for a profile (superseded_at IS NULL). Cached per-process."""
+    def load_rubric_version_id(
+        self,
+        profile: str,
+        rubric_version: Optional[int] = None,
+    ) -> str:
+        """Rubric row id for a profile.
+
+        When `rubric_version` is provided, look up that exact version even if it
+        has since been superseded. Scanner scoring is code-driven, so ingest must
+        stamp the DB row that matches the deployed Python weights/caps, not
+        whichever rubric row happens to be active today. The no-version path is
+        kept for admin/read callers and ordered defensively.
+        """
         if not hasattr(self, "_rubric_cache"):
-            self._rubric_cache: Dict[str, str] = {}
-        if profile in self._rubric_cache:
-            return self._rubric_cache[profile]
+            self._rubric_cache: Dict[tuple[str, Optional[int]], str] = {}
+        cache_key = (profile, rubric_version)
+        if cache_key in self._rubric_cache:
+            return self._rubric_cache[cache_key]
+        params = {
+            "profile": f"eq.{profile}",
+            "select": "id",
+            "limit": 1,
+        }
+        if rubric_version is None:
+            params["superseded_at"] = "is.null"
+            params["order"] = "rubric_version.desc,effective_at.desc,id.desc"
+        else:
+            params["rubric_version"] = f"eq.{rubric_version}"
+            params["order"] = "effective_at.desc,id.desc"
         rows = self._rest("GET", "rubrics",
-                          params={"profile": f"eq.{profile}",
-                                  "superseded_at": "is.null",
-                                  "select": "id", "limit": 1})
+                          params=params)
         if not rows:
-            raise SupabaseError(404, f"no active rubric for profile '{profile}'")
+            if rubric_version is None:
+                raise SupabaseError(404, f"no active rubric for profile '{profile}'")
+            raise SupabaseError(
+                404,
+                f"no rubric for profile '{profile}' at version {rubric_version}",
+            )
         rid = rows[0]["id"]
-        self._rubric_cache[profile] = rid
+        self._rubric_cache[cache_key] = rid
         return rid
 
     # ------------------------------------------------------------------

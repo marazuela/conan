@@ -20,6 +20,8 @@ Any change to WEIGHTS or auto-caps MUST:
   1. Introduce a new rubric_version in the rubrics table (do NOT mutate version 1).
   2. Add a new rule_id for the cap (do NOT rename existing rule_ids).
   3. Be reflected in spec.md §12 under "Additional surfaced conflicts".
+  4. Update RUBRIC_VERSION in this module so signals.rubric_version_id is pinned
+     to the exact DB row whose weights/caps this code implements.
 """
 
 from __future__ import annotations
@@ -30,6 +32,8 @@ from typing import Dict, List, Tuple, Any, Optional
 # --------------------------------------------------------------------
 # Profile weight tables
 # --------------------------------------------------------------------
+
+RUBRIC_VERSION = 1
 
 WEIGHTS: Dict[str, Dict[str, float]] = {
     "merger_arb": {
@@ -438,12 +442,22 @@ def apply_auto_caps(
 # Signal scoring
 # --------------------------------------------------------------------
 
+class UnknownScoringProfile(ValueError):
+    """Raised when a caller asks for a profile that is not in WEIGHTS.
+
+    The scanner registry should prevent this, but the scorer is the last
+    defensive boundary before bad rows can be persisted. Unknown profile drift is
+    safer as a loud per-signal error than a quiet activist_governance mis-score.
+    """
+
+
 def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict[str, Any]:
     """Apply the matching profile rubric to a raw signal.
 
     Input contract:
-      signal["scoring_profile"] — one of WEIGHTS keys. Falls back to 'activist_governance'
-        if missing or unknown (matches v1 behaviour).
+      signal["scoring_profile"] — one of WEIGHTS keys. Missing profile falls back
+        to 'activist_governance' for v1 parity; unknown non-empty profiles raise
+        UnknownScoringProfile rather than silently mis-scoring.
       signal["raw_data"]["dimensions"] — dict of dim_name → int[1..5]. If ANY required
         dim for the profile is missing, the signal is returned unscored (score=None,
         band=None) rather than silently filled with defaults. Values are clamped to
@@ -473,7 +487,10 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
     """
     profile = signal.get("scoring_profile") or "activist_governance"
     if profile not in WEIGHTS:
-        profile = "activist_governance"
+        raise UnknownScoringProfile(
+            f"score_signal: {profile!r} is not in WEIGHTS "
+            f"(known: {sorted(WEIGHTS.keys())})"
+        )
 
     raw_dims = signal.get("raw_data", {}).get("dimensions") or {}
     required = list(WEIGHTS[profile].keys())
@@ -514,17 +531,6 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
 # Re-score with externally supplied dims
 # --------------------------------------------------------------------
 
-class UnknownScoringProfile(ValueError):
-    """Raised by rescore_with_dims when called with a profile that isn't in WEIGHTS.
-
-    `score_signal` silently falls back to activist_governance for unknown profiles
-    (v1 parity for scanner-emitted signals that outran the registry), but a skill
-    calling rescore_with_dims has already resolved the profile from the signals
-    row — a typo or schema drift should surface, not quietly mis-score against
-    the wrong rubric.
-    """
-
-
 def rescore_with_dims(
     scoring_profile: str,
     raw_payload: Dict[str, Any],
@@ -546,8 +552,7 @@ def rescore_with_dims(
     "ai_resolved", "analyst".
 
     Raises `UnknownScoringProfile` if the caller passes a profile not in
-    WEIGHTS. This is a stricter contract than `score_signal` which silently
-    falls back to activist_governance for scanner-side unknowns.
+    WEIGHTS, matching `score_signal`'s non-empty unknown-profile behavior.
     """
     if scoring_profile not in WEIGHTS:
         raise UnknownScoringProfile(

@@ -22,14 +22,17 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   classifyBand,
   classifyGroup,
-  signalFingerprint,
-  windowDays,
   type GroupSignal,
+  signalFingerprint,
 } from "../_shared/convergence.ts";
 import {
   classifyProvisionalHeuristic,
   shouldProcessUpdate,
 } from "./scoring-state.ts";
+import {
+  shouldClearDisplacedWinner,
+  shouldUseLitigationWindow,
+} from "./convergence-window.ts";
 
 type Direction = "long" | "short" | "neutral" | null | undefined;
 type Band = "immediate" | "watchlist" | "archive" | "discard";
@@ -64,8 +67,7 @@ interface WebhookPayload {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WEBHOOK_SECRET = Deno.env.get("WEBHOOK_SECRET") ?? "";
-const RUBRIC_MODAL_URL =
-  Deno.env.get("RUBRIC_APPLY_CAPS_URL") ??
+const RUBRIC_MODAL_URL = Deno.env.get("RUBRIC_APPLY_CAPS_URL") ??
   "https://marazuela--rubric-apply-caps.modal.run";
 
 const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
@@ -90,9 +92,13 @@ Deno.serve(async (req: Request) => {
   }
 
   if (payload.table !== "signals") {
-    return new Response(JSON.stringify({ skipped: true, reason: "not signals table" }), {
-      status: 200, headers: { "content-type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ skipped: true, reason: "not signals table" }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
   }
   // INSERT is the normal scanner→reactor path. UPDATE is accepted only when a
   // signal_resolver skill has filled in dims and transitioned score NULL→non-NULL;
@@ -101,14 +107,25 @@ Deno.serve(async (req: Request) => {
   // convergence_* columns).
   if (payload.type === "UPDATE") {
     if (!shouldProcessUpdate(payload.record, payload.old_record)) {
-      return new Response(JSON.stringify({ skipped: true, reason: "UPDATE without scoring-resolution transition" }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          skipped: true,
+          reason: "UPDATE without scoring-resolution transition",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     }
   } else if (payload.type !== "INSERT") {
-    return new Response(JSON.stringify({ skipped: true, reason: "unsupported webhook type" }), {
-      status: 200, headers: { "content-type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ skipped: true, reason: "unsupported webhook type" }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
   }
 
   const sig = payload.record;
@@ -116,7 +133,8 @@ Deno.serve(async (req: Request) => {
   try {
     const result = await processSignal(sig);
     return new Response(JSON.stringify(result), {
-      status: 200, headers: { "content-type": "application/json" },
+      status: 200,
+      headers: { "content-type": "application/json" },
     });
   } catch (err) {
     // DLQ the event so Supabase's webhook retry + our own inspection both work.
@@ -127,7 +145,8 @@ Deno.serve(async (req: Request) => {
       error_message: message,
     });
     return new Response(JSON.stringify({ error: message }), {
-      status: 500, headers: { "content-type": "application/json" },
+      status: 500,
+      headers: { "content-type": "application/json" },
     });
   }
 });
@@ -157,7 +176,9 @@ async function processSignal(sig: SignalRow) {
   // the row (score NULL→non-NULL), reactor is re-invoked via the UPDATE webhook
   // path and continues through the normal convergence flow below.
   if ((sig.score ?? null) === null) {
-    if (sig.scoring_profile && UNSCORED_RESOLVER_PROFILES.has(sig.scoring_profile)) {
+    if (
+      sig.scoring_profile && UNSCORED_RESOLVER_PROFILES.has(sig.scoring_profile)
+    ) {
       const enqueued = await enqueueNeedsScoring(sig.signal_id);
       return {
         processed: true,
@@ -205,11 +226,18 @@ async function processSignal(sig: SignalRow) {
   // --- Step 1-2: resolve convergence_key.
   const convergence_key = await resolveConvergenceKey(sig);
 
-  // --- Step 3: query the window. Use 30d if any current signal in the window is litigation.
-  // First pass: 14d. Second pass only if the first-pass group includes litigation.
+  // --- Step 3: query the window. Use 30d if any current signal in the full
+  // 30d candidate group is litigation; otherwise use the standard 14d window.
   let windowSignals = await fetchWindow(convergence_key, 14);
-  const anyLit = [sig, ...windowSignals].some((s) => s.scoring_profile === "litigation");
-  if (anyLit) windowSignals = await fetchWindow(convergence_key, 30);
+  const firstPassProfiles = [
+    sig.scoring_profile,
+    ...windowSignals.map((s) => s.scoring_profile),
+  ];
+  const hasExtendedLitigation = firstPassProfiles.includes("litigation") ||
+    await hasLitigationInWindow(convergence_key, 30);
+  if (shouldUseLitigationWindow(firstPassProfiles, hasExtendedLitigation)) {
+    windowSignals = await fetchWindow(convergence_key, 30);
+  }
 
   // The webhook fires AFTER INSERT, so sig is already in the window query results.
   // But the `source_content_hash`-based dedup in classifyGroup handles any edge case.
@@ -225,16 +253,25 @@ async function processSignal(sig: SignalRow) {
   const verdict = classifyGroup(group);
 
   // --- Step 4-5: resolve the winner and its raw score_with_bonus.
-  const winnerGroup = verdict.unique_signals.find((s) => s.signal_id === verdict.winner_signal_id);
+  const winnerGroup = verdict.unique_signals.find((s) =>
+    s.signal_id === verdict.winner_signal_id
+  );
   if (!winnerGroup) {
     // Edge case: empty group (shouldn't happen post-INSERT). Stamp the INSERTed row with zeros.
     // Non-null on score/band guaranteed by the unscored short-circuit at the top of processSignal.
     await stampRow(sig.signal_id, convergence_key, 0, sig.score!, sig.band!);
-    return { processed: true, convergence_key, convergence_bonus: 0, winner_signal_id: sig.signal_id };
+    return {
+      processed: true,
+      convergence_key,
+      convergence_bonus: 0,
+      winner_signal_id: sig.signal_id,
+    };
   }
 
   const winnerRow = await fetchSignalFull(winnerGroup.signal_id);
-  if (!winnerRow) throw new Error(`winner signal ${winnerGroup.signal_id} disappeared`);
+  if (!winnerRow) {
+    throw new Error(`winner signal ${winnerGroup.signal_id} disappeared`);
+  }
   if (winnerRow.score === null) {
     // Defensive: the unscored filter above should have excluded this row from the group.
     throw new Error(`winner signal ${winnerGroup.signal_id} has NULL score`);
@@ -248,16 +285,33 @@ async function processSignal(sig: SignalRow) {
   const finalBand = capped.band;
   // The winner's auto_caps_triggered column already holds the pre-convergence caps; we
   // merge in any new caps that fired on the bonus-adjusted band. Order-insensitive per spec §10.4.
-  const mergedCaps = Array.from(new Set([...(winnerRow.auto_caps_triggered ?? []), ...capped.auto_caps_triggered]));
+  const mergedCaps = Array.from(
+    new Set([
+      ...(winnerRow.auto_caps_triggered ?? []),
+      ...capped.auto_caps_triggered,
+    ]),
+  );
 
   // --- Step 7: UPDATE the winner. Carry through demotion_reason from the post-bonus
   // cap-apply (curator-readable surface; auto_caps_triggered remains the rule_id contract).
-  await stampRow(winnerRow.signal_id, convergence_key, verdict.bonus, scoreWithBonus, finalBand, mergedCaps, capped.demotion_reason ?? null);
+  await stampRow(
+    winnerRow.signal_id,
+    convergence_key,
+    verdict.bonus,
+    scoreWithBonus,
+    finalBand,
+    mergedCaps,
+    capped.demotion_reason ?? null,
+  );
 
   // --- Cross-update: any prior row in the group that has non-null convergence_bonus and is
   // NOT the new winner gets its convergence fields cleared. This matches v1's
   // "bonus lives only on the winner" behavior.
-  const cross_updates = await clearDisplacedWinners(convergence_key, winnerRow.signal_id, windowSignals);
+  const cross_updates = await clearDisplacedWinners(
+    convergence_key,
+    winnerRow.signal_id,
+    windowSignals,
+  );
 
   // --- Step 8: on Immediate band, insert alert AND enqueue thesis_job in parallel.
   //   8a. alerts INSERT (ON CONFLICT DO NOTHING — same-day fingerprint dup).
@@ -341,7 +395,8 @@ async function flagHeuristicMissingScoringMeta(sig: SignalRow): Promise<void> {
       severity: "error",
       source: "reactor",
       kind: "heuristic_missing_scoring_meta",
-      title: `Heuristic provenance without scoring_meta on signal ${sig.signal_id}`,
+      title:
+        `Heuristic provenance without scoring_meta on signal ${sig.signal_id}`,
       signal_id: sig.signal_id,
       evidence: {
         signal_id: sig.signal_id,
@@ -374,7 +429,9 @@ async function resolveConvergenceKey(sig: SignalRow): Promise<string> {
       .order("priority", { ascending: true })
       .limit(1);
     if (error) throw error;
-    if (data && data.length > 0) return `${data[0].id_type}:${data[0].id_value}`;
+    if (data && data.length > 0) {
+      return `${data[0].id_type}:${data[0].id_value}`;
+    }
     // Entity is identified but only via fuzzy name. Use the entity uuid as the
     // convergence key — guarantees no false merge across two distinct entities
     // that happen to share a normalized name (the "AMERICAN" / "NATIONAL"
@@ -385,7 +442,10 @@ async function resolveConvergenceKey(sig: SignalRow): Promise<string> {
   return `unidentified:${sig.signal_id}`;
 }
 
-async function fetchWindow(convergence_key: string, days: 14 | 30): Promise<SignalRow[]> {
+async function fetchWindow(
+  convergence_key: string,
+  days: 14 | 30,
+): Promise<SignalRow[]> {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
   // We have two orthogonal lookup paths: (a) rows already stamped with this
   // convergence_key, (b) rows we might retroactively group by figi. For simplicity,
@@ -396,7 +456,7 @@ async function fetchWindow(convergence_key: string, days: 14 | 30): Promise<Sign
   const { data, error } = await sb
     .from("signals")
     .select(
-      "signal_id,entity_id,issuer_figi,scoring_profile,thesis_direction,score,band,dimensions,auto_caps_triggered,raw_payload,source_content_hash,convergence_bonus,band_with_bonus,score_with_bonus"
+      "signal_id,entity_id,issuer_figi,scoring_profile,thesis_direction,score,band,dimensions,auto_caps_triggered,raw_payload,source_content_hash,convergence_bonus,band_with_bonus,score_with_bonus",
     )
     .eq("convergence_key", convergence_key)
     .gte("scan_date", since);
@@ -408,7 +468,7 @@ async function fetchWindow(convergence_key: string, days: 14 | 30): Promise<Sign
     const { data: d2, error: e2 } = await sb
       .from("signals")
       .select(
-        "signal_id,entity_id,issuer_figi,scoring_profile,thesis_direction,score,band,dimensions,auto_caps_triggered,raw_payload,source_content_hash,convergence_bonus,band_with_bonus,score_with_bonus"
+        "signal_id,entity_id,issuer_figi,scoring_profile,thesis_direction,score,band,dimensions,auto_caps_triggered,raw_payload,source_content_hash,convergence_bonus,band_with_bonus,score_with_bonus",
       )
       .eq("issuer_figi", figi)
       .is("convergence_key", null)
@@ -419,6 +479,37 @@ async function fetchWindow(convergence_key: string, days: 14 | 30): Promise<Sign
     }
   }
   return rows;
+}
+
+async function hasLitigationInWindow(
+  convergence_key: string,
+  days: 14 | 30,
+): Promise<boolean> {
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await sb
+    .from("signals")
+    .select("signal_id")
+    .eq("convergence_key", convergence_key)
+    .eq("scoring_profile", "litigation")
+    .gte("scan_date", since)
+    .limit(1);
+  if (error) throw error;
+  if ((data?.length ?? 0) > 0) return true;
+
+  if (convergence_key.startsWith("figi:")) {
+    const figi = convergence_key.slice("figi:".length);
+    const { data: d2, error: e2 } = await sb
+      .from("signals")
+      .select("signal_id")
+      .eq("issuer_figi", figi)
+      .is("convergence_key", null)
+      .eq("scoring_profile", "litigation")
+      .gte("scan_date", since)
+      .limit(1);
+    if (e2) throw e2;
+    return (d2?.length ?? 0) > 0;
+  }
+  return false;
 }
 
 function signalRowToGroupSignal(r: SignalRow): GroupSignal {
@@ -452,7 +543,9 @@ async function fetchSignalFull(signal_id: string): Promise<FullSignal | null> {
 async function rubricApplyCaps(
   row: FullSignal,
   band: Band,
-): Promise<{ band: Band; auto_caps_triggered: string[]; demotion_reason: string | null }> {
+): Promise<
+  { band: Band; auto_caps_triggered: string[]; demotion_reason: string | null }
+> {
   const body = {
     signal: { raw_data: row.raw_payload ?? {} },
     dimensions: row.dimensions ?? {},
@@ -464,9 +557,19 @@ async function rubricApplyCaps(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`rubric_apply_caps ${r.status}: ${await r.text()}`);
-  const j = (await r.json()) as { band: Band; auto_caps_triggered: string[]; demotion_reason?: string | null };
-  return { band: j.band, auto_caps_triggered: j.auto_caps_triggered, demotion_reason: j.demotion_reason ?? null };
+  if (!r.ok) {
+    throw new Error(`rubric_apply_caps ${r.status}: ${await r.text()}`);
+  }
+  const j = (await r.json()) as {
+    band: Band;
+    auto_caps_triggered: string[];
+    demotion_reason?: string | null;
+  };
+  return {
+    band: j.band,
+    auto_caps_triggered: j.auto_caps_triggered,
+    demotion_reason: j.demotion_reason ?? null,
+  };
 }
 
 async function stampRow(
@@ -489,7 +592,10 @@ async function stampRow(
   // Always set demotion_reason when caller passes it (including explicit null,
   // which clears stale narratives if a cap stops firing on re-evaluation).
   if (demotion_reason !== undefined) patch.demotion_reason = demotion_reason;
-  const { error } = await sb.from("signals").update(patch).eq("signal_id", signal_id);
+  const { error } = await sb.from("signals").update(patch).eq(
+    "signal_id",
+    signal_id,
+  );
   if (error) throw error;
 }
 
@@ -499,7 +605,7 @@ async function clearDisplacedWinners(
   windowSignals: SignalRow[],
 ): Promise<string[]> {
   const toClear = windowSignals.filter(
-    (s) => s.signal_id !== winner_id && (s.convergence_bonus ?? 0) > 0,
+    (s) => shouldClearDisplacedWinner(s, winner_id),
   );
   const ids: string[] = [];
   for (const s of toClear) {
@@ -519,7 +625,10 @@ async function clearDisplacedWinners(
 }
 
 async function insertAlert(row: FullSignal): Promise<boolean> {
-  const fp = await signalFingerprint(row.source_content_hash, row.scoring_profile);
+  const fp = await signalFingerprint(
+    row.source_content_hash,
+    row.scoring_profile,
+  );
   const { data, error } = await sb
     .from("alerts")
     .insert({
