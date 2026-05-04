@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
+
+import pytest
+
 from modal_workers.shared.supabase_client import SupabaseClient
 
 
@@ -219,3 +223,68 @@ def test_insert_signals_chunks_in_clause_for_large_batches(monkeypatch):
     inserted = client.insert_signals(batch)
     assert len(inserted) == 450
     assert get_chunks == [200, 200, 50]
+
+
+# ----------------------------------------------------------------------
+# upsert_price_snapshot — uses generated-column UNIQUE conflict target
+# ----------------------------------------------------------------------
+
+def test_upsert_price_snapshot_targets_subject_kind_key_horizon(monkeypatch):
+    """PostgREST cannot infer a partial unique index as a conflict target;
+    the upsert must target the (subject_kind, subject_key, horizon_days)
+    UNIQUE constraint backed by the generated columns."""
+    captured: dict = {}
+    def fake_retry(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        captured["body"] = json_body
+        captured["prefer"] = prefer
+    monkeypatch.setattr(SupabaseClient, "_rest_with_retry", fake_retry)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    client.upsert_price_snapshot({
+        "signal_id": "sig_1", "ticker": "AAPL", "thesis_direction": "long",
+        "anchor_date": "2026-04-01", "horizon_days": 7, "fetch_status": "ok",
+    })
+    assert captured["method"] == "POST"
+    assert captured["path"] == "signal_price_snapshots"
+    assert captured["params"] == {"on_conflict": "subject_kind,subject_key,horizon_days"}
+    assert "merge-duplicates" in captured["prefer"]
+
+
+def test_upsert_price_snapshot_requires_a_subject(monkeypatch):
+    monkeypatch.setattr(SupabaseClient, "_rest_with_retry",
+                        lambda self, *a, **kw: pytest.fail("should not POST"))
+    client = SupabaseClient.__new__(SupabaseClient)
+    with pytest.raises(ValueError, match="signal_id OR candidate_id"):
+        client.upsert_price_snapshot({"ticker": "AAPL", "horizon_days": 1})
+
+
+# ----------------------------------------------------------------------
+# update_outcome_realized_move — labeled_at must be a real ISO timestamp,
+# not the literal string "now()" (which PostgREST writes as text into a
+# timestamptz column).
+# ----------------------------------------------------------------------
+
+def test_update_outcome_realized_move_sends_iso_labeled_at(monkeypatch):
+    captured: dict = {}
+    def fake_retry(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        captured["body"] = json_body
+    monkeypatch.setattr(SupabaseClient, "_rest_with_retry", fake_retry)
+    client = SupabaseClient.__new__(SupabaseClient)
+
+    client.update_outcome_realized_move("c1", 7, 12.5)
+
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "outcomes"
+    assert captured["params"] == {"candidate_id": "eq.c1"}
+    body = captured["body"]
+    assert body["realized_move_7d"] == 12.5
+    # Critical: must be a real timestamp, NOT the literal string "now()".
+    assert body["labeled_at"] != "now()"
+    parsed = datetime.fromisoformat(body["labeled_at"])
+    assert parsed.tzinfo is not None  # UTC-aware

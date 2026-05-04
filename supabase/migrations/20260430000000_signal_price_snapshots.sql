@@ -5,8 +5,10 @@
 -- the `accuracy_metrics.timing_auditor.mean_realized_move_*` aggregates
 -- (20260425000000). Until now those columns had no writer.
 --
--- One row per (subject, horizon_days). Subject is a signal OR a candidate
--- (XOR via CHECK). Tracks both because:
+-- One row per (subject, horizon_days). Subject is a signal XOR a candidate.
+-- Uniqueness is on the generated (subject_kind, subject_key, horizon_days)
+-- triple so PostgREST UPSERT can target a regular UNIQUE constraint instead
+-- of a partial unique index (which it cannot infer). Tracks both because:
 --   - candidates: feed outcomes / precision_auditor (the curated set)
 --   - watchlist/immediate signals: feed challenger_retro ("would-we-have-caught-it")
 --
@@ -35,19 +37,24 @@ CREATE TABLE IF NOT EXISTS public.signal_price_snapshots (
                       'ok','no_data','stale_anchor','pending','neutral_skipped'
                     )),
   captured_at       timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT signal_price_snapshots_subject_present
-    CHECK (signal_id IS NOT NULL OR candidate_id IS NOT NULL)
+  -- Generated subject columns: collapse the two nullable FK columns into a
+  -- single (kind, key) pair so we can express uniqueness as a regular UNIQUE
+  -- constraint. PostgREST cannot infer a conflict target from a partial
+  -- unique index (`WHERE signal_id IS NOT NULL`), which is what UPSERT needs.
+  subject_kind      text GENERATED ALWAYS AS (
+                      CASE WHEN signal_id IS NOT NULL THEN 'signal' ELSE 'candidate' END
+                    ) STORED,
+  subject_key       text GENERATED ALWAYS AS (
+                      COALESCE(signal_id, candidate_id::text)
+                    ) STORED,
+  CONSTRAINT signal_price_snapshots_subject_xor
+    CHECK (
+      (signal_id IS NOT NULL OR candidate_id IS NOT NULL)
+      AND NOT (signal_id IS NOT NULL AND candidate_id IS NOT NULL)
+    ),
+  CONSTRAINT signal_price_snapshots_subject_horizon_uniq
+    UNIQUE (subject_kind, subject_key, horizon_days)
 );
-
--- One row per (subject, horizon). NULL-distinct semantics in Postgres mean we
--- need partial unique indexes, one per subject column, to make UPSERT safe.
-CREATE UNIQUE INDEX IF NOT EXISTS signal_price_snapshots_signal_horizon_uniq
-  ON public.signal_price_snapshots (signal_id, horizon_days)
-  WHERE signal_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS signal_price_snapshots_candidate_horizon_uniq
-  ON public.signal_price_snapshots (candidate_id, horizon_days)
-  WHERE candidate_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS signal_price_snapshots_anchor_idx
   ON public.signal_price_snapshots (anchor_date, horizon_days, fetch_status);

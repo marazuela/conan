@@ -26,6 +26,7 @@
 // Adding a separate `email_on_state_change` preference is post-v2 if volume warrants.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { deliveryRowFor } from "./deliveries.ts";
 
 interface AlertRow {
   id: string;
@@ -390,7 +391,10 @@ async function dispatchPreEdgePromotion(evt: CandidateEventRow) {
   for (const to of recipients) {
     const { data: deliveryRows, error: insErr } = await sb
       .from("alert_deliveries")
-      .insert({ alert_id: null, channel: "email", target: to, status: "queued" })
+      .insert(deliveryRowFor(
+        { kind: "candidate_event", candidate_event_id: evt.id, candidate_id: cand.id },
+        to,
+      ))
       .select("id");
     if (insErr) throw insErr;
     const delivery_id = deliveryRows?.[0]?.id;
@@ -603,13 +607,17 @@ async function dispatchCandidateEvent(evt: CandidateEventRow) {
   // --- Resolve recipients (same pool as Immediate-band alerts for v2).
   const recipients = await resolveRecipients();
 
-  // --- Send via Resend + record alert_deliveries (alert_id NULL — schema allows it).
+  // --- Send via Resend + record alert_deliveries. candidate_event_id is the
+  //     audit-parent (CASCADE on delete); alert_id stays NULL on this path.
   const resend_message_ids: string[] = [];
   const sent_to: string[] = [];
   for (const to of recipients) {
     const { data: deliveryRows, error: insErr } = await sb
       .from("alert_deliveries")
-      .insert({ alert_id: null, channel: "email", target: to, status: "queued" })
+      .insert(deliveryRowFor(
+        { kind: "candidate_event", candidate_event_id: evt.id, candidate_id: cand.id },
+        to,
+      ))
       .select("id");
     if (insErr) throw insErr;
     const delivery_id = deliveryRows?.[0]?.id;
