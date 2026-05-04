@@ -20,8 +20,11 @@ from datetime import date, datetime, timezone
 import pytest
 
 from modal_workers.scanners.fda_event_features import (
+    AgentModifiers,
     BAND_THRESHOLDS_DEFAULT,
     DESIGNATION_MODIFIERS_DEFAULT,
+    MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND,
+    REGULATORY_CONFIDENCE_BOOST_BOUND,
     FeatureInputs,
     apply_designation_modifiers,
     base_probability,
@@ -34,6 +37,7 @@ from modal_workers.scanners.fda_event_features import (
     implied_move_to_market_probability,
     magnitude_defaults_for_mcap,
     map_indication_to_base_key,
+    parse_agent_modifiers,
     pricing_edge,
 )
 
@@ -293,6 +297,179 @@ def test_market_p_clamped_when_implied_move_extreme():
     )
     out = compose_features(inputs)
     assert out.market_implied_probability == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — specialist agent modifiers
+# ---------------------------------------------------------------------------
+
+
+def _agent_evidence(source, payload, *, fetched_at="2026-04-30T12:00:00Z", status="active"):
+    return {
+        "source": source,
+        "evidence_type": "agent_review",
+        "payload": payload,
+        "fetched_at": fetched_at,
+        "evidence_status": status,
+    }
+
+
+def test_parse_agent_modifiers_empty():
+    mods = parse_agent_modifiers([])
+    assert mods.medical_fair_probability_modifier == 0.0
+    assert mods.regulatory_evidence_confidence_boost == 0.0
+    assert mods.microstructure_options_liquidity_score is None
+    assert mods.microstructure_implied_move_pct is None
+
+
+def test_parse_agent_modifiers_clamps_medical_modifier():
+    rows = [_agent_evidence("agent_medical", {"fair_probability_modifier": 0.50, "confidence": 0.9})]
+    mods = parse_agent_modifiers(rows)
+    # Bound is ±0.10
+    assert mods.medical_fair_probability_modifier == MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND
+
+
+def test_parse_agent_modifiers_clamps_regulatory_boost():
+    rows = [_agent_evidence("agent_regulatory", {"evidence_confidence_boost": -0.99})]
+    mods = parse_agent_modifiers(rows)
+    assert mods.regulatory_evidence_confidence_boost == -REGULATORY_CONFIDENCE_BOOST_BOUND
+
+
+def test_parse_agent_modifiers_microstructure_overrides():
+    rows = [
+        _agent_evidence(
+            "agent_microstructure",
+            {
+                "options_liquidity_score": 4.5,
+                "implied_move_pct": 18.5,
+                "borrow_cost_bps": 150,
+                "crowding_score": 3.0,
+            },
+        )
+    ]
+    mods = parse_agent_modifiers(rows)
+    assert mods.microstructure_options_liquidity_score == 4.5
+    assert mods.microstructure_implied_move_pct == 18.5
+    assert mods.microstructure_borrow_cost_bps == 150.0
+    assert mods.microstructure_crowding_score == 3.0
+
+
+def test_parse_agent_modifiers_skips_rejected_evidence():
+    rows = [
+        _agent_evidence(
+            "agent_medical",
+            {"fair_probability_modifier": 0.07},
+            status="rejected",
+        )
+    ]
+    mods = parse_agent_modifiers(rows)
+    assert mods.medical_fair_probability_modifier == 0.0
+
+
+def test_parse_agent_modifiers_picks_latest_per_kind():
+    rows = [
+        _agent_evidence("agent_medical", {"fair_probability_modifier": 0.02},
+                        fetched_at="2026-04-29T12:00:00Z"),
+        _agent_evidence("agent_medical", {"fair_probability_modifier": -0.05},
+                        fetched_at="2026-04-30T12:00:00Z"),
+    ]
+    mods = parse_agent_modifiers(rows)
+    assert mods.medical_fair_probability_modifier == -0.05
+
+
+def test_parse_agent_modifiers_negative_implied_move_ignored():
+    rows = [_agent_evidence("agent_microstructure", {"implied_move_pct": -3.0})]
+    mods = parse_agent_modifiers(rows)
+    # Negative magnitudes are nonsensical for a straddle implied move; skip.
+    assert mods.microstructure_implied_move_pct is None
+
+
+def test_compose_features_medical_modifier_lifts_probability():
+    base_inputs = _build_inputs(designations={})
+    boosted = _build_inputs(
+        designations={},
+        agent_modifiers=AgentModifiers(medical_fair_probability_modifier=0.05),
+    )
+    out_base = compose_features(base_inputs)
+    out_boost = compose_features(boosted)
+    assert out_boost.fair_probability == pytest.approx(out_base.fair_probability + 0.05, abs=1e-6)
+
+
+def test_compose_features_medical_modifier_clamped_in_compose_too():
+    """Defense-in-depth: even if AgentModifiers somehow carries an out-of-bounds
+    value, compose_features clamps again."""
+    boosted = _build_inputs(
+        designations={},
+        agent_modifiers=AgentModifiers(medical_fair_probability_modifier=999.0),
+    )
+    out = compose_features(boosted)
+    assert 0.0 <= out.fair_probability <= 1.0
+
+
+def test_compose_features_regulatory_boost_raises_confidence():
+    base = compose_features(_build_inputs(agent_modifiers=AgentModifiers()))
+    boosted = compose_features(
+        _build_inputs(agent_modifiers=AgentModifiers(regulatory_evidence_confidence_boost=0.30))
+    )
+    assert boosted.evidence_confidence > base.evidence_confidence
+    assert 0.0 <= boosted.evidence_confidence <= 1.0
+
+
+def test_compose_features_microstructure_implied_move_fallback_when_polygon_missing():
+    """Microstructure agent's implied_move_pct fills in for missing Polygon data."""
+    inputs = _build_inputs(
+        straddle=None,  # Polygon unavailable
+        agent_modifiers=AgentModifiers(microstructure_implied_move_pct=15.0),
+    )
+    out = compose_features(inputs)
+    assert out.implied_move_pct == 15.0
+    assert out.market_implied_probability is not None
+    assert out.raw_inputs.get("implied_move_source") == "agent_microstructure"
+
+
+def test_compose_features_polygon_wins_when_both_present():
+    """Polygon data takes precedence; agent override only fills gaps."""
+    inputs = _build_inputs(
+        straddle={"implied_move_pct": 17.0},
+        agent_modifiers=AgentModifiers(microstructure_implied_move_pct=99.0),
+    )
+    out = compose_features(inputs)
+    assert out.implied_move_pct == 17.0
+    assert out.raw_inputs.get("implied_move_source") == "polygon_straddle"
+
+
+def test_compose_features_microstructure_liquidity_fallback():
+    inputs = _build_inputs(
+        options_liquidity=None,  # Polygon unavailable
+        agent_modifiers=AgentModifiers(microstructure_options_liquidity_score=3.5),
+    )
+    out = compose_features(inputs)
+    assert out.options_liquidity_score == 3.5
+    assert out.raw_inputs.get("options_liquidity_source") == "agent_microstructure"
+
+
+def test_compose_features_agent_modifiers_captured_in_raw_inputs():
+    mods = AgentModifiers(
+        medical_fair_probability_modifier=0.05,
+        medical_safety_concerns=["mild liver enzyme elevations"],
+        regulatory_evidence_confidence_boost=0.1,
+        regulatory_resubmission_pathway="smooth",
+    )
+    out = compose_features(_build_inputs(agent_modifiers=mods))
+    captured = out.raw_inputs["agent_modifiers"]
+    assert captured["medical_fair_probability_modifier"] == 0.05
+    assert captured["medical_safety_concerns"] == ["mild liver enzyme elevations"]
+    assert captured["regulatory_evidence_confidence_boost"] == 0.1
+    assert captured["regulatory_resubmission_pathway"] == "smooth"
+
+
+def test_compose_features_replay_includes_agent_modifiers_in_hash():
+    """Two snapshots with different modifiers must produce different hashes."""
+    a = compose_features(_build_inputs(agent_modifiers=AgentModifiers()))
+    b = compose_features(
+        _build_inputs(agent_modifiers=AgentModifiers(medical_fair_probability_modifier=0.05))
+    )
+    assert a.inputs_hash != b.inputs_hash
 
 
 def test_replay_with_same_canonical_inputs_yields_same_hash():

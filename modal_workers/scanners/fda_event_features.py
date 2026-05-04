@@ -44,9 +44,9 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from modal_workers.providers.polygon.market_data import MarketDataProvider
 from modal_workers.providers.polygon.options_data import OptionsDataProvider
@@ -86,6 +86,14 @@ BAND_THRESHOLDS_DEFAULT: Dict[str, float] = {
     "watchlist": 25.0,
     "archive": 15.0,
 }
+
+# Phase 5 specialist-agent modifier bounds. These cap how far an individual
+# agent can move the deterministic feature math, regardless of what the agent
+# claims. The plan locks calibration of priors and thresholds to Phase 6 only;
+# these bounds are not auto-calibrated.
+MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND = 0.10   # ±10pp on fair_probability
+REGULATORY_CONFIDENCE_BOOST_BOUND = 0.40         # ±0.40 on evidence_confidence
+MICROSTRUCTURE_LIQUIDITY_OVERRIDE_RANGE = (0.0, 5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +342,133 @@ def compute_score(
 
 
 @dataclass
+class AgentModifiers:
+    """Folded specialist-agent inputs to compose_features.
+
+    Each field is bounded at the parser; clamps are applied again in
+    compose_features for defense-in-depth. Agents do not directly set
+    score/band — they nudge specific feature inputs.
+
+    medical_fair_probability_modifier: signed pp shift (clamped ±0.10) on
+        the base+designations probability.
+    medical_safety_concerns: informational, surfaces in raw_inputs only.
+    regulatory_evidence_confidence_boost: signed [-0.40, +0.40] additive
+        boost to evidence_confidence (then re-clamped to [0, 1]).
+    regulatory_resubmission_pathway: informational ('smooth'|'difficult'|...).
+    microstructure_options_liquidity_score: agent's 0..5 score; used only
+        when Polygon's event-window score is None.
+    microstructure_implied_move_pct: agent's % move; used only when Polygon
+        straddle is None. Drives market_implied_probability via the same
+        binary-event inversion as Polygon-derived moves.
+    microstructure_borrow_cost_bps: informational.
+    microstructure_crowding_score: informational (0..5).
+    """
+    medical_fair_probability_modifier: float = 0.0
+    medical_safety_concerns: List[str] = field(default_factory=list)
+    regulatory_evidence_confidence_boost: float = 0.0
+    regulatory_resubmission_pathway: Optional[str] = None
+    microstructure_options_liquidity_score: Optional[float] = None
+    microstructure_implied_move_pct: Optional[float] = None
+    microstructure_borrow_cost_bps: Optional[float] = None
+    microstructure_crowding_score: Optional[float] = None
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_agent_modifiers(
+    evidence_rows: Sequence[Mapping[str, Any]],
+) -> AgentModifiers:
+    """Extract structured agent outputs from active evidence rows.
+
+    Reads only rows with source∈{agent_medical, agent_regulatory,
+    agent_microstructure} and evidence_status='active' (or unset, treated
+    as active for backward compatibility). When multiple rows of the same
+    kind exist, the most recent (by fetched_at) wins; ties fall back to
+    the last row in the list.
+
+    Bounds are enforced here so the rest of the pipeline can trust the
+    AgentModifiers it receives.
+    """
+    latest: Dict[str, Mapping[str, Any]] = {}
+    fetched_at: Dict[str, str] = {}
+    for ev in evidence_rows or []:
+        source = (ev.get("source") or "").lower()
+        if not source.startswith("agent_"):
+            continue
+        if (ev.get("evidence_status") or "active") != "active":
+            continue
+        key = source  # agent_medical, agent_regulatory, agent_microstructure
+        ts = str(ev.get("fetched_at") or "")
+        # Lex compare on ISO timestamps; later wins. Empty string sorts last
+        # only if no prior entry — falling back to insertion order.
+        prev_ts = fetched_at.get(key)
+        if prev_ts is None or ts >= prev_ts:
+            latest[key] = ev
+            fetched_at[key] = ts
+
+    mods = AgentModifiers()
+
+    medical = latest.get("agent_medical")
+    if medical is not None:
+        payload = medical.get("payload") or {}
+        modifier = _safe_float(payload.get("fair_probability_modifier"))
+        if modifier is not None:
+            mods.medical_fair_probability_modifier = _clamp(
+                modifier,
+                -MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND,
+                MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND,
+            )
+        concerns = payload.get("safety_concerns")
+        if isinstance(concerns, list):
+            mods.medical_safety_concerns = [str(c) for c in concerns if c]
+
+    regulatory = latest.get("agent_regulatory")
+    if regulatory is not None:
+        payload = regulatory.get("payload") or {}
+        boost = _safe_float(payload.get("evidence_confidence_boost"))
+        if boost is not None:
+            mods.regulatory_evidence_confidence_boost = _clamp(
+                boost,
+                -REGULATORY_CONFIDENCE_BOOST_BOUND,
+                REGULATORY_CONFIDENCE_BOOST_BOUND,
+            )
+        pathway = payload.get("resubmission_pathway")
+        if pathway:
+            mods.regulatory_resubmission_pathway = str(pathway)
+
+    micro = latest.get("agent_microstructure")
+    if micro is not None:
+        payload = micro.get("payload") or {}
+        liq = _safe_float(payload.get("options_liquidity_score"))
+        if liq is not None:
+            mods.microstructure_options_liquidity_score = _clamp(
+                liq, *MICROSTRUCTURE_LIQUIDITY_OVERRIDE_RANGE
+            )
+        imp = _safe_float(payload.get("implied_move_pct"))
+        if imp is not None and imp >= 0:
+            mods.microstructure_implied_move_pct = imp
+        borrow = _safe_float(payload.get("borrow_cost_bps"))
+        if borrow is not None:
+            mods.microstructure_borrow_cost_bps = borrow
+        crowding = _safe_float(payload.get("crowding_score"))
+        if crowding is not None:
+            mods.microstructure_crowding_score = _clamp(crowding, 0.0, 5.0)
+
+    return mods
+
+
+@dataclass
 class FeatureInputs:
     indication: Optional[str]
     designations: Dict[str, Any]
@@ -346,6 +481,7 @@ class FeatureInputs:
     options_liquidity: Optional[Dict[str, Any]]   # output of OptionsDataProvider.get_event_window_liquidity
     evidence_count: int
     agent_confidences: List[float]
+    agent_modifiers: AgentModifiers = field(default_factory=AgentModifiers)
     band_thresholds: Mapping[str, float] = None  # type: ignore[assignment]
 
 
@@ -381,29 +517,63 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
     fetched provider data. Tests can call this directly with hand-built inputs.
     """
     band_thresholds = inputs.band_thresholds or BAND_THRESHOLDS_DEFAULT
+    mods = inputs.agent_modifiers or AgentModifiers()
 
-    fair_p = apply_designation_modifiers(
+    fair_p_pre_modifier = apply_designation_modifiers(
         base_probability(inputs.indication, inputs.base_rates),
         inputs.designations,
+    )
+    # Medical agent shifts probability within ±10pp; clamp again for defense.
+    fair_p = _clamp(
+        fair_p_pre_modifier
+        + _clamp(
+            mods.medical_fair_probability_modifier,
+            -MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND,
+            MEDICAL_FAIR_PROBABILITY_MODIFIER_BOUND,
+        ),
+        0.0,
+        1.0,
     )
 
     upside_pct, downside_pct = magnitude_defaults_for_mcap(inputs.market_cap_usd)
 
     implied_move_pct: Optional[float] = None
+    implied_move_source: Optional[str] = None
     market_p: Optional[float] = None
     if inputs.straddle and inputs.straddle.get("implied_move_pct") is not None:
         implied_move_pct = float(inputs.straddle["implied_move_pct"])
+        implied_move_source = "polygon_straddle"
+        market_p = implied_move_to_market_probability(implied_move_pct, upside_pct, downside_pct)
+    elif mods.microstructure_implied_move_pct is not None:
+        # Microstructure agent override only kicks in when Polygon was unavailable.
+        implied_move_pct = float(mods.microstructure_implied_move_pct)
+        implied_move_source = "agent_microstructure"
         market_p = implied_move_to_market_probability(implied_move_pct, upside_pct, downside_pct)
 
     options_liq_score: Optional[float] = None
+    options_liq_source: Optional[str] = None
     if inputs.options_liquidity and inputs.options_liquidity.get("liquidity_score") is not None:
         options_liq_score = float(inputs.options_liquidity["liquidity_score"])
+        options_liq_source = "polygon"
+    elif mods.microstructure_options_liquidity_score is not None:
+        options_liq_score = float(mods.microstructure_options_liquidity_score)
+        options_liq_source = "agent_microstructure"
 
     ev_pct = expected_value_pct(fair_p, upside_pct, downside_pct)
     edge = pricing_edge(fair_p, market_p)
-    confidence = evidence_confidence(
+    confidence_pre_boost = evidence_confidence(
         evidence_count=inputs.evidence_count,
         agent_confidences=inputs.agent_confidences,
+    )
+    confidence = _clamp(
+        confidence_pre_boost
+        + _clamp(
+            mods.regulatory_evidence_confidence_boost,
+            -REGULATORY_CONFIDENCE_BOOST_BOUND,
+            REGULATORY_CONFIDENCE_BOOST_BOUND,
+        ),
+        0.0,
+        1.0,
     )
 
     days = _days_to_event(inputs.snapshot_at, inputs.event_date)
@@ -434,11 +604,25 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
         "options_liquidity": inputs.options_liquidity,
         "evidence_count": inputs.evidence_count,
         "agent_confidences": list(inputs.agent_confidences),
+        "agent_modifiers": {
+            "medical_fair_probability_modifier": mods.medical_fair_probability_modifier,
+            "medical_safety_concerns": list(mods.medical_safety_concerns),
+            "regulatory_evidence_confidence_boost": mods.regulatory_evidence_confidence_boost,
+            "regulatory_resubmission_pathway": mods.regulatory_resubmission_pathway,
+            "microstructure_options_liquidity_score": mods.microstructure_options_liquidity_score,
+            "microstructure_implied_move_pct": mods.microstructure_implied_move_pct,
+            "microstructure_borrow_cost_bps": mods.microstructure_borrow_cost_bps,
+            "microstructure_crowding_score": mods.microstructure_crowding_score,
+        },
+        "fair_probability_pre_modifier": fair_p_pre_modifier,
         "fair_probability": fair_p,
         "implied_move_pct": implied_move_pct,
+        "implied_move_source": implied_move_source,
+        "options_liquidity_source": options_liq_source,
         "market_implied_probability": market_p,
         "upside_pct": upside_pct,
         "downside_pct": downside_pct,
+        "evidence_confidence_pre_boost": confidence_pre_boost,
         "band_thresholds": dict(band_thresholds),
     }
     return FeatureSnapshot(
@@ -533,17 +717,24 @@ def build_features(
         except Exception as exc:
             logger.warning("polygon options liquidity failed for %s: %s", ticker, exc)
 
-    # Roll up specialist agent confidences from evidence rows tagged as agent_*.
+    # Roll up specialist agent confidences + structured modifiers from
+    # evidence rows tagged as agent_*. Only active rows count — operators
+    # can mark bad evidence via the dashboard, which sets evidence_status='rejected'.
     agent_confidences: List[float] = []
     for ev in evidence_rows or []:
-        if (ev.get("source") or "").startswith("agent_"):
-            payload = ev.get("payload") or {}
-            conf = payload.get("confidence")
-            if conf is not None:
-                try:
-                    agent_confidences.append(float(conf))
-                except (TypeError, ValueError):
-                    pass
+        if not (ev.get("source") or "").startswith("agent_"):
+            continue
+        if (ev.get("evidence_status") or "active") != "active":
+            continue
+        payload = ev.get("payload") or {}
+        conf = payload.get("confidence")
+        if conf is not None:
+            try:
+                agent_confidences.append(float(conf))
+            except (TypeError, ValueError):
+                pass
+
+    agent_modifiers = parse_agent_modifiers(evidence_rows or [])
 
     inputs = FeatureInputs(
         indication=indication,
@@ -557,5 +748,6 @@ def build_features(
         options_liquidity=options_liquidity,
         evidence_count=len(evidence_rows or []),
         agent_confidences=agent_confidences,
+        agent_modifiers=agent_modifiers,
     )
     return compose_features(inputs)
