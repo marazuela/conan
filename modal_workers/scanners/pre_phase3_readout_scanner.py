@@ -20,8 +20,12 @@ Deviations from v1:
     instead of config/phase3_approval_base_rates.json. Per-process dict cache.
   - source_content_hash carries the spec.md §3.4 "sha256:<64hex>" prefix.
   - Entity hint is the sponsor corporate name + country=US. Sponsor->ticker
-    resolution happens downstream via openfigi_resolver in the reactor; the
-    scanner does not attempt inline OpenFIGI lookup (no ticker to pass).
+    resolution runs inline via sec_issuer_lookup.IssuerIndex (SEC's
+    company_tickers.json, ~9k US-listed issuers, 30d cached). When a sponsor
+    resolves, EntityHints carries ticker+cik+title+issuer_figi+mic; OpenFIGI
+    is invoked on the SEC ticker to fetch the FIGI. Without this, household
+    pharma names ("AbbVie", "Sanofi", "AstraZeneca") landed with primary_ticker
+    NULL because no ticker was ever passed to the reactor's openfigi step.
   - strength_estimate: 3 default; 4 if indication base rate >= 0.60; 5 if >= 0.80.
   - Already-approved-drug filter (DLQ batch 2026-04-27): after the triage gate,
     each trial's drug interventions are checked against the openFDA Orange Book
@@ -41,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -55,6 +60,7 @@ from modal_workers.shared.biotech_base_rates import (
     map_conditions_to_base_key as _map_conditions_to_base_key,
 )
 from modal_workers.shared.scanner_base import Signal, ScannerResult
+from modal_workers.shared.sec_issuer_lookup import IssuerIndex, IssuerMatch
 from modal_workers.shared.supabase_client import (
     EntityHints,
     ScannerConfig,
@@ -484,7 +490,11 @@ def _content_hash(nct_id: str, primary_date: str) -> str:
     return f"sha256:{hashlib.sha256(f'{nct_id}|{primary_date}'.encode()).hexdigest()}"
 
 
-def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signal]:
+def _build_signal(
+    scored: Dict[str, Any],
+    scan_date: datetime,
+    issuer_index: Optional[IssuerIndex] = None,
+) -> Optional[Signal]:
     nct = scored["nct_id"]
     if not nct:
         return None
@@ -500,6 +510,30 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
     # source_date: primary completion date (catalyst anchor); fallback to scan_date.
     pc_dt = _parse_date(pcd)
     source_date = pc_dt or scan_date
+
+    # Sponsor → public-issuer resolution. Without this, household pharma names
+    # ("AbbVie", "Sanofi", "AstraZeneca") landed with primary_ticker NULL because
+    # the reactor's openfigi step had no ticker to look up. SEC's tickers list
+    # covers ~9k US-listed issuers (incl. ADRs like SNY/AZN), is free, and is
+    # already cached 30d in Storage by sec_issuer_lookup.
+    issuer_match: Optional[IssuerMatch] = None
+    if issuer_index is not None and sponsor and sponsor != "Unknown sponsor":
+        issuer_match = issuer_index.resolve(sponsor)
+
+    # When SEC resolves, also fetch the FIGI from OpenFIGI on the resolved
+    # ticker so EntityHints carries figi+mic. Best-effort; failure leaves
+    # figi/mic NULL but ticker+cik are still authoritative.
+    issuer_figi: Optional[str] = None
+    figi_mic: Optional[str] = None
+    if issuer_match is not None:
+        try:
+            from modal_workers.shared.openfigi_resolver import resolve_ticker
+            res = resolve_ticker(issuer_match.ticker, exch_code="US")
+            if res.resolved:
+                issuer_figi = res.issuer_figi
+                figi_mic = res.mic
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
 
     headline = f"Phase 3 readout {when}: {sponsor} — {scored['brief_title'][:90]}"
     summary = (
@@ -538,6 +572,12 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
         "headline": headline,
         "summary": summary,
         "company_name_en": sponsor,
+        # Sponsor universe-resolution trace (mirrors courtlistener_scanner).
+        "universe_resolved": issuer_match is not None,
+        "universe_match_kind": issuer_match.match_kind if issuer_match else None,
+        "universe_ticker": issuer_match.ticker if issuer_match else None,
+        "universe_cik": issuer_match.cik if issuer_match else None,
+        "universe_title": issuer_match.title if issuer_match else None,
         # Auto-cap inputs preserved from v1 for run_post_scan downstream:
         "definitive_merger_agreement": False,
         "prior_failed_phase3_same_indication": False,
@@ -545,8 +585,17 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
         "downside_pct": 35.0,
     }
 
+    # SEC match wins for name (authoritative spelling); raw sponsor used otherwise.
+    name_for_hint = (
+        issuer_match.title if issuer_match
+        else (sponsor if sponsor != "Unknown sponsor" else None)
+    )
     entity_hints = EntityHints(
-        name=sponsor if sponsor != "Unknown sponsor" else None,
+        issuer_figi=issuer_figi,
+        ticker=issuer_match.ticker if issuer_match else None,
+        mic=figi_mic,
+        cik=issuer_match.cik if issuer_match else None,
+        name=name_for_hint,
         country="US",
     )
 
@@ -558,6 +607,7 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
         signal_type="pre_phase3_readout",
         raw_payload=raw_payload,
         source_url=source_url,
+        issuer_figi=issuer_figi,
         entity_hints=entity_hints,
         thesis_direction="long",
         strength_estimate=_strength_for(approval_prob),
@@ -571,14 +621,23 @@ def _build_signal(scored: Dict[str, Any], scan_date: datetime) -> Optional[Signa
 def scan(cfg: ScannerConfig) -> ScannerResult:
     client = SupabaseClient()
 
-    # Wire openfigi cache backend through Supabase Storage (even though this
-    # scanner doesn't invoke openfigi inline, the convention is set for parity
-    # with other Modal scanners and downstream resolvers reuse the same process).
+    # Wire openfigi cache backend through Supabase Storage. Now that this
+    # scanner *does* invoke openfigi inline (after a successful SEC issuer
+    # match), the cache backend matters for cross-scanner FIGI cache reuse.
     try:
         from modal_workers.shared.openfigi_resolver import set_cache_backend
         set_cache_backend(*client.openfigi_cache_backend())
     except Exception:
         pass  # best-effort; scanner doesn't hard-depend on openfigi
+
+    # Load SEC issuer index once per run — used inside _build_signal to resolve
+    # sponsor name → ticker/cik/title. Failure is non-fatal; the scanner falls
+    # back to name-only entity_hints (which was the pre-fix behavior).
+    sec_user_agent = os.environ.get("SEC_USER_AGENT") or "Conan Scanner"
+    try:
+        issuer_index = IssuerIndex.load(client, user_agent=sec_user_agent)
+    except Exception:  # noqa: BLE001
+        issuer_index = None
 
     base_rates = _load_base_rates(client)
 
@@ -587,6 +646,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     scan_start = time.time()
 
     warnings: List[str] = []
+    if issuer_index is None:
+        warnings.append("sec_issuer_lookup unavailable — sponsors emit without ticker")
     signals: List[Signal] = []
     seen_nct: set[str] = set()
 
@@ -595,6 +656,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     below_gate = 0
     skipped_already_approved = 0
+    unresolved_sponsors: List[str] = []
     for t in trials:
         if time.time() - scan_start > budget:
             warnings.append(f"wall-clock budget ({budget}s) exceeded during scoring")
@@ -635,10 +697,26 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             )
             continue
 
-        sig = _build_signal(scored, scan_date)
+        sig = _build_signal(scored, scan_date, issuer_index=issuer_index)
         if sig is None:
             continue
+        # Track sponsors that cleared the gate but didn't resolve to a public
+        # issuer. Every emitted sponsor here funded an INDUSTRY-class Phase 3
+        # with patterns_hit>=3 — most are large pharmas that should resolve.
+        # Misses are usually EU/Asian listings absent from SEC's US-only list,
+        # private biotechs, or odd-spelled subsidiaries (e.g. "Sanofi-Aventis
+        # Recherche & Développement"). Worth a warning so the audit can
+        # decide whether to add an alias map.
+        if issuer_index is not None and not sig.raw_payload.get("universe_resolved"):
+            unresolved_sponsors.append(scored["sponsor_name"] or "?")
         signals.append(sig)
+
+    if unresolved_sponsors:
+        sample = ", ".join(sorted(set(unresolved_sponsors))[:5])
+        warnings.append(
+            f"sec_issuer_lookup unresolved for {len(unresolved_sponsors)} INDUSTRY "
+            f"sponsor(s): {sample}"
+        )
 
     status = "partial" if warnings else "ok"
     if warnings and not signals and not trials:
