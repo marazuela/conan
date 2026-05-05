@@ -136,6 +136,38 @@ def dimensions_with_provenance(
     return payload
 
 
+def flatten_persisted_dimensions(dims: Dict[str, Any]) -> Dict[str, int]:
+    """Inverse of dimensions_with_provenance.
+
+    signal_resolver persists the nested envelope `{dim:{value,provenance},
+    _provenance}` on `signals.dimensions`; `apply_auto_caps` and `score_signal`
+    want flat ints. Without this step, a dict slips into `dims.get(dim) < 3`
+    and raises TypeError (litigation), or silently returns False against an
+    int (merger_arb) — both seen live.
+
+    Bools drop out because `isinstance(True, int)` would otherwise mask them.
+    """
+    out: Dict[str, int] = {}
+    for k, v in (dims or {}).items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, float):
+            out[k] = int(v)
+        elif isinstance(v, dict):
+            inner = v.get("value")
+            if isinstance(inner, bool):
+                continue
+            if isinstance(inner, int):
+                out[k] = inner
+            elif isinstance(inner, float):
+                out[k] = int(inner)
+    return out
+
+
 def build_scoring_meta(
     *,
     provenance: str,

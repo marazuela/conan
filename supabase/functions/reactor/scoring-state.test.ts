@@ -1,5 +1,6 @@
 import {
   classifyProvisionalHeuristic,
+  flattenPersistedDimensions,
   isProvisionalHeuristic,
   scoringMeta,
   scoringProvenance,
@@ -122,6 +123,72 @@ Deno.test("classifyProvisionalHeuristic treats extensions=null as malformed when
   assert(result.malformed === true, "null extensions with heuristic provenance is malformed");
 });
 
+Deno.test("flattenPersistedDimensions strips _provenance key", () => {
+  const out = flattenPersistedDimensions({ _provenance: "ai_resolved" });
+  assert(Object.keys(out).length === 0, "expected empty dict");
+});
+
+Deno.test("flattenPersistedDimensions passes flat ints through", () => {
+  const out = flattenPersistedDimensions({ spread_size: 5, liquidity: 3 });
+  assert(out.spread_size === 5 && out.liquidity === 3, "flat ints unchanged");
+});
+
+Deno.test("flattenPersistedDimensions extracts value from envelope", () => {
+  const out = flattenPersistedDimensions({
+    party_resolution_confidence: { value: 2, provenance: "ai_resolved" },
+    financial_materiality: { value: 5, provenance: "ai_resolved" },
+    _provenance: "ai_resolved",
+  });
+  assert(
+    out.party_resolution_confidence === 2 && out.financial_materiality === 5,
+    "envelope values should be extracted",
+  );
+  assert(!("_provenance" in out), "_provenance key should not leak through");
+});
+
+Deno.test("flattenPersistedDimensions handles mixed envelope and flat", () => {
+  const out = flattenPersistedDimensions({
+    party_resolution_confidence: { value: 1, provenance: "ai_resolved" },
+    legacy_flat_dim: 4,
+    _provenance: "mixed",
+  });
+  assert(out.party_resolution_confidence === 1, "envelope extracted");
+  assert(out.legacy_flat_dim === 4, "flat int preserved");
+});
+
+Deno.test("flattenPersistedDimensions truncates floats to int", () => {
+  const out = flattenPersistedDimensions({
+    a: 3.7,
+    b: { value: 3.2, provenance: "x" },
+  });
+  assert(out.a === 3 && out.b === 3, "floats must truncate");
+});
+
+Deno.test("flattenPersistedDimensions drops bools", () => {
+  const out = flattenPersistedDimensions({ foo: true, bar: false, baz: { value: true } });
+  assert(Object.keys(out).length === 0, "bools must drop");
+});
+
+Deno.test("flattenPersistedDimensions handles empty/null input", () => {
+  assert(Object.keys(flattenPersistedDimensions({})).length === 0, "empty");
+  assert(Object.keys(flattenPersistedDimensions(null)).length === 0, "null");
+  assert(Object.keys(flattenPersistedDimensions(undefined)).length === 0, "undefined");
+});
+
+Deno.test("flattenPersistedDimensions drops envelope entries without a value key", () => {
+  const out = flattenPersistedDimensions({ foo: { provenance: "x" } });
+  assert(Object.keys(out).length === 0, "missing value key drops");
+});
+
+Deno.test("flattenPersistedDimensions is idempotent", () => {
+  const once = flattenPersistedDimensions({
+    foo: { value: 2, provenance: "ai_resolved" },
+    _provenance: "ai_resolved",
+  });
+  const twice = flattenPersistedDimensions(once);
+  assert(once.foo === 2 && twice.foo === 2, "idempotent extraction");
+});
+
 Deno.test("shouldProcessUpdate ignores reactor self-writes", () => {
   assert(
     shouldProcessUpdate(
@@ -137,5 +204,64 @@ Deno.test("shouldProcessUpdate ignores reactor self-writes", () => {
       },
     ) === false,
     "unchanged heuristic rows should not loop reactor on its own stamping updates",
+  );
+});
+
+Deno.test("shouldProcessUpdate skips ai_resolved -> ai_resolved when already stamped", () => {
+  const row = {
+    score: 37,
+    score_with_bonus: 42,
+    band_with_bonus: "immediate",
+    dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  };
+  assert(
+    shouldProcessUpdate(row, row) === false,
+    "already-stamped ai_resolved rows must not storm rubric_apply_caps",
+  );
+});
+
+Deno.test("shouldProcessUpdate re-enters ai_resolved -> ai_resolved when convergence never stamped", () => {
+  const prev = {
+    score: 37,
+    score_with_bonus: null,
+    band_with_bonus: null,
+    dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  };
+  const next = {
+    score: 37,
+    score_with_bonus: null,
+    band_with_bonus: null,
+    dimensions: { approval_probability: 4, _provenance: "ai_resolved" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  };
+  assert(
+    shouldProcessUpdate(next, prev) === true,
+    "resolver refinement on an un-stamped row must finish convergence",
+  );
+});
+
+Deno.test("shouldProcessUpdate re-enters heuristic -> ai_resolved even when already stamped", () => {
+  // score_with_bonus shouldn't exist pre-resolution, but if it does (analyst
+  // backfill, stale data), the heuristic->ai_resolved branch still takes
+  // precedence — the persisted rubric output must reflect the resolved dims.
+  const prev = {
+    score: 30,
+    score_with_bonus: 30,
+    band_with_bonus: "watchlist",
+    dimensions: { approval_probability: 3, _provenance: "heuristic" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  };
+  const next = {
+    score: 37,
+    score_with_bonus: null,
+    band_with_bonus: null,
+    dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+    extensions: { scoring_meta: { requires_resolution: false } },
+  };
+  assert(
+    shouldProcessUpdate(next, prev) === true,
+    "heuristic->ai_resolved transition always re-enters, regardless of stamp state",
   );
 });
