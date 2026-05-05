@@ -230,6 +230,10 @@ async function build() {
     },
     open_flags: {
       critical: flags.filter((f) => f.severity === "critical").length,
+      // `error` is emitted by reactor/index.ts and modal_workers/observability.py;
+      // counted alongside critical (both surface as red in state.ts) so dashboard
+      // totals don't silently drop them.
+      error: flags.filter((f) => f.severity === "error").length,
       warn: flags.filter((f) => f.severity === "warn").length,
       info: flags.filter((f) => f.severity === "info").length,
     },

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import requests
 
 from modal_workers.shared.scanner_base import Signal, ScannerResult, _signal_to_row, run_scanner
+from modal_workers.shared.rubric_engine import RUBRIC_VERSION
 from modal_workers.shared.supabase_client import ScannerConfig
 
 
@@ -15,6 +16,7 @@ class FakeClient:
         self.close_exc: Exception | None = None
         self.update_exc: Exception | None = None
         self.raise_prefetch = False
+        self.rubric_lookups = []
 
     def load_scanner_config(self, scanner_name: str) -> ScannerConfig:
         return ScannerConfig(
@@ -42,7 +44,8 @@ class FakeClient:
     def resolve_or_create_entity(self, hints, prefetched=None) -> str:
         return "entity-1"
 
-    def load_rubric_version_id(self, profile: str) -> str:
+    def load_rubric_version_id(self, profile: str, rubric_version: int | None = None) -> str:
+        self.rubric_lookups.append((profile, rubric_version))
         return "rubric-1"
 
     def insert_signals(self, signals):
@@ -200,3 +203,15 @@ def test_signal_to_row_omits_data_freshness_when_no_snapshot_attempted():
 
     meta = row["extensions"]["scoring_meta"]
     assert "data_freshness" not in meta
+
+
+def test_signal_to_row_pins_rubric_lookup_to_code_version():
+    client = FakeClient()
+    sig = _takeover_signal(
+        valuation_discount_pct=22,
+        adv_usd=18_000_000,
+    )
+    row = _signal_to_row(sig, _cfg(), entity_id="ent-1", scanner_run_id="run-1", client=client)
+
+    assert row["rubric_version_id"] == "rubric-1"
+    assert client.rubric_lookups == [("takeover_candidate", RUBRIC_VERSION)]

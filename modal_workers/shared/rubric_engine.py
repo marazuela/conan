@@ -20,16 +20,20 @@ Any change to WEIGHTS or auto-caps MUST:
   1. Introduce a new rubric_version in the rubrics table (do NOT mutate version 1).
   2. Add a new rule_id for the cap (do NOT rename existing rule_ids).
   3. Be reflected in spec.md §12 under "Additional surfaced conflicts".
+  4. Update RUBRIC_VERSION in this module so signals.rubric_version_id is pinned
+     to the exact DB row whose weights/caps this code implements.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 
 # --------------------------------------------------------------------
 # Profile weight tables
 # --------------------------------------------------------------------
+
+RUBRIC_VERSION = 1
 
 WEIGHTS: Dict[str, Dict[str, float]] = {
     "merger_arb": {
@@ -247,6 +251,16 @@ def validate_scoring_meta(meta: Any) -> List[str]:
 RISK_FREE_RATE = 0.043  # 10Y UST as of 2026-04-16 (carried from v1)
 EV_FLOOR = 5.0          # percent (binary_catalyst)
 
+# 2026-04-27: AbbVie / Sanofi / AstraZeneca PDUFA signals were landing in the
+# immediate band at 31–36 with `magnitude=1` correctly set by the AI. The
+# rubric formula still let approval_probability=5 (×2.5) + catalyst_timeline=5
+# (×1.0) dominate, and thesis_writer was killing them downstream as "no
+# asymmetry on $130B parent stock." The cap moves them to watchlist before they
+# burn AI cycles. A truly binary readout on a megacap (e.g. JNJ Stelara LOE)
+# also gets capped — acceptable: the watchlist signal still flows for manual
+# promotion.
+MEGACAP_ABSORPTION_THRESHOLD_USD = 50_000_000_000
+
 
 def _coerce_patterns_hit(v: Any) -> int:
     """Normalise takeover_candidate raw_data.patterns_hit to an int.
@@ -266,6 +280,60 @@ def _coerce_patterns_hit(v: Any) -> int:
     if isinstance(v, float):
         return int(v)
     return 0
+
+
+# --------------------------------------------------------------------
+# Cap → narrative mapping for signals.demotion_reason
+#
+# The rule_id strings in auto_caps_triggered are the machine contract
+# (replay tests, dashboards). compute_demotion_reason() turns them into a
+# short curator-readable phrase persisted to signals.demotion_reason. New
+# caps must register here AND in apply_auto_caps below; an unmapped cap
+# falls back to the rule_id verbatim, which still surfaces *something*
+# but loses the human gloss.
+# --------------------------------------------------------------------
+
+_CAP_NARRATIVES: Dict[str, str] = {
+    "merger_arb.rule_A_sub_scale_return":
+        "Annualized return below risk-free + 3% threshold",
+    "merger_arb.rule_B_break_risk_dominance":
+        "Break-risk dominant with low deal certainty",
+    "binary_catalyst.ev_floor":
+        "Expected value below 5% floor",
+    "binary_catalyst.megacap_absorption_cap":
+        "Megacap parent absorbs binary catalyst (low-magnitude readout)",
+    "litigation.party_confidence_cap":
+        "Party-resolution confidence too low (caption parse weak)",
+    "litigation.universe_miss_cap":
+        "Defendant outside public-issuer universe (NOS not high-priority)",
+    "takeover_candidate.post_edge_disqualified":
+        "Definitive merger agreement filed — signal is post-edge",
+    "takeover_candidate.prior_rejection_cap":
+        "Issuer rejected prior offer within last 6 months",
+    "takeover_candidate.going_concern_cap":
+        "Going-concern warning present (distress overshadows takeover thesis)",
+    "takeover_candidate.below_triage_gate":
+        "Below triage gate (insufficient pattern hits)",
+}
+
+
+def compute_demotion_reason(caps: List[str]) -> Optional[str]:
+    """Return a short narrative for the first triggered cap, else None.
+
+    `caps` is the auto_caps_triggered list from apply_auto_caps. Each entry
+    starts with a stable rule_id and may include a parameterised suffix
+    (e.g. `binary_catalyst.ev_floor (ev=2.34)`). We split on first space
+    to recover the rule_id stem, look it up in `_CAP_NARRATIVES`, and
+    append the full cap entry in parens so the parameter survives.
+    """
+    if not caps:
+        return None
+    primary = caps[0]
+    stem = primary.split(" ", 1)[0]
+    narrative = _CAP_NARRATIVES.get(stem)
+    if narrative is None:
+        return primary
+    return f"{narrative} ({primary})"
 
 
 def apply_auto_caps(
@@ -293,14 +361,27 @@ def apply_auto_caps(
                 caps.append("merger_arb.rule_B_break_risk_dominance")
 
     elif profile == "binary_catalyst":
-        p_approval = signal.get("raw_data", {}).get("approval_probability")
-        upside = signal.get("raw_data", {}).get("upside_pct")
-        downside = signal.get("raw_data", {}).get("downside_pct")
+        raw = signal.get("raw_data", {}) or {}
+        p_approval = raw.get("approval_probability")
+        upside = raw.get("upside_pct")
+        downside = raw.get("downside_pct")
         if p_approval is not None and upside is not None and downside is not None:
             ev = p_approval * upside - (1 - p_approval) * abs(downside)
             if ev < EV_FLOOR and band == "immediate":
                 band = "watchlist"
                 caps.append(f"binary_catalyst.ev_floor (ev={ev:.2f})")
+
+        mcap = raw.get("market_cap_usd")
+        magnitude = dims.get("magnitude")
+        if (
+            isinstance(mcap, (int, float))
+            and mcap > MEGACAP_ABSORPTION_THRESHOLD_USD
+            and isinstance(magnitude, int)
+            and magnitude < 3
+            and band == "immediate"
+        ):
+            band = "watchlist"
+            caps.append("binary_catalyst.megacap_absorption_cap")
 
     elif profile == "litigation":
         # 2026-04-24 selectivity tightening (courtlistener flood review):
@@ -361,12 +442,22 @@ def apply_auto_caps(
 # Signal scoring
 # --------------------------------------------------------------------
 
+class UnknownScoringProfile(ValueError):
+    """Raised when a caller asks for a profile that is not in WEIGHTS.
+
+    The scanner registry should prevent this, but the scorer is the last
+    defensive boundary before bad rows can be persisted. Unknown profile drift is
+    safer as a loud per-signal error than a quiet activist_governance mis-score.
+    """
+
+
 def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict[str, Any]:
     """Apply the matching profile rubric to a raw signal.
 
     Input contract:
-      signal["scoring_profile"] — one of WEIGHTS keys. Falls back to 'activist_governance'
-        if missing or unknown (matches v1 behaviour).
+      signal["scoring_profile"] — one of WEIGHTS keys. Missing profile falls back
+        to 'activist_governance' for v1 parity; unknown non-empty profiles raise
+        UnknownScoringProfile rather than silently mis-scoring.
       signal["raw_data"]["dimensions"] — dict of dim_name → int[1..5]. If ANY required
         dim for the profile is missing, the signal is returned unscored (score=None,
         band=None) rather than silently filled with defaults. Values are clamped to
@@ -396,7 +487,10 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
     """
     profile = signal.get("scoring_profile") or "activist_governance"
     if profile not in WEIGHTS:
-        profile = "activist_governance"
+        raise UnknownScoringProfile(
+            f"score_signal: {profile!r} is not in WEIGHTS "
+            f"(known: {sorted(WEIGHTS.keys())})"
+        )
 
     raw_dims = signal.get("raw_data", {}).get("dimensions") or {}
     required = list(WEIGHTS[profile].keys())
@@ -408,6 +502,7 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
             "score": None,
             "band": None,
             "auto_caps_triggered": [],
+            "demotion_reason": None,
             "missing_dimensions": missing,
         }
 
@@ -428,23 +523,13 @@ def score_signal(signal: Dict[str, Any], *, provenance: str = "scanner") -> Dict
         "score": score,
         "band": band,
         "auto_caps_triggered": caps,
+        "demotion_reason": compute_demotion_reason(caps),
     }
 
 
 # --------------------------------------------------------------------
 # Re-score with externally supplied dims
 # --------------------------------------------------------------------
-
-class UnknownScoringProfile(ValueError):
-    """Raised by rescore_with_dims when called with a profile that isn't in WEIGHTS.
-
-    `score_signal` silently falls back to activist_governance for unknown profiles
-    (v1 parity for scanner-emitted signals that outran the registry), but a skill
-    calling rescore_with_dims has already resolved the profile from the signals
-    row — a typo or schema drift should surface, not quietly mis-score against
-    the wrong rubric.
-    """
-
 
 def rescore_with_dims(
     scoring_profile: str,
@@ -467,8 +552,7 @@ def rescore_with_dims(
     "ai_resolved", "analyst".
 
     Raises `UnknownScoringProfile` if the caller passes a profile not in
-    WEIGHTS. This is a stricter contract than `score_signal` which silently
-    falls back to activist_governance for scanner-side unknowns.
+    WEIGHTS, matching `score_signal`'s non-empty unknown-profile behavior.
     """
     if scoring_profile not in WEIGHTS:
         raise UnknownScoringProfile(
@@ -494,6 +578,7 @@ def rescore_with_dims(
         "score": result["score"],
         "band": result["band"],
         "auto_caps_triggered": result["auto_caps_triggered"],
+        "demotion_reason": result.get("demotion_reason"),
     }
 
 

@@ -66,6 +66,54 @@ Deno.test("critical flags escalate the state to error", () => {
   );
 });
 
+Deno.test("error severity flags also escalate to red", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "daily",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T08:05:00Z",
+      last_probe_status: "ok",
+    },
+    [],
+    [{ severity: "error", title: "thesis_jobs DLQ surge", source: "thesis_jobs" }],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.state_label === "error", "error-severity flag should force error label");
+  assert(state.health === "red", "error severity should be red");
+  assert(
+    state.state_reason.includes("thesis_jobs DLQ surge"),
+    "expected error flag title in the reason",
+  );
+});
+
+Deno.test("critical wins over error when both are present", () => {
+  const state = deriveScannerState(
+    {
+      status: "operational",
+      cadence: "daily",
+      last_run_utc: "2026-04-21T08:00:00Z",
+      last_run_status: "ok",
+      last_probe_at: "2026-04-21T08:05:00Z",
+      last_probe_status: "ok",
+    },
+    [],
+    [
+      { severity: "error", title: "thesis_jobs DLQ surge" },
+      { severity: "critical", title: "endpoint drift" },
+    ],
+    new Date("2026-04-21T08:10:00Z"),
+  );
+
+  assert(state.health === "red", "expected red health");
+  assert(
+    state.state_reason.includes("endpoint drift"),
+    "critical flag title should win when both severities present",
+  );
+});
+
 Deno.test("warn flags keep an ok run yellow without changing the label", () => {
   const state = deriveScannerState(
     {

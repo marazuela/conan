@@ -5,7 +5,7 @@ Surface (Phase 3 — full scanner fleet):
   - `rubric_apply_caps`  — web endpoint RPC'd by the reactor edge function on every
     signals.INSERT to apply auto-caps without porting rubric logic to TypeScript.
   - `health`             — trivial GET for dashboard + smoke tests.
-  - 17 scanner functions — each as `<name>_once` (on-demand callable).
+  - 19 scanner functions — each as `<name>_once` (on-demand callable).
   - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`, `dispatch_weekly`.
     `dispatch_release_times` fires at 06/08/13/17/21 UTC and reads
     `scanners.scheduled_hour_utc` from the registry to decide which daily
@@ -85,13 +85,17 @@ compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUT
 @app.function(image=image, timeout=10)
 @modal.fastapi_endpoint(method="POST", label="rubric-apply-caps")
 def rubric_apply_caps(payload: dict) -> dict:
-    from modal_workers.shared.rubric_engine import apply_auto_caps
+    from modal_workers.shared.rubric_engine import apply_auto_caps, compute_demotion_reason
     signal = payload.get("signal") or {}
     dimensions = payload.get("dimensions") or {}
     profile = payload["profile"]
     band = payload["band"]
     new_band, caps = apply_auto_caps(signal, dimensions, profile, band)
-    return {"band": new_band, "auto_caps_triggered": caps}
+    return {
+        "band": new_band,
+        "auto_caps_triggered": caps,
+        "demotion_reason": compute_demotion_reason(caps),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -650,6 +654,21 @@ _FETCHERS_AT_HOUR: dict[int, List[str]] = {
     13: ["fda_adcomm_pdufa", "sec_8k_mna"],
 }
 
+# Registry-backed scanners that need a SECOND firing within the same day on top
+# of their `scanners.scheduled_hour_utc` primary slot. Used for catalysts whose
+# freshness window is shorter than 24h. Code-level (not schema) because the
+# need is currently exactly one scanner; promote to a column when ≥3 scanners
+# need it.
+#
+# fda_pdufa_pipeline: post-Phase-2 the scanner detects CRLs from 8-K filings
+# that typically land 13–22 UTC (US business hours). Once-daily-at-13 misses
+# afternoon CRLs by ~23h, gating the short-thesis email by a full day. A 21
+# UTC secondary slot (post-close US) captures the 13:01–21:00 window with
+# <1h latency.
+_SCANNERS_SECONDARY_HOUR: dict[int, List[str]] = {
+    21: ["fda_pdufa_pipeline"],
+}
+
 
 def _load_dispatch_statuses(names: List[str]) -> tuple[dict[str, str], Optional[str]]:
     if not names:
@@ -741,8 +760,21 @@ def dispatch_release_times() -> dict:
     else:
         registry_error = None
 
-    names = list(registry_names) + _FETCHERS_AT_HOUR.get(hour, [])
-    envelope = _dispatch(names)
+    names = (
+        list(registry_names)
+        + _FETCHERS_AT_HOUR.get(hour, [])
+        + _SCANNERS_SECONDARY_HOUR.get(hour, [])
+    )
+    # De-dupe in case a scanner accidentally appears twice (registry primary +
+    # secondary at the same hour, or fetcher overlap).
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for n in names:
+        if n in seen:
+            continue
+        seen.add(n)
+        deduped.append(n)
+    envelope = _dispatch(deduped)
     envelope["hour_utc"] = hour
     if registry_error:
         envelope["registry_error"] = registry_error

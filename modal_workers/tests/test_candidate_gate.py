@@ -352,6 +352,44 @@ class TestAssessThesisV2Rejections:
         assert ok is False
         assert any("structured_kill_conditions" in r and "missing" in r for r in reasons)
 
+    def test_situation_why_underpriced_coherence_required(self):
+        """Catches the failure mode where situation and why_underpriced each look
+        plausible in isolation but describe DIFFERENT theses (no shared named
+        entities). Other v1/v2 checks pass — only the coherence gate should fire."""
+        t = _v2_thesis_with_tags()
+        # Replace why_underpriced with a paragraph about an unrelated FDA thesis.
+        # Keep length, boilerplate, and reasoning-tag coverage intact.
+        t["why_underpriced"] = (
+            "Pharmaceutical firms with [verified] sub-$2B market caps frequently see "
+            "phase-three readouts mispriced into PDUFA dates [inferred]. Generic option-pricing "
+            "doesn't capture the binary nature of approval decisions [speculated], and most "
+            "sell-side coverage drops out below the analyst-screen threshold of $500M. "
+            "Mean reversion takes 6-9 months across 40 historical comps."
+        )
+        ok, reasons = assess_thesis_v2(t)
+        assert ok is False
+        assert any("coherence_fail_situation_unrelated_to_underpriced" in r for r in reasons)
+
+    def test_situation_why_underpriced_overlap_passes_coherence(self):
+        """Bridge token that survives — RPAY appears in both fields → coherence passes."""
+        t = _v2_thesis_with_tags()  # default fixture has RPAY + 8-K shared
+        ok, reasons = assess_thesis_v2(t)
+        assert ok is True, reasons
+        assert not any("coherence_fail_situation_unrelated_to_underpriced" in r for r in reasons)
+
+    def test_situation_with_no_named_entities_skips_coherence(self):
+        """A degenerate situation (no extractable named entities) should not be
+        rejected for coherence — other checks (length, boilerplate, reasoning tags)
+        will surface the underlying quality issue with a more specific reason."""
+        from modal_workers.shared.candidate_gate import _validate_situation_coherence
+        reasons: list = []
+        _validate_situation_coherence(
+            situation="the company filed a thing yesterday with the regulator the regulator the regulator",
+            why_underpriced="something completely different about pharmaceutical sector pricing",
+            reasons=reasons,
+        )
+        assert reasons == []  # no named entities in situation → check skipped
+
 
 class TestRenderV2:
     def test_v2_render_has_new_sections(self):

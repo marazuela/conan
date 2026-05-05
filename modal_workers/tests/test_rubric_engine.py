@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from modal_workers.shared.rubric_engine import (
+    RUBRIC_VERSION,
     WEIGHTS,
     UnknownScoringProfile,
     apply_auto_caps,
@@ -34,6 +35,10 @@ def test_weights_has_six_profiles():
         "merger_arb", "activist_governance", "binary_catalyst",
         "short_positioning", "litigation", "takeover_candidate",
     }
+
+
+def test_rubric_version_is_pinned_to_seeded_v1_weights():
+    assert RUBRIC_VERSION == 1
 
 
 def test_merger_arb_weights():
@@ -221,6 +226,92 @@ class TestBinaryCatalystEvFloor:
         band, caps = apply_auto_caps(signal, {}, "binary_catalyst", "immediate")
         assert band == "immediate"
         assert caps == []
+
+
+class TestBinaryCatalystMegacapAbsorptionCap:
+    """2026-04-27 cap — large-sponsor PDUFA noise was reaching immediate band
+    despite the AI correctly setting magnitude=1 (sub-1% of parent market cap).
+    Reference live signal_ids: b85dc455…, 52f581d2…, a1530983… (AbbVie/Sanofi/
+    AstraZeneca, all $100B+)."""
+
+    PROFILE = "binary_catalyst"
+
+    def _call(self, *, mcap, magnitude, band="immediate", extra_raw=None):
+        raw = {"market_cap_usd": mcap}
+        if extra_raw:
+            raw.update(extra_raw)
+        return apply_auto_caps({"raw_data": raw}, {"magnitude": magnitude}, self.PROFILE, band)
+
+    def test_megacap_low_magnitude_caps_immediate_to_watchlist(self):
+        # AbbVie-shaped: $130B cap, AI assessed magnitude=1.
+        band, caps = self._call(mcap=130_000_000_000, magnitude=1)
+        assert band == "watchlist"
+        assert caps == ["binary_catalyst.megacap_absorption_cap"]
+
+    def test_megacap_magnitude_2_also_caps(self):
+        band, caps = self._call(mcap=51_000_000_000, magnitude=2)
+        assert band == "watchlist"
+        assert caps == ["binary_catalyst.megacap_absorption_cap"]
+
+    def test_megacap_with_truly_binary_magnitude_3_does_not_cap(self):
+        # JNJ-Stelara-LOE-shaped: megacap but the readout is genuinely binary.
+        band, caps = self._call(mcap=400_000_000_000, magnitude=3)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_sub_threshold_sponsor_does_not_cap(self):
+        # $40B parent — small enough that magnitude=1 might still move it.
+        band, caps = self._call(mcap=40_000_000_000, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_threshold_boundary_strictly_greater_than(self):
+        # Exactly $50B → not greater than threshold, no cap.
+        band, caps = self._call(mcap=50_000_000_000, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_already_watchlist_band_not_demoted_further(self):
+        band, caps = self._call(mcap=130_000_000_000, magnitude=1, band="watchlist")
+        assert band == "watchlist"
+        assert caps == []
+
+    def test_missing_market_cap_skips_cap(self):
+        # Scanners without a market_snapshot (e.g. unresolved sponsor) don't fire.
+        band, caps = apply_auto_caps(
+            {"raw_data": {}}, {"magnitude": 1}, self.PROFILE, "immediate"
+        )
+        assert band == "immediate"
+        assert caps == []
+
+    def test_null_market_cap_skips_cap(self):
+        band, caps = self._call(mcap=None, magnitude=1)
+        assert band == "immediate"
+        assert caps == []
+
+    def test_missing_magnitude_skips_cap(self):
+        # No magnitude dim resolved yet — defensive: don't cap on partial data.
+        band, caps = apply_auto_caps(
+            {"raw_data": {"market_cap_usd": 130_000_000_000}},
+            {},
+            self.PROFILE,
+            "immediate",
+        )
+        assert band == "immediate"
+        assert caps == []
+
+    def test_megacap_cap_composes_with_ev_floor(self):
+        # Both caps fire on the same payload. ev_floor downgrades immediate→watchlist
+        # first; megacap_absorption_cap's `band == "immediate"` gate then fails, so
+        # only ev_floor lands in caps. Documents observed precedence.
+        signal = {"raw_data": {
+            "market_cap_usd": 130_000_000_000,
+            "approval_probability": 0.3, "upside_pct": 20, "downside_pct": 20,
+        }}
+        band, caps = apply_auto_caps(signal, {"magnitude": 1}, self.PROFILE, "immediate")
+        assert band == "watchlist"
+        assert any("binary_catalyst.ev_floor" in c for c in caps)
+        assert "binary_catalyst.megacap_absorption_cap" not in caps
 
 
 class TestLitigationPartyConfidence:
@@ -411,11 +502,11 @@ def test_score_signal_missing_profile_defaults_to_activist_governance():
     assert out["scoring_profile"] == "activist_governance"
 
 
-def test_score_signal_unknown_profile_defaults_to_activist_governance():
+def test_score_signal_unknown_profile_raises():
     full = {k: 3 for k in WEIGHTS["activist_governance"]}
     signal = {"scoring_profile": "nonexistent", "raw_data": {"dimensions": full}}
-    out = score_signal(signal)
-    assert out["scoring_profile"] == "activist_governance"
+    with pytest.raises(UnknownScoringProfile):
+        score_signal(signal)
 
 
 def test_score_signal_clamps_dimensions_to_one_five():
@@ -460,7 +551,7 @@ def test_score_signal_produces_expected_shape():
               "raw_data": {"dimensions": {"spread_size": 4, "deal_certainty": 4,
                                           "annualized_return": 4, "break_risk": 4, "liquidity": 4}}}
     out = score_signal(signal)
-    assert set(out.keys()) == {"scoring_profile", "dimensions", "score", "band", "auto_caps_triggered"}
+    assert set(out.keys()) == {"scoring_profile", "dimensions", "score", "band", "auto_caps_triggered", "demotion_reason"}
     # 4 * (3 + 2.5 + 2 + 1.5 + 1) = 4 * 10 = 40
     assert out["score"] == 40.0
     assert out["band"] == "immediate"
@@ -551,6 +642,53 @@ def test_score_signal_takeover_candidate_discard_via_post_edge():
     assert out["score"] == 50.0
     assert out["band"] == "discard"
     assert out["auto_caps_triggered"] == ["takeover_candidate.post_edge_disqualified"]
+
+
+def test_compute_demotion_reason_maps_known_caps_to_narrative():
+    from modal_workers.shared.rubric_engine import compute_demotion_reason
+    # No caps -> None
+    assert compute_demotion_reason([]) is None
+    # Bare rule_id -> narrative + parenthesised cap
+    assert compute_demotion_reason(["litigation.party_confidence_cap"]) == \
+        "Party-resolution confidence too low (caption parse weak) (litigation.party_confidence_cap)"
+    # Parameterised cap -> stem-based lookup, full cap preserved in parens
+    out = compute_demotion_reason(["binary_catalyst.ev_floor (ev=2.34)"])
+    assert out is not None and "Expected value below 5% floor" in out and "(ev=2.34)" in out
+    # First cap wins when multiple fire
+    assert compute_demotion_reason([
+        "litigation.party_confidence_cap",
+        "litigation.universe_miss_cap",
+    ]).startswith("Party-resolution confidence too low")
+    # Unknown cap -> verbatim fallback
+    assert compute_demotion_reason(["unknown.future_cap"]) == "unknown.future_cap"
+
+
+def test_score_signal_demotion_reason_set_iff_caps_fire():
+    """demotion_reason must be NULL when no cap fires and a narrative when one does."""
+    # No caps: clean merger_arb at score=40 immediate.
+    clean = score_signal({
+        "scoring_profile": "merger_arb",
+        "raw_data": {"dimensions": {
+            "spread_size": 4, "deal_certainty": 4, "annualized_return": 4,
+            "break_risk": 4, "liquidity": 4,
+        }},
+    })
+    assert clean["band"] == "immediate"
+    assert clean["auto_caps_triggered"] == []
+    assert clean["demotion_reason"] is None
+    # Caps fire: takeover post-edge disqualifier.
+    capped = score_signal({
+        "scoring_profile": "takeover_candidate",
+        "raw_data": {
+            "definitive_merger_agreement": True,
+            "patterns_hit": 5,
+            "dimensions": {"setup_strength": 5, "edge_freshness": 5, "valuation_cushion": 5,
+                           "strategic_buyer_clarity": 5, "liquidity": 5},
+        },
+    })
+    assert capped["band"] == "discard"
+    assert capped["demotion_reason"] is not None
+    assert "post-edge" in capped["demotion_reason"].lower()
 
 
 # ----------------------------------------------------------------------

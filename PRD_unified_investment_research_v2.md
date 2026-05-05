@@ -17,7 +17,7 @@ The architectural motivation is the AVNS miss of 2026-04-14 and the D-013 pre-ed
 
 ## 2. Objective
 
-Ship a production v2 in which signals from 17 scanners land in a shared Supabase workspace within minutes of filing publication, Immediate-band signals (alone or via convergence) trigger email alerts to Pedro and collaborators within 5 minutes, and the candidate lifecycle is managed through a Next.js dashboard. **Thesis authoring is Claude's responsibility on behalf of all users** (via a specialized Claude app routine called by API from Modal — see Phase 0 spec §7.4); users review and approve, they never draft. The current Python scanner code is preserved verbatim where possible — especially the OpenFIGI ticker normalizer — and migrated to Modal as scheduled functions.
+Ship a production v2 in which signals from 19 scanners land in a shared Supabase workspace within minutes of filing publication, Immediate-band signals (alone or via convergence) trigger email alerts to Pedro and collaborators within 5 minutes, and the candidate lifecycle is managed through a Next.js dashboard. **Thesis authoring is Claude's responsibility on behalf of all users** (via a specialized Claude app routine called by API from Modal — see Phase 0 spec §7.4); users review and approve, they never draft. The current Python scanner code is preserved verbatim where possible — especially the OpenFIGI ticker normalizer — and migrated to Modal as scheduled functions.
 
 ## 3. Non-goals
 
@@ -62,7 +62,7 @@ These are settled. The Claude Code session should not relitigate; if evidence du
 Claude Code must preserve the following during migration. If preservation appears to conflict with a clean v2 design, surface the conflict rather than silently re-implementing.
 
 - **`tools/openfigi_resolver.py::normalize_ticker`** — the Japanese 5-character ticker fix (strip trailing `0` when `len(ticker)==5 and ticker[3].isalpha() and ticker[4]=='0' and MIC==JP`). Must be ported to the Modal worker package as a shared module with byte-for-byte equivalent behavior on the affected inputs. This is called out explicitly in `docs/DECISIONS.md` and Q-016 as non-reversible.
-- **The 17 scanner implementations** in `tools/`. Their internal logic is preserved. What changes is their IO: reading config from Supabase instead of `scanner_registry.json`, writing filings to Supabase Storage instead of local disk, writing signals to the `signals` table instead of `signals/<scanner>_scanner_output.json`.
+- **The 19 scanner implementations** in `tools/`. Their internal logic is preserved. What changes is their IO: reading config from Supabase instead of `scanner_registry.json`, writing filings to Supabase Storage instead of local disk, writing signals to the `signals` table instead of `signals/<scanner>_scanner_output.json`.
 - **`candidate_gate.py::promote_candidate`** — the thesis-quality gate (D-008), including the minimum-character thresholds and the boilerplate regex detector. **Kept as a Modal-hosted Python library**, invoked in-process by the `thesis_writer` Modal function (spec §7.4), never called from the dashboard. **Validation schema is extended v1 → v2**: v1's 5 fields (situation, why_underpriced, next_catalyst, next_catalyst_date, kill_conditions) remain byte-identical and available via `assess_thesis_v1` for historical dossier import; v2's `assess_thesis_v2` additionally requires `steelman` (min 120 chars, boilerplate regex), `web_research` (≥3 cited entries with retrieval timestamps, ≥1 non-strengthening lean), and `[verified]`/`[inferred]`/`[speculated]` reasoning-tag coverage. The v2 expansion closes the "correct-prose, no-asymmetry" failure archetype documented in `candidates/rejected_pending_thesis/` (ITRK-style rejects).
 - **`run_post_scan.py::WEIGHTS`** — the six scoring profiles. Seed the `rubrics` table from this dict as `rubric_version_id=1`. Every historical signal re-imported must reference this version.
 - **`config/pe_filer_allowlist.json`** — 39 CIKs for the takeover_candidate scanner. Port into a `pe_filer_allowlist` table (rubric-adjacent config).
@@ -173,7 +173,7 @@ Pedro's collaboration preferences — please follow them without reminder:
 
 v2 is considered successful when, for 14 consecutive days after Phase 6:
 
-- All 17 scanners run on their declared Modal cadences with >98% success rate (excluding the three known auth-blocked scanners).
+- All 19 scanners run on their declared Modal cadences with >98% success rate (excluding the three known auth-blocked scanners).
 - Immediate-band signals trigger emails at p95 ≤ 5 minutes from filing publication.
 - Pedro and collaborators access the dashboard daily; every Immediate-band signal produces a Claude-drafted candidate that appears in the review queue without user authoring; users review, annotate, or reject via the dashboard (not by editing markdown files).
 - No data-integrity incident: no signal lost, no duplicate-alerted signal, no broken entity resolution on Japanese 5-char tickers.

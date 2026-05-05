@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -95,6 +96,34 @@ def test_build_backfill_patch_embeds_batch_id_in_extensions():
     assert patch["extensions"]["backfill"]["batch_id"] == "batch-123"
     assert patch["extensions"]["backfill"]["run_at"] == "2026-04-22T12:00:00Z"
     assert patch["extensions"]["scoring_meta"]["provenance"] == "heuristic"
+
+
+def test_build_backfill_patch_applies_live_heuristic_damper():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    row = {
+        "signal_id": "sig-threshold",
+        "scoring_profile": "takeover_candidate",
+        "raw_payload": {
+            "patterns_hit": 3,
+            "pattern_names": ["pe_take_private"],
+            "primary_filing": {"file_date": today},
+            "pe_filer_type": "family_office",
+            "pe_filer_name": "Named Buyer",
+            "valuation_discount_pct": 22,
+            "adv_usd": 5_000_000,
+        },
+        "extensions": {},
+    }
+
+    patch = bf._build_backfill_patch(
+        row, entity=None, client=_NoopSupabase(),
+        batch_id="batch-123", run_at="2026-04-22T12:00:00Z",
+    )
+
+    assert patch["extensions"]["scoring_meta"]["provenance"] == "heuristic"
+    assert patch["extensions"]["scoring_meta"]["requires_resolution"] is False
+    assert patch["score"] == 34.2
+    assert patch["band"] == "watchlist"
 
 
 # ----------------------------------------------------------------------

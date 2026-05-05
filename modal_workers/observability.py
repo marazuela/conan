@@ -491,7 +491,7 @@ def convergence_qa(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
         params={
             "select": "signal_id,entity_id,issuer_figi,scoring_profile,thesis_direction,"
                       "score,score_with_bonus,band_with_bonus,convergence_key,convergence_bonus,"
-                      "source_content_hash,scan_date",
+                      "source_content_hash,scan_date,convergence_evaluated_at",
             "convergence_evaluated_at": f"gte.{yesterday}",
             "convergence_bonus": "gt.0",
             "order": "convergence_evaluated_at.desc",
@@ -506,35 +506,52 @@ def convergence_qa(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
     summary["sampled"] = len(sample)
 
     for row in sample:
-        # Load the group the reactor saw (same window rule). convergence_key is
-        # already populated on the signal; pull siblings via that key AND — to
-        # match reactor/index.ts::fetchWindow — any unstamped rows under the same
-        # issuer_figi. Cold-start siblings land in the reactor's group via that
-        # fallback path; skipping it here produces spurious bonus mismatches.
-        win_days = 30 if row["scoring_profile"] == "litigation" else 14
-        since = (datetime.now(timezone.utc) - timedelta(days=win_days)).isoformat()
-        group = client._rest(
-            "GET", "signals",
-            params={
-                "select": "signal_id,scoring_profile,thesis_direction,score,source_content_hash",
-                "convergence_key": f"eq.{row['convergence_key']}",
-                "scan_date": f"gte.{since}",
-            },
-        ) or []
-        if row["convergence_key"] and row["convergence_key"].startswith("figi:") and row.get("issuer_figi"):
-            extra = client._rest(
+        # Reconstruct the group the reactor actually saw — three fidelity rules:
+        # (1) Window must be anchored to when the reactor evaluated, not "now".
+        #     Otherwise the window slides forward by hours and aged-out siblings
+        #     produce spurious bonus=0 mismatches.
+        # (2) Litigation-expansion is decided by whether ANY group member is
+        #     litigation, not by the sampled row's own profile (parity with
+        #     reactor/index.ts:211-212 which checks the whole group).
+        # (3) Unscored siblings (score IS NULL) are dropped before classification
+        #     to match the reactor's filter at reactor/index.ts:219.
+        evaluated_at_iso = row.get("convergence_evaluated_at") or row.get("scan_date")
+        evaluated_at = datetime.fromisoformat(evaluated_at_iso.replace("Z", "+00:00"))
+
+        def _fetch_window(win_days: int) -> List[Dict[str, Any]]:
+            since = (evaluated_at - timedelta(days=win_days)).isoformat()
+            grp = client._rest(
                 "GET", "signals",
                 params={
                     "select": "signal_id,scoring_profile,thesis_direction,score,source_content_hash",
-                    "issuer_figi": f"eq.{row['issuer_figi']}",
-                    "convergence_key": "is.null",
+                    "convergence_key": f"eq.{row['convergence_key']}",
                     "scan_date": f"gte.{since}",
                 },
             ) or []
-            seen_ids = {g["signal_id"] for g in group}
-            for e in extra:
-                if e["signal_id"] not in seen_ids:
-                    group.append(e)
+            if row["convergence_key"] and row["convergence_key"].startswith("figi:") and row.get("issuer_figi"):
+                extra = client._rest(
+                    "GET", "signals",
+                    params={
+                        "select": "signal_id,scoring_profile,thesis_direction,score,source_content_hash",
+                        "issuer_figi": f"eq.{row['issuer_figi']}",
+                        "convergence_key": "is.null",
+                        "scan_date": f"gte.{since}",
+                    },
+                ) or []
+                seen_ids = {g["signal_id"] for g in grp}
+                for e in extra:
+                    if e["signal_id"] not in seen_ids:
+                        grp.append(e)
+            return grp
+
+        group = _fetch_window(14)
+        if any(s.get("scoring_profile") == "litigation" for s in group):
+            group = _fetch_window(30)
+            win_days = 30
+        else:
+            win_days = 14
+        group = [s for s in group if s.get("score") is not None]
+
         ref = convergence_reference(group)
 
         # Tolerances: bonus exact; winner_signal_id exact. convergence_key is
