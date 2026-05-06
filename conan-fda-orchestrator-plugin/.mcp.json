@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "pubmed-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.pubmed_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "biorxiv-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.biorxiv_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "clinicaltrials-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.clinicaltrials_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "openfda-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.openfda_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "fda-adcomm-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.fda_adcomm_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "polygon-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.polygon_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "internal-rag-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.internal_rag_mcp"],
+      "_status": "phase_4_7_pending"
+    },
+    "compute-mcp": {
+      "command": "python",
+      "args": ["-m", "conan_fda_orchestrator_plugin.mcp_servers.compute_mcp"],
+      "_status": "phase_4_7_pending"
+    }
+  }
+}
