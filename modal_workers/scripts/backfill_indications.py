@@ -121,6 +121,27 @@ class Stats:
 _APPL_NUM_RE = re.compile(r"^([A-Za-z]+)?(\d{4,7})$")
 
 
+def _openfda_label_search(search_clause: str) -> Optional[Dict[str, Any]]:
+    """Issue one openFDA /drug/label search and return the first result, or None."""
+    try:
+        r = requests.get(
+            f"{OPENFDA_BASE}/drug/label.json",
+            params={"search": search_clause, "limit": 1},
+            timeout=LABEL_TIMEOUT_S,
+        )
+    except requests.exceptions.RequestException as exc:
+        logger.warning("openFDA label search failed for %r: %s", search_clause, exc)
+        return None
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        logger.warning("openFDA label %r non-200: %d", search_clause, r.status_code)
+        return None
+    body = r.json() or {}
+    results = body.get("results") or []
+    return results[0] if results else None
+
+
 def fetch_label_for_application(application_number: str) -> Optional[Dict[str, Any]]:
     """Pull the most recent /drug/label record for an NDA/BLA application.
 
@@ -130,34 +151,29 @@ def fetch_label_for_application(application_number: str) -> Optional[Dict[str, A
         return None
     m = _APPL_NUM_RE.match(application_number.strip())
     if not m:
-        # Synthetic 8K_DERIVED_* etc. won't resolve.
         return None
     explicit_prefix = (m.group(1) or "").upper() or None
     digits = m.group(2)
     prefixes = [explicit_prefix] if explicit_prefix else ["NDA", "BLA", "ANDA"]
 
     for prefix in prefixes:
-        search = f'openfda.application_number:"{prefix}{digits}"'
-        try:
-            r = requests.get(
-                f"{OPENFDA_BASE}/drug/label.json",
-                params={"search": search, "limit": 1},
-                timeout=LABEL_TIMEOUT_S,
-            )
-        except requests.exceptions.RequestException as exc:
-            logger.warning("openFDA label fetch failed for %s%s: %s",
-                           prefix, digits, exc)
-            continue
-        if r.status_code == 404:
-            continue
-        if r.status_code != 200:
-            logger.warning("openFDA label %s%s non-200: %d",
-                           prefix, digits, r.status_code)
-            continue
-        body = r.json() or {}
-        results = body.get("results") or []
-        if results:
-            return results[0]
+        hit = _openfda_label_search(
+            f'openfda.application_number:"{prefix}{digits}"')
+        if hit:
+            return hit
+    return None
+
+
+def fetch_label_for_brand(drug_name: str) -> Optional[Dict[str, Any]]:
+    """Fallback: look up by brand_name for assets with synthetic application
+    numbers (8K-derived CRL rows). Tries brand_name first, then generic_name."""
+    if not drug_name or len(drug_name) < 3:
+        return None
+    safe = drug_name.replace('"', "").strip()
+    for field in ("openfda.brand_name", "openfda.generic_name"):
+        hit = _openfda_label_search(f'{field}:"{safe}"')
+        if hit:
+            return hit
     return None
 
 
@@ -247,12 +263,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     for row in rows:
         asset_id = row["id"]
         appl = (row.get("application_number") or "").strip()
-        # Skip rows where the application number isn't an NDA/BLA/ANDA shape
-        # (e.g. synthetic 8K_DERIVED_* placeholders from the CRL curation path).
-        if not appl or not _APPL_NUM_RE.match(appl):
-            continue
+        drug_name = (row.get("drug_name") or "").strip()
 
-        label = fetch_label_for_application(appl)
+        # Try application_number lookup first; fall back to brand_name when
+        # the application number is synthetic (8K_DERIVED_*) or unresolved.
+        label: Optional[Dict[str, Any]] = None
+        if appl and _APPL_NUM_RE.match(appl):
+            label = fetch_label_for_application(appl)
+        if not label and drug_name:
+            label = fetch_label_for_brand(drug_name)
         if not label:
             stats.label_missing += 1
             continue
