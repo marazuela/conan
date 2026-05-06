@@ -162,6 +162,52 @@ class FederalRegisterClient:
             return None
         return _normalize(body)
 
+    # ------------------------------------------------------------------
+    # v3: fetch raw text body
+    # ------------------------------------------------------------------
+
+    def fetch_full_text(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch document metadata + raw text body. Used by the v3 ingestion path
+        (modal_workers/ingestion/federal_register_ingest.py) which writes through
+        document_writer to the documents table.
+
+        Returns a dict with the normalized metadata fields plus a `raw_text` key
+        containing the document body (typically a few KB to tens of KB; rule
+        documents can reach 100KB+). Returns None if the document is missing or
+        has no public raw_text_url.
+
+        v2 callers (the regulatory specialist agent) continue to use
+        get_document(); this method is additive."""
+        body = self._request("GET", f"/documents/{document_id}.json")
+        if not body or not isinstance(body, dict):
+            return None
+        meta = _normalize(body)
+
+        raw_text_url = meta.get("raw_text_url")
+        if not raw_text_url:
+            logger.warning(
+                "federal_register: document %s has no raw_text_url; skipping body fetch",
+                document_id,
+            )
+            return None
+
+        # raw_text_url is a public Federal Register URL serving plain text.
+        try:
+            r = self._session.get(
+                raw_text_url, headers=self._headers, timeout=self.timeout)
+        except requests.exceptions.RequestException as exc:
+            logger.warning("federal_register: raw_text fetch failed for %s: %s",
+                           document_id, exc)
+            return None
+        if r.status_code != 200:
+            logger.warning(
+                "federal_register: raw_text fetch %s returned %d for %s",
+                raw_text_url, r.status_code, document_id)
+            return None
+
+        meta["raw_text"] = r.text
+        return meta
+
 
 def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Map Federal Register's record shape to a stable subset.
