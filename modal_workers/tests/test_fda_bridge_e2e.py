@@ -183,7 +183,7 @@ def test_process_event_demotes_when_options_unavailable():
     assert out.feature_snapshot is not None
     assert out.feature_snapshot.market_implied_probability is None
     # Band must not be immediate (either demoted, or never reached due to score).
-    if out.feature_snapshot.score >= 35:
+    if out.feature_snapshot.score >= 30:
         assert out.feature_snapshot.band == "watchlist"
         assert out.immediate_demoted is True
 

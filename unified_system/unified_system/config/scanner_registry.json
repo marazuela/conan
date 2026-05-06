@@ -73,7 +73,8 @@
         "pdufa_date_delayed": "binary_catalyst",
         "adcom_scheduled": "binary_catalyst",
         "clinical_readout": "binary_catalyst",
-        "fda_decision": "binary_catalyst"
+        "fda_decision": "binary_catalyst",
+        "eop2_meeting": "binary_catalyst"
       },
       "endpoint_primary": "https://api.fda.gov/drug/label.json",
       "endpoint_fallback": "https://efts.sec.gov/LATEST/search-index",

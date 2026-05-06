@@ -116,6 +116,7 @@ SIGNAL_TYPE_DATE_DELAYED = "pdufa_date_delayed"
 SIGNAL_TYPE_ADCOM = "adcom_scheduled"
 SIGNAL_TYPE_READOUT = "clinical_readout"
 SIGNAL_TYPE_DECISION = "fda_decision"
+SIGNAL_TYPE_EOP2 = "eop2_meeting"   # End-of-Phase-2 / Type B meeting (upstream)
 DATE_CHANGE_SIGNAL_WINDOW_DAYS = 14
 
 # Thesis direction — long by default (approval is upside), short when we see confirmed
@@ -570,6 +571,228 @@ def _apply_presumed_crl(watchlist: List[dict], client: SupabaseClient,
             f"({days_past}d ago) with no openFDA AP — presumed_crl.")
         promoted.append(entry.get("ticker", ""))
     return promoted
+
+
+# ---------------------------------------------------------------------------
+# EOP2 / Type B meeting discovery (upstream of NDA — option 3 from the
+# Phase-1/2 coverage discussion). Companies announce successful end-of-Phase-2
+# meetings via 8-K because they're a positive milestone (FDA agreed to the
+# Phase 3 design). Failed/inconclusive meetings are typically NOT 8-K'd and
+# instead show up in subsequent 10-Q risk factors — so detection of an EOP2
+# 8-K is itself a positive selection signal.
+#
+# The signal bypasses the PDUFA watchlist (those entries are post-NDA) and
+# emits directly. Catalyst_timeline maps low — Phase 3 enrollment is ~12 months
+# out, readout ~24-36 months out. This is correct: EOP2 announcements move
+# the stock 5-15% on the day, not on a future binary event.
+# ---------------------------------------------------------------------------
+
+EOP2_LOOKBACK_DAYS = 30
+
+# Phrases that confirm the 8-K is announcing an EOP2 / Type B / pre-Phase-3
+# meeting outcome. The EFTS query is broad ("end of phase 2") to maximize
+# recall; a second-pass body regex below filters precision.
+_EOP2_KEYWORDS_EFTS = '"end of phase 2 meeting" OR "end-of-phase 2 meeting" OR "Type B meeting"'
+_EOP2_BODY_RE = re.compile(
+    r"\b("
+    r"end[- ]of[- ]phase\s*2\s*meeting"
+    r"|type\s*b\s*meeting"
+    r"|pre[- ]phase\s*3\s*meeting"
+    r")\b",
+    re.IGNORECASE,
+)
+# Positive-outcome phrases — strengthen the signal when present. Absence
+# doesn't downgrade (companies write both "alignment" and "guidance" phrasings
+# and both are positive milestones).
+_EOP2_POSITIVE_RE = re.compile(
+    r"\b(alignment|agreed|agreement|positive feedback|supported|reached agreement"
+    r"|successful (?:meeting|outcome)|pivotal trial design|written minutes)\b",
+    re.IGNORECASE,
+)
+# Anti-keywords — phrases that suggest the 8-K is about a failed or
+# inconclusive meeting, or about a competitor's meeting being referenced.
+_EOP2_NEGATIVE_RE = re.compile(
+    r"\b(no agreement|did not reach|disagreement|not in alignment|further (?:data|study|trial))\b",
+    re.IGNORECASE,
+)
+
+
+def _discover_eop2_from_edgar(user_agent: str,
+                              lookback_days: int = EOP2_LOOKBACK_DAYS,
+                              ) -> List[Dict[str, Any]]:
+    """Find recent 8-K / 6-K filings announcing an End-of-Phase-2 / Type B
+    meeting outcome. Returns a list of {ticker, company_name, cik, file_date,
+    file_id, adsh, drug_name, sentiment} dicts ready to feed `_build_eop2_signal`.
+    """
+    from modal_workers.shared.edgar_efts import efts_search
+
+    today = datetime.now(timezone.utc)
+    start = (today - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
+
+    try:
+        hits = efts_search(
+            _EOP2_KEYWORDS_EFTS, start, end,
+            forms="8-K,6-K", size=50, user_agent=user_agent,
+        )
+    except Exception as e:
+        logger.warning(f"EDGAR EOP2 discovery failed: {e}")
+        return []
+
+    companies = _hits_to_company_index(hits)
+    discovered: List[Dict[str, Any]] = []
+
+    for ticker, info in companies.items():
+        # Body confirmation — guards against the EFTS keyword matching in
+        # exhibits or unrelated context.
+        from modal_workers.shared.edgar_efts import fetch_filing_text
+        text = fetch_filing_text(info["file_id"], info["cik"], info["adsh"],
+                                 user_agent=user_agent)
+        if text is None:
+            continue
+        if not _EOP2_BODY_RE.search(text):
+            continue
+        # Skip if the body has any explicit negative language. Cannot fall back
+        # to "negative AND not positive" because the positive regex's "agreement"
+        # token matches inside "no agreement" — the negative phrasing wins
+        # outright when present.
+        if _EOP2_NEGATIVE_RE.search(text):
+            continue
+
+        sentiment = "positive" if _EOP2_POSITIVE_RE.search(text) else "neutral"
+        drug_name = _extract_drug_name(text)
+
+        discovered.append({
+            "ticker": ticker,
+            "company_name": info["name"],
+            "cik": info["cik"],
+            "file_date": info["file_date"],
+            "file_id": info["file_id"],
+            "adsh": info["adsh"],
+            "drug_name": drug_name,
+            "sentiment": sentiment,
+            "source_url": (
+                f"https://www.sec.gov/Archives/edgar/data/"
+                f"{(info['cik'] or '0').lstrip('0') or '0'}/"
+                f"{info['adsh'].replace('-', '')}"
+            ),
+        })
+
+    return discovered
+
+
+def _build_eop2_signal(hit: Dict[str, Any], scan_date: datetime,
+                       *, client: SupabaseClient) -> Optional[Signal]:
+    """Build an EOP2 Signal from a discovered 8-K hit. No watchlist round-trip;
+    dedup is by adsh via source_content_hash."""
+    ticker = hit.get("ticker", "")
+    cik = hit.get("cik", "") or None
+    adsh = hit.get("adsh", "")
+    if not ticker or not adsh:
+        return None
+
+    file_date = hit.get("file_date", "")
+    try:
+        source_date = datetime.strptime(file_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        source_date = scan_date
+
+    drug = hit.get("drug_name") or ""
+    sentiment = hit.get("sentiment") or "neutral"
+
+    # Strength: 3 default; +1 if drug name extracted (gives downstream
+    # enrichment something to work with); +1 if positive sentiment.
+    strength = 3
+    if drug:
+        strength += 1
+    if sentiment == "positive":
+        strength += 1
+    strength = min(strength, 5)
+
+    # The catalyst_timeline dim consumes days_until_pdufa or days_until_readout.
+    # Phase 3 trials typically start ~6 months post-EOP2; first readout is
+    # ~24 months. Set days_until_readout to 365 as a midpoint estimate so the
+    # rubric maps to catalyst_timeline=1 (low) rather than missing the dim.
+    days_until_readout_estimate = 365
+
+    raw_payload: Dict[str, Any] = {
+        "ticker": ticker,
+        "company_name": hit.get("company_name", ""),
+        "cik": cik,
+        "drug_name": drug,
+        "meeting_type": "EOP2",
+        "sentiment": sentiment,
+        "file_date": file_date,
+        "adsh": adsh,
+        "days_until_readout": days_until_readout_estimate,
+        "next_milestone_estimate": "phase_3_initiation_~6mo",
+        "headline": (
+            f"{ticker} EOP2 meeting "
+            f"({drug or 'undisclosed drug'}) — {sentiment}"
+        ),
+        # Magnitude defaults — EOP2 announcements are smaller than PDUFA
+        # decisions even for small caps. Override the legacy 50/35.
+        "upside_pct": 15.0,
+        "downside_pct": 5.0,
+    }
+
+    if ticker:
+        try:
+            from modal_workers.shared.market_snapshot import load_market_snapshot
+            snapshot = load_market_snapshot(ticker, client=client)
+            if snapshot:
+                raw_payload.update(snapshot)
+        except Exception as e:
+            from modal_workers.observability import record_snapshot_fetch_failure
+            record_snapshot_fetch_failure(client, scanner_name=NAME, ticker=ticker, exc=e)
+    # Re-apply EOP2 magnitude after the snapshot.update so it doesn't
+    # accidentally restore a PDUFA-style default. Then derive small lift from
+    # mcap (megacap = 2/1, small = 25/8).
+    mc = raw_payload.get("market_cap_usd")
+    if mc is not None:
+        if mc < 1_000_000_000:        # < $1B
+            raw_payload["upside_pct"], raw_payload["downside_pct"] = 25.0, 8.0
+        elif mc < 10_000_000_000:     # $1-10B
+            raw_payload["upside_pct"], raw_payload["downside_pct"] = 12.0, 4.0
+        else:
+            raw_payload["upside_pct"], raw_payload["downside_pct"] = 3.0, 1.0
+    else:
+        raw_payload["upside_pct"], raw_payload["downside_pct"] = 15.0, 5.0
+
+    source_content_hash = f"sha256:{hashlib.sha256(f'eop2|{adsh}'.encode()).hexdigest()}"
+    signal_id = hashlib.sha256(f"{NAME}:eop2:{adsh}".encode()).hexdigest()[:32]
+    source_url = hit.get("source_url") or "https://www.sec.gov/edgar/search/"
+
+    issuer_figi: Optional[str] = None
+    if ticker:
+        try:
+            from modal_workers.shared.openfigi_resolver import resolve_ticker
+            res = resolve_ticker(ticker, exch_code="US")
+            if res.resolved:
+                issuer_figi = res.issuer_figi
+        except Exception:
+            pass
+
+    return Signal(
+        signal_id=signal_id,
+        source_content_hash=source_content_hash,
+        source_date=source_date,
+        scan_date=scan_date,
+        signal_type=SIGNAL_TYPE_EOP2,
+        raw_payload=raw_payload,
+        source_url=source_url,
+        issuer_figi=issuer_figi,
+        entity_hints=EntityHints(
+            issuer_figi=issuer_figi,
+            ticker=ticker or None,
+            mic=None,
+            cik=cik,
+            name=hit.get("company_name") or None,
+            country="US",
+        ),
+        thesis_direction=DIRECTION_LONG,
+        strength_estimate=strength,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1444,6 +1667,22 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         sig = _build_signal(entry, days, scan_date, issuer_figi=issuer_figi, client=client)
         if sig is not None:
             signals.append(sig)
+
+    # ------------------------------------------------------------------
+    # 5b. EOP2 / Type B meeting discovery — direct emit, no watchlist
+    # ------------------------------------------------------------------
+    if (do_discover and user_agent
+            and cfg.config.get("eop2_discovery", True)
+            and time.time() < budget_deadline):
+        try:
+            eop2_hits = _discover_eop2_from_edgar(user_agent=user_agent)
+            fetched_records += len(eop2_hits)
+            for hit in eop2_hits:
+                sig = _build_eop2_signal(hit, scan_date, client=client)
+                if sig is not None:
+                    signals.append(sig)
+        except Exception as e:
+            warnings.append(f"EOP2 discovery failed: {e}")
 
     # ------------------------------------------------------------------
     # 6. Persist watchlist (one write, end of scan)

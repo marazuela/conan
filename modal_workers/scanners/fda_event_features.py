@@ -82,9 +82,9 @@ MCAP_BUCKETS: List[tuple] = [
 
 # Default band thresholds (Phase 6 calibration may move these).
 BAND_THRESHOLDS_DEFAULT: Dict[str, float] = {
-    "immediate": 35.0,
-    "watchlist": 25.0,
-    "archive": 15.0,
+    "immediate": 30.0,
+    "watchlist": 20.0,
+    "archive": 10.0,
 }
 
 # Phase 5 specialist-agent modifier bounds. These cap how far an individual
