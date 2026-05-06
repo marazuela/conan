@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from modal_workers.providers.polygon.base import PolygonClient
 from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
@@ -45,15 +44,15 @@ class Stats:
     errors: int = 0
 
 
-def fetch_daily_closes(
-    client: PolygonClient,
-    ticker: str,
-    *,
-    window_start: date,
-    window_end: date,
-) -> List[Dict[str, Any]]:
-    """Pull 1-day adjusted aggregates for [window_start, window_end] inclusive.
-    Returns list of {t (ms), c (close), o, h, l, v} sorted ascending by date."""
+def _fetch_via_polygon(ticker: str, window_start: date,
+                      window_end: date) -> List[Dict[str, Any]]:
+    """Pull aggs from Polygon. Returns [] when POLYGON_API_KEY is unset or
+    the API returns no data — caller falls back to yfinance."""
+    try:
+        from modal_workers.providers.polygon.base import PolygonClient
+        client = PolygonClient()
+    except RuntimeError:
+        return []  # POLYGON_API_KEY unset
     path = (
         f"/v2/aggs/ticker/{ticker}/range/1/day/"
         f"{window_start.isoformat()}/{window_end.isoformat()}"
@@ -62,6 +61,52 @@ def fetch_daily_closes(
     if not body or not isinstance(body, dict):
         return []
     return body.get("results") or []
+
+
+def _fetch_via_yfinance(ticker: str, window_start: date,
+                       window_end: date) -> List[Dict[str, Any]]:
+    """Fallback price source. Returns the same shape Polygon does
+    ({t (ms), c, o, h, l, v}) so the rest of the script doesn't care."""
+    import yfinance as yf  # imported lazily; only used in fallback path
+    t = yf.Ticker(ticker)
+    df = t.history(
+        start=window_start.isoformat(),
+        end=(window_end + timedelta(days=1)).isoformat(),
+        auto_adjust=True,
+    )
+    if df is None or df.empty:
+        return []
+    out: List[Dict[str, Any]] = []
+    for ts, row in df.iterrows():
+        # yfinance returns tz-aware index; convert to ms epoch.
+        epoch_ms = int(ts.to_pydatetime().timestamp() * 1000)
+        out.append({
+            "t": epoch_ms,
+            "o": float(row["Open"]),
+            "h": float(row["High"]),
+            "l": float(row["Low"]),
+            "c": float(row["Close"]),
+            "v": int(row["Volume"]),
+        })
+    return out
+
+
+def fetch_daily_closes(
+    ticker: str,
+    *,
+    window_start: date,
+    window_end: date,
+) -> List[Dict[str, Any]]:
+    """Try Polygon first; fall back to yfinance if Polygon is unavailable
+    or returns no data. Returns aggregates sorted ascending by date."""
+    closes = _fetch_via_polygon(ticker, window_start, window_end)
+    if closes:
+        return closes
+    try:
+        return _fetch_via_yfinance(ticker, window_start, window_end)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("yfinance fallback failed for %s: %s", ticker, exc)
+        return []
 
 
 def date_from_ms(ms: int) -> date:
@@ -116,7 +161,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     client = SupabaseClient()
-    poly = PolygonClient()
     stats = Stats()
 
     # Pull all eval_harness rows joined with fda_assets via PostgREST embedding.
@@ -166,11 +210,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
 
         try:
-            closes = fetch_daily_closes(poly, ticker,
+            closes = fetch_daily_closes(ticker,
                                         window_start=window_start,
                                         window_end=window_end)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("polygon fetch failed for %s %s: %s",
+            logger.warning("price fetch failed for %s %s: %s",
                            ticker, resolution_iso, exc)
             stats.errors += 1
             continue

@@ -118,15 +118,26 @@ class Stats:
     errors: int = 0
 
 
+_APPL_NUM_RE = re.compile(r"^([A-Za-z]+)?(\d{4,7})$")
+
+
 def fetch_label_for_application(application_number: str) -> Optional[Dict[str, Any]]:
-    """Pull the most recent /drug/label record for an NDA/BLA application."""
-    if not application_number or not application_number.isdigit():
-        # Synthetic application numbers from the 8-K-derived path won't resolve.
+    """Pull the most recent /drug/label record for an NDA/BLA application.
+
+    Accepts both bare digits ('213947') and prefixed forms ('NDA213947',
+    'BLA761234'). For bare digits, tries NDA/BLA/ANDA in turn."""
+    if not application_number:
         return None
-    # openFDA stores application_number as e.g. "NDA213947" or "BLA761234".
-    # Try both prefixes.
-    for prefix in ("NDA", "BLA", "ANDA"):
-        search = f'openfda.application_number:"{prefix}{application_number}"'
+    m = _APPL_NUM_RE.match(application_number.strip())
+    if not m:
+        # Synthetic 8K_DERIVED_* etc. won't resolve.
+        return None
+    explicit_prefix = (m.group(1) or "").upper() or None
+    digits = m.group(2)
+    prefixes = [explicit_prefix] if explicit_prefix else ["NDA", "BLA", "ANDA"]
+
+    for prefix in prefixes:
+        search = f'openfda.application_number:"{prefix}{digits}"'
         try:
             r = requests.get(
                 f"{OPENFDA_BASE}/drug/label.json",
@@ -135,13 +146,13 @@ def fetch_label_for_application(application_number: str) -> Optional[Dict[str, A
             )
         except requests.exceptions.RequestException as exc:
             logger.warning("openFDA label fetch failed for %s%s: %s",
-                           prefix, application_number, exc)
+                           prefix, digits, exc)
             continue
         if r.status_code == 404:
             continue
         if r.status_code != 200:
             logger.warning("openFDA label %s%s non-200: %d",
-                           prefix, application_number, r.status_code)
+                           prefix, digits, r.status_code)
             continue
         body = r.json() or {}
         results = body.get("results") or []
@@ -236,8 +247,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     for row in rows:
         asset_id = row["id"]
         appl = (row.get("application_number") or "").strip()
-        # Synthetic 8K_DERIVED_* application numbers won't resolve; leave NULL.
-        if not appl or not appl.isdigit():
+        # Skip rows where the application number isn't an NDA/BLA/ANDA shape
+        # (e.g. synthetic 8K_DERIVED_* placeholders from the CRL curation path).
+        if not appl or not _APPL_NUM_RE.match(appl):
             continue
 
         label = fetch_label_for_application(appl)
