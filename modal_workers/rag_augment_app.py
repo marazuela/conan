@@ -37,7 +37,7 @@ image = (
         "requests>=2.31",
         "anthropic>=0.50",
     )
-    .add_local_python_source("modal_workers")
+    .add_local_python_source("modal_workers", "orchestrator_runtime")
 )
 
 anthropic_secrets = modal.Secret.from_name("anthropic-orchestrator")
