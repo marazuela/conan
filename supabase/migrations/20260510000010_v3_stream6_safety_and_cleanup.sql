@@ -118,11 +118,15 @@ ALTER TABLE public.fda_agent_reviews
 
 -- Update the inline guard in fda_event_request_specialist_refresh RPC
 -- (duplicate enum check that would otherwise reject the new kinds).
+-- Preserve live return type (jsonb) — see live state pre-check 2026-05-07.
+-- The migration's only behavior change is the extended agent_kind allow-list
+-- (adds 'literature','competitive','ic_memo'); return shape stays identical
+-- so dashboard / operator_actions consumers do not break.
 CREATE OR REPLACE FUNCTION public.fda_event_request_specialist_refresh(
   p_event_id uuid,
   p_agent_kind text
 )
-RETURNS uuid
+RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
@@ -163,10 +167,20 @@ BEGIN
     'fda_event_request_specialist_refresh',
     'fda_event',
     p_event_id::text,
-    jsonb_build_object('agent_kind', p_agent_kind, 'review_id', v_review_id)
+    jsonb_build_object(
+      'agent_kind', p_agent_kind,
+      'review_id', v_review_id,
+      'snapshot_hash', v_snapshot_hash
+    )
   );
 
-  RETURN v_review_id;
+  RETURN jsonb_build_object(
+    'applied', true,
+    'event_id', p_event_id,
+    'agent_kind', p_agent_kind,
+    'review_id', v_review_id,
+    'status', 'queued'
+  );
 END;
 $$;
 

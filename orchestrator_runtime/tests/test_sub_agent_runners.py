@@ -30,9 +30,10 @@ from modal_workers.sub_agents.runtime import SubAgentSchemaError
 # ---------- registry ----------
 
 
-def test_role_registry_has_four_roles():
+def test_role_registry_has_five_roles():
     assert set(ROLE_REGISTRY.keys()) == {
         "literature", "competitive", "regulatory_history", "options_microstructure",
+        "ic_memo",
     }
 
 
