@@ -67,6 +67,14 @@ class VoyageEmbedder:
             self._client = voyageai.Client(api_key=self._api_key)
         return self._client
 
+    # Voyage voyage-3-large natively supports output_dimension in
+    # {256, 512, 1024, 2048}. The corpus storage tables use vector(2000)
+    # (pgvector HNSW caps at 2000 dims), so when the caller requests 2000
+    # we must ask Voyage for 2048 and Matryoshka-truncate to 2000 locally.
+    # voyage-3-large is Matryoshka-trained, so 2048→2000 retains ~99% of
+    # ranking quality (per migration 20260510000000 design note).
+    _VOYAGE_NATIVE_DIMS = (256, 512, 1024, 2048)
+
     def _embed(
         self, texts: List[str], input_type: str, output_dim: Optional[int],
     ) -> List[List[float]]:
@@ -76,10 +84,18 @@ class VoyageEmbedder:
             "model": self.name,
             "input_type": input_type,
         }
-        if output_dim is not None:
-            kwargs["output_dimension"] = output_dim
+        api_dim = output_dim
+        truncate_to: Optional[int] = None
+        if output_dim is not None and output_dim not in self._VOYAGE_NATIVE_DIMS:
+            api_dim = 2048
+            truncate_to = output_dim
+        if api_dim is not None:
+            kwargs["output_dimension"] = api_dim
         result = client.embed(**kwargs)
-        return result.embeddings
+        embeddings = result.embeddings
+        if truncate_to is not None:
+            embeddings = [vec[:truncate_to] for vec in embeddings]
+        return embeddings
 
     def embed_documents(
         self, texts: List[str], output_dim: Optional[int] = None,
