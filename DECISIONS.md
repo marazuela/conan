@@ -1,0 +1,282 @@
+# DECISIONS
+
+Append-only log of material decisions affecting Conan's plan, schema, scoring, or operational discipline. Each entry has Context (what prompted it), Decision (what was chosen), Consequences (what changes downstream). Replaying entries in reverse must reconstruct prior state.
+
+Numbering: legacy v1/v2 decisions are recorded inline in `spec.md` and `CONAN_SCORING_METHOD.md` (D-001 through D-052). v3 starts at **D-100** to leave a clean gap; it is the durable record going forward. Memory entries remain ephemeral session state.
+
+Format: `## D-NNN — Title (YYYY-MM-DD)` with three sub-sections.
+
+---
+
+## D-100 — Initialize v3 DECISIONS.md (2026-05-06)
+
+**Context.** Investment_engine_v2 export bundle review surfaced an "append-only DECISIONS.md (D-NNN log) + Plan discipline" gap in the v3 plan. The legacy CONAN_SCORING_METHOD.md and spec.md track D-001..D-052 inline; v3 needed a single durable file at repo root rather than scattered references.
+
+**Decision.** Create `/DECISIONS.md` as the single append-only decision log going forward. Every material plan change (scoring rubric, schema, prompt revision, sub-agent skill swap, calibration refit, ingestion pattern) appends a D-NNN entry before merge. Legacy decisions stay where they are; v3 starts fresh at D-100 to avoid renumbering.
+
+**Consequences.** No more "where was this decided?" hunts. Reversibility becomes mechanical: replay D-NNN in reverse to reconstruct prior state. Memory system stays for ephemeral context; DECISIONS.md is the durable record. Closes recommendation R6 from `~/.claude/plans/in-the-export-skills-glittery-whisper.md`.
+
+---
+
+## D-101 — Accept Investment_engine_v2 export bundle integration (2026-05-06)
+
+**Context.** Pedro dropped a 66 MB reference snapshot at `~/Downloads/_EXPORT_skills_scoring_methodology/` — a predecessor system distilled to 2 profiles, 3 scanners, 18 skills, 1502-event labeled binary_catalyst ledger, L1/L2/L3 calibration framework. Comparison + recommendation plan written at `~/.claude/plans/in-the-export-skills-glittery-whisper.md` with 9 recommendations R1–R9.
+
+**Decision.** Accept all 9 recommendations. Each gets its own D-NNN entry below for the record. v3 architecture (probabilistic conviction_pct + isotonic calibration) is preserved; the export's contributions are doctrinal (DECISIONS log, rollback monitor, survivorship rule, numeric confidence requirement), data (1502-event ledger as eval_harness seed candidate set), methodology (paired-bootstrap promotion gate, L3 rollback semantics), and scaffolding (Tier-1 skill methodology for v3 sub-agents).
+
+**Consequences.** v3 plan (`~/.claude/plans/confirm-orchestrator-cuddly-bubble.md`) gets inline amendments per R3, R4, R5, R9 with D-NNN tags. Sub-agent skill stubs in `conan-fda-orchestrator-plugin/skills/` get pre-populated per R7. R1 (eval_harness seed from binary_catalyst.json) and R8 (EDGAR checkpoint patch + sponsor resolver helper) are queued as separate work items because they require Phase 1 dependencies + non-trivial implementation lift.
+
+---
+
+## D-102 — Keep conviction_pct architecture, do not adopt categorical-band rubric (R2) (2026-05-06)
+
+**Context.** Export bundle ships a categorical-band rubric (`weighted_total = Σ(dim × weight)`; bands hard-coded `Immediate ≥30 / Watchlist 20–29 / Archive 10–19 / Discard <10`). v3 plan specifies probabilistic `conviction_pct` from ensemble (N=7) + isotonic calibration; bands derived from percentiles. Comparison forced the explicit question: should v3 adopt the export's substrate?
+
+**Decision.** No. Probabilistic conviction preserves calibration signal that binning destroys; isotonic regression operates on percentiles, not bin labels. The export itself parks L1/L2/L3 because it cannot empirically justify weight changes — v3's framework (ensemble + isotonic) does not have that bottleneck. Categorical bands stay as derived outputs of `conviction_pct`, never inputs.
+
+**Consequences.** No code change. v3 plan §Design Principles "Probabilistic + calibrated, not categorical" stands. Legacy `modal_workers/shared/rubric_engine.py` (6-profile categorical scorer) is not on the v3 critical path; left intact for v2-substrate compatibility.
+
+---
+
+## D-103 — Adopt paired-bootstrap promotion gate for eval_runs.passed_gate (R3) (2026-05-06)
+
+**Context.** v3 plan defines `eval_runs.passed_gate boolean` but leaves the gate logic TBD. Export `methodology/calibration_methodology.md` §L2 specifies a paired-bootstrap criterion that has been through real eval discipline.
+
+**Decision.** A candidate prompt/version passes `eval_runs.passed_gate=true` iff ALL of:
+- Brier score delta vs production is positive
+- Paired-bootstrap p < 0.05 on Brier delta
+- n ≥ 200 resolved cases in the eval set
+- Calibration AUC delta ≥ 0.05
+- No single asset contributes > 5% of the win
+
+On pass: snapshot the previous prompt + calibration_curve before the new one writes (per D-104). Promotion is automatic when `ENABLE_PROMOTION=true`; otherwise the row records `passed_gate=true` with a manual dispatch flag.
+
+**Consequences.** v3 plan §Phase 3 amended inline. eval_runs row schema gets explicit gate-criterion fields when the migration lands. Lucky-batch promotions are blocked structurally, not by reviewer discipline. Closes R3.
+
+---
+
+## D-104 — Add rollback monitor + snapshot-before-mutation policy (R4) (2026-05-06)
+
+**Context.** v3 has no rollback story today. Export learned this the hard way (D-002 weights frozen until Phase 13 specifically because no rollback monitor existed early in v2). Export's L3 = daily Spearman correlation monitor with snapshot-restore on drift.
+
+**Decision.** Two parts:
+1. **Daily rollback cron** (Modal scheduled function): compute Spearman(realized_return_30d, conviction_pct_calibrated) over the last 30 days of resolved `post_mortem_queue` rows. If correlation < 0.20 OR drops ≥ 0.15 from the prior window, restore the last `calibration_curves` snapshot and alert.
+2. **Snapshot-before-mutation policy**: every prompt version stored append-only in a `prompt_versions` table (never overwrite); calibration_curves already keyed by `version text PRIMARY KEY` (additive). Sub-agent skill versions (`literature_reviewer_v1.md`, `_v2.md` etc.) are git-tracked which gives natural reversibility.
+
+**Consequences.** v3 plan §Phase 3 + §Schema amended inline. New Modal function spec `modal_workers/scripts/rollback_monitor.py` queued as a Phase 3 work item. Schema migration adds `prompt_versions` table when Phase 5 (sub-agents) lands. Closes R4.
+
+---
+
+## D-105 — Add survivorship rule + tradeable filter + numeric confidence to eval_harness/extracted_facts schema (R5) (2026-05-06)
+
+**Context.** Export `methodology/methodology_spec.md` documents two rules v3 plan was missing for eval_harness curation: (1) include delisted/acquired/bankrupt issuers (no survivorship bias — the negative tail is essential for calibration), (2) tradeable filter at event date (mcap ≥ $215M, public exchange, 90d ADV ≥ $500K). Export OBJECTIVE.md principle 5 also requires "confidence-annotated outputs everywhere" — v3 has Citations API but `extracted_facts.confidence` is nullable with no documented [0,1] semantics.
+
+**Decision.** Schema amendments to land in the next migration:
+- `eval_harness`: add `tradeable_filter_pass boolean NOT NULL DEFAULT false` + curation rule documented in v3 plan §Schema (include delisted/acquired/bankrupt; tradeable filter applied at reference_assessment_date).
+- `extracted_facts`: change `confidence numeric(3,2)` from nullable to `NOT NULL`; document [0,1] semantics in v3 plan §Schema (1.0 = primary-source verbatim, 0.7 = LLM-extracted from primary source, 0.5 = derived/inferred, < 0.5 = speculative — flagged for review).
+
+**Consequences.** v3 plan §Schema sections for both tables amended inline. Migration file queued (separate work item — needs backfill plan for any existing rows). Without these rules, eval_harness will have a silent positive-tail bias that kills calibration. Closes R5.
+
+---
+
+## D-106 — Append-only DECISIONS.md substrate (R6) (2026-05-06)
+
+**Context.** See D-100. R6 from the export bundle plan was the substrate that lets every other R land with a D-NNN tag.
+
+**Decision.** Implemented in this file. Format locked: `## D-NNN — Title (YYYY-MM-DD)` with Context / Decision / Consequences. New decisions append at the bottom. Edits to historical entries are forbidden (use a new D-NNN that supersedes — entry text says `Supersedes D-XXX`).
+
+**Consequences.** Closes R6. Enables all other accepted Rs to record their decision trail.
+
+---
+
+## D-107 — Pre-populate sub-agent skill stubs from export Tier-1 methodology (R7) (2026-05-06)
+
+**Context.** v3 plan calls for 4 sub-agents in Phase 5 (literature, competitive, regulatory_history, options) with skill files in `conan-fda-orchestrator-plugin/skills/`. Files are currently empty. Export ships 3 Tier-1 (live-source-validated, confidence ≥0.70) skills: P1 (analyze-fda-approval-prospects, AXSM worked output), P2 (research-clinical-class-precedent), P3 (research-activist-filer). P1/P2 map directly to v3's regulatory_history + literature sub-agents.
+
+**Decision.** Pre-populate three sub-agent skill files with input/output schemas + methodology sections lifted from export Tier-1 SKILL.md content (NOT helper code — v3 sub-agents are Claude Agent SDK subagents driven by MCP tools, different runtime). Skip `sub_agent_options_microstructure.md` — no export analog. Worked outputs (AXSM probability_estimate.json + verification_report.md) copied to `orchestrator_runtime/eval_harness/fixtures/` as A/B test fixtures for sub-agent versioning.
+
+**Consequences.** v3 Phase 5 starts with non-empty skill files that have already been through real eval. Faster than building from scratch. Closes R7. Skill file content treated as `_v0` (pre-A/B-test starting point); first eval-gated revision becomes `_v1`.
+
+---
+
+## D-108 — Document FDA-only trade in v3 plan §Context (R9) (2026-05-06)
+
+**Context.** Export's most expensive lesson was the 7→2 profile reset: concentrate edge by cutting breadth. v3 went one step further (effectively 1 profile — FDA asset orchestrator with EDGAR as paired source). The export's RPAY-pattern convergence (13D + 8-K rights agreement, composite +8 → dispatch_now at score 33 even though individual signals scored in the 20s) is exactly the kind of multi-source pattern v3 claims as edge. By cutting EDGAR-style activist signals, v3 forfeits this class of opportunity.
+
+**Decision.** Hold the line on FDA-only — do not reopen activist_governance now. But document the trade explicitly in v3 plan §Context: by going from 2 profiles to 1, v3 forfeits the RPAY-class 13D+8-K convergence pattern. The decision stands (FDA depth > breadth) but the cost is acknowledged. Re-evaluate at Phase 6 retrospective: if FDA conviction quality justifies the focus, stay narrow; if not, reopen activist_governance using the export's labeled events as bootstrap.
+
+**Consequences.** v3 plan §Context paragraph added inline. Closes R9. Phase 6 retrospective gets activist_governance reopen as a standing agenda item.
+
+---
+
+## D-109 — Queue R1 eval_harness seed as Phase 1-blocked work item (2026-05-06)
+
+**Context.** R1 proposes ETL of export's `data/v2_data/historical_events/binary_catalyst.json` (1502 events) into v3's `eval_harness` table — 30× the Phase 0 target. Blocking dependencies: (a) v3 `documents` table must be live before `document_set uuid[]` can be populated (Phase 1 work); (b) forward-return labeling pass via yfinance per export methodology_spec.md §forward-return-windows; (c) re-fetch of primary documents per export CLAUDE.md "do not trust live data — re-harvest"; (d) ticker-resolution backlog must be addressed first (see D-110 queue item, which addresses the same wedge as the export's `bc_ticker_resolution_required` postmortem).
+
+**Decision.** Queue as Phase 1 follow-on work item: `scripts/seed_eval_harness_from_export.py`. Steps documented in plan R1. Not started in this turn — depends on (a) and (d) above. R1 status remains "accepted, queued" until those land.
+
+**Consequences.** v3 Phase 0 eval harness operates with smaller hand-curated set in the meantime. Phase 1 delivery includes documents table → R1 ETL becomes unblocked → Phase 3 backtest gets 1500-event base. No code written this turn; tracked here so the work item is not lost.
+
+---
+
+## D-110 — Queue R8 ingestion-resilience patches (EDGAR checkpoint + sponsor resolver) (2026-05-06)
+
+**Context.** R8 audit on 2026-05-06 found:
+- **EDGAR checkpoint+retry (export WI-3-A-2)**: v3's `modal_workers/ingestion/edgar_ingest.py` has timeouts + 429-backoff + 500-fast-fail via delegation, but **lacks** per-bucket try/except wrapping the hit-loop (lines 99–101), incremental persist after each completed hit, and finally-block `_persist(final=True)`. A crash mid-run loses all in-memory results.
+- **openFDA sponsor→ticker resolution (export `bc_ticker_resolution_required`)**: v3's `modal_workers/ingestion/openfda_ingest.py` extracts `sponsor_name` (line 193) but never resolves to ticker; same wedge as the export pre-fix. Resolution exists fragmented across `scripts/curate_eval_harness.py` (Supabase entities ILIKE + Jaccard) and a hardcoded SQL migration (~34 sponsors); no reusable Python helper.
+- **8-K primary-document picker (export `pick_primary_8k_document_FP`)**: NOT applicable to v3 today (EFTS one-hit-per-file approach sidesteps the AXGN pattern). Noted for future Phase 1 extracted_facts work.
+
+**Decision.** Two queued work items:
+1. **EDGAR checkpoint patch** — wrap `_ingest_one_hit` loop with per-hit try/except; add `_persist(final=False)` after each hit + `_persist(final=True)` in finally. Bound the per-query wall-clock budget. Owner: Phase 1 ingestion hardening.
+2. **Sponsor resolver helper** — new `modal_workers/shared/sponsor_resolver.py` consolidating the curated pharma-name dict + Jaccard fallback against `entities` table. Called by `openfda_ingest.py` post-extract; writes resolved ticker to documents.extensions or queues for downstream batch resolve. Owner: Phase 1 (blocker for R1).
+
+**Consequences.** Closes R8 audit phase. Patches not implemented this turn — they're substantive code work. Until patched, EDGAR ingestion is fragile to mid-run failures and openFDA-sourced events lack tickers. R1 is blocked on the sponsor resolver. Tracked here so neither patch is lost.
+
+---
+
+## D-111 — v3 Dashboard Visual & UX Language Lock (2026-05-07)
+
+**Context.** Phase 0+1 of the v3 schema landed 2026-05-06 (`supabase/migrations/20260506000010_v3_phase_0_1_schema.sql`): new tables (`documents`, `asset_documents`, `extracted_facts`, `fda_asset_parties`, `memory_files`, `reference_class_base_rates`, `calibration_curves`, `eval_harness`, `eval_runs`), extended `fda_assets` (`program_status`, `is_active`, `watch_priority`, `reviewer_panel_id`, `reference_class_signature`, `indication_normalized`, `memory_path`), extended `fda_event_features` (shadow_*, score, band, EV%, pricing_edge, evidence_confidence, options_liquidity_score, raw_inputs), new view `dashboard_signal_rows`, plus convergence fields. The v3 orchestrator runtime (Tier 1/2/3 pipeline producing `conviction_pct`, `ensemble_dispersion`, sub-agent intel from literature/competitive/regulatory/microstructure agents, structured citations via Anthropic Citations API) is not yet shipped — plugin skeleton exists. The dashboard repo (`marazuela/conan-dashboard`) carried zero references to any v3 field at session start. The dashboard upgrade plan (`~/.claude/plans/plan-a-dashboard-upgrade-effervescent-avalanche.md`) calls for a Phase A foundation lift that scaffolds v3 UI surfaces against an orchestrator output proposal so Phase B/C/D pages can light up later without rework.
+
+**Decision.** Lock the visual/UX language for v3 dashboard outputs. Scope: information architecture and signaling conventions, not pixel styling. Supersedes ad-hoc patterns in `/fda` and `/signals` where they conflict.
+
+**§0 Cross-cutting conventions**
+
+| Convention | Lock |
+|---|---|
+| Density target | Signal cards readable 3-up at 1440px viewport. Card max-height 320px. |
+| Color signaling | Conviction and tier MUST NOT rely on color alone. Always pair with text or icon. |
+| Print/export | Detail pages print legibly with citations resolved as numbered footnotes. |
+| Mobile | List views (`/fda`, `/assets`, `/`) mobile-first. Sub-agent panels and `<CitationPanel />` are desktop-primary; collapse on mobile. |
+| Tier action gating | Tier 2 events: state-mutation RPCs allowed; promotion / IC-memo RPCs disabled. Tier 3: read-only. |
+| v2/v3 coexistence | Single slot per metric. v3 field NULL → render v2-derived fallback with `v2-derived` badge. No side-by-side. |
+| Token reuse | New components reuse existing `--band-*` CSS variables and the `.text-[10px] uppercase tracking-wide` chip pattern from `dashboard/components/ui/band-chip.tsx`. |
+
+**§1–12 Question / Answer matrix**
+
+1. **Conviction display** — point + bracket (`58% [49–67]`); ensemble strip on hover. Trade-off: compresses bimodal ensembles into one interval.
+2. **Sub-agent panels** — vertically stacked collapsibles, fixed order (lit → competitive → regulatory → medical → microstructure → IC memo). IC memo always-expanded; rest collapsed. Trade-off: tabs hide volume and break Cmd-F across agents.
+3. **Citations UX** — inline `[n]` markers with hover popover; click opens persistent right-side `<CitationPanel />` (hybrid). Trade-off: side-panel-only eats horizontal real estate; pure inline doesn't survive print.
+4. **Tier 1/2/3 visual** — badge in card and detail header **plus** global tier filter in nav. Tier 3 hidden from main views (lives in `/eval`). Action gating per §0. Trade-off: watermarks cause trust-by-noise fatigue; borders collide with band colors.
+5. **Calibration transparency** — tooltip on conviction display shows curve version + Brier; full history at `/calibration`. Trade-off: per-card footers add visual weight nobody reads.
+6. **Eval surface** — top-level `/eval` (Cases + Runs tabs); admin-gated writes. Trade-off: folding into `/reports` blurs ops vs system-health views.
+7. **Asset state** — BOTH a `/assets` browser keyed on `watch_priority` AND inline asset header on `/fda/[event]` pages. Multi-sponsor `fda_asset_parties` render as chip row in both places. Trade-off: two surfaces means two truth points to keep aligned.
+8. **Extracted facts** — searchable table on the asset page (canonical) + top-N inline chips on signal cards (chip click expands to table row). Trade-off: pure tab hides corpus; pure chips overwhelm cards.
+9. **Document lineage** — canonical "Source documents" panel on asset page; signal cards show compact `Sources: 3 primary, 2 safety` summary linking through. Trade-off: duplicating to cards risks divergence with the asset view.
+10. **Reference class anchor** — one-liner under conviction (`Reference class: oncology_hematologic (n=124, base 41% [38–44%], median move ±9%)`); click expands cohort detail. Trade-off: anchoring too prominently pulls operators away from signal-specific evidence.
+11. **Migration path (v2 ↔ v3)** — computed-from-v2 fallback with explicit provenance. `conviction_pct` NULL → render v2-derived value with `v2-derived` badge in same slot. `band` and `band_with_bonus` continue to drive sort/filter as fallback until parity. Trade-off: more complex render path and one badge state to QA.
+12. **Authoring stance** — REAFFIRM D-008 / AG1 read-only with existing carve-out: operators may author rationale notes (`dashboard_rationale_upsert`) and state transitions (`dashboard_candidate_set_state`, `dashboard_thesis_*`, `dashboard_failure_resolve`, `dashboard_flag_resolve`, `resolved_at` dismissal). Operators may NOT author conviction, citations, sub-agent outputs, or extracted facts. v3 introduces no new authoring affordances.
+
+**§13 Orchestrator output contract** (proposal — backend track ratifies)
+
+```ts
+// On signals (and/or fda_event_features mirror):
+{
+  conviction_pct: number | null         // 0-100, isotonic-calibrated
+  ensemble_dispersion: number | null    // σ across ensemble members, in pct points
+  ensemble_members: number[] | null     // raw member estimates (hover strip)
+  tier: 1 | 2 | 3 | null                // 1=full pipeline, 2=bulk, 3=backtest
+  calibration_curve_id: uuid | null     // FK calibration_curves.id active at scoring
+  reference_class_signature: text | null // FK reference_class_base_rates
+}
+
+// On fda_agent_reviews — extend agent_kind enum:
+agent_kind: 'medical' | 'regulatory' | 'microstructure'
+          | 'literature' | 'competitive' | 'ic_memo'  // NEW
+
+structured_output: {
+  summary: string                       // <=300 char human-readable
+  key_findings: Array<{ text: string; citation_ref: number }>
+  uncertainties: string[]
+  // agent-specific keys below summary
+}
+
+citations: Array<{
+  ref: number                           // matches citation_ref in structured_output
+  document_id: uuid                     // FK documents.id
+  span_start: number                    // char offset in documents.raw_text
+  span_end: number
+  snippet: string                       // <=300 char excerpt
+  source_url: text | null
+}>
+```
+
+**§14 Layout sketch — `/fda/[id]` v3 detail page**
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ [TIER 1] AVNS · ABC-123 (oncology, hematologic) [program: phase3] [active]   │
+│ Sponsors: Avenas Bio (sponsor 60%) · Roche (licensee 40%)                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ConvictionDisplay (hero)        │  ReferenceClassAnchor                      │
+│ ┌───────────────────────────┐   │  oncology_hematologic                      │
+│ │ 58% [49–67]               │   │  n=124 · base 41% [38–44%]                 │
+│ │ ensemble: ▂▃▆█▇▅▃▂        │   │  median realized move ±9%                  │
+│ │ [v2-derived] (when NULL)  │   │  [expand cohort →]                         │
+│ └───────────────────────────┘   │                                            │
+│ Calibration: curve v17 · Brier 0.17 · pinned 2026-05-04 [/calibration]       │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ EV waterfall (existing 16-metric panel; values from dashboard_signal_rows)   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ▾ Lit Reviewer            (3 sources · conf 0.78)                            │
+│ ▾ Competitive Landscape   (2 sources · conf 0.72)                            │
+│ ▾ Regulatory History      (5 sources · conf 0.81)                            │
+│ ▾ Options Microstructure  (1 source  · conf 0.65)                            │
+│ ▴ IC Memo Polish          (always expanded, structured_output rendered)      │
+│   "Catalyst is PDUFA 2026-09-12 [1]. Phase 3 hit primary endpoint [2]..."    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Extracted Facts (top 5 · search · → /assets/[id]#facts for full table)       │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Source Documents (top 5 · → /assets/[id]#docs for full lineage)              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Operator Actions  [Approve] [Suppress] [Pin] [Refresh] [Override] [Mark bad] │
+│ Tier 2 only:      [Set watch priority] [Toggle active] [Pin reference class] │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                                   ┌───────────────────────────┐
+                                                   │ CitationPanel (right rail)│
+                                                   │ [1] Federal Reg. 2026-04-22│
+                                                   │ [2] 8-K, 2026-05-01       │
+                                                   └───────────────────────────┘
+```
+
+**Open questions** (NOT decisions; resolve during implementation):
+- Tier 2 RPC surface beyond IC promotion gating.
+- `/calibration` per-profile reliability plots vs single global curve.
+- Dedicated `/orchestrator` page for run inspection vs folding into `/eval`.
+
+**Consequences.**
+- Phases B/C/D of the dashboard upgrade plan cannot fully ship until the orchestrator output contract (§13) is ratified by the backend track. Phase A (foundation: types regen, `dashboard/lib/api/`, v3 components) scaffolds against the proposal; if the contract diverges, the four v3 components consuming it (`<ConvictionDisplay />`, `<SubAgentPanels />`, `<CitationViewer />`, `<TierBadge />`) and the typed fetchers in `dashboard/lib/api/` are the only touchpoints to update.
+- Backend track owes new RPCs to support dashboard mutations: `fda_asset_set_watch_priority`, `fda_asset_set_active`, `fda_asset_pin_reference_class`, `eval_case_open`, `eval_case_resolve`. Calibration mutations reuse existing `fda_calibration_activate` / `fda_calibration_rollback` (no new RPC needed). All write to `operator_actions` for audit. SQL stub at `supabase/migrations/20260506000020_v3_dashboard_rpcs.sql`.
+- Non-FDA pages (`/profiles`, `/decisions`, `/scanners`, `/convergence`, `/flags`, `/reports`, `/archive`, `/`) are out of scope for redesign; they inherit shared `BandChip` and `ThesisView` upgrades automatically.
+- D-111 is the canonical reference for v3 dashboard semantics. Future visual changes to conviction, citations, sub-agents, tiers, or asset state must amend this entry.
+- Original draft was filed in error as `D-035` in `unified_system/unified_system/docs/DECISIONS.md` — reverted 2026-05-07. The legacy register stops at D-014; v3 entries live here from D-100 onward. The number `D-035` is taken in the legacy register by Pedro's band-threshold shift (`dashboard/content/decisions/d-035.md`).
+
+---
+
+## D-112 — Implement D-110 ingestion patches: sponsor_resolver + EDGAR per-hit try/except (2026-05-07)
+
+**Context.** D-110 queued two ingestion-resilience work items: (a) sponsor_name → ticker resolver consolidating the existing fragmented logic, (b) EDGAR per-hit try/except + finally-block summary to prevent a single bad hit from aborting the loop. R8 audit on 2026-05-06 confirmed both were missing in v3.
+
+**Decision.** Implemented both:
+
+1. New module `modal_workers/shared/sponsor_resolver.py`. Two-pass resolver: Pass 1 = curated `CURATED_MAP` dict (46 entries — mirrors migration `20260430010000` plus 13 commonly-seen openFDA sponsors not yet in the seed) + `PRIVATE_DISCARD` set (11 entries — Boehringer Ingelheim, Mallinckrodt, etc.); Pass 2 = `match_sponsor_to_ticker` Jaccard fallback against the `entities` table (lifted from `curate_eval_harness.py`, now the single source of truth). Returns `SponsorResolution` dataclass with `match_method ∈ {curated, private_discard, jaccard, unresolved}` and confidence ∈ [0, 1]. Wired into `openfda_ingest.py:_ingest_one_drugsfda_record` with `skip_jaccard=True` for hot-path; misses persist as `match_method='unresolved'` in `documents.extensions.sponsor_resolution` for an offline batch resolve pass to fill the tail. `curate_eval_harness.py` now imports the helpers + delegates `match_sponsor_to_ticker` to the shared module (no behavior change).
+
+2. EDGAR patch in `modal_workers/ingestion/edgar_ingest.py` at both `ingest_keyword_search` (line 99) and `ingest_form_sweep` (line 138): per-hit try/except wrapping `_ingest_one_hit` so an unexpected exception (programming error / OOM / bug in `_accumulate`) on one hit no longer aborts the whole loop — failed hit logged with its `_id` for retry, outcome marked error, loop continues. Added try/finally so the summary log line emits even on abnormal exit, surfacing partial work. Per-hit DocumentWriter writes are already durable (DB inserts), so DB state is fine; the patch addresses in-memory loop fragility.
+
+**Consequences.** Closes D-110 implementation. Smoke tests on `sponsor_resolver` pass curated/private_discard/case-insensitive/empty/subsidiary→parent paths. All four touched files compile cleanly. Hot-path ingest cost unchanged (curated lookup is dict-time; Jaccard is skipped). Unblocks D-109 (R1 eval_harness seed) — the script can now resolve sponsor → ticker reliably for the 1502 binary_catalyst events when it's built.
+
+---
+
+## D-113 — Implement D-105 schema amendments + D-103 eval_runs gate fields migration (2026-05-07)
+
+**Context.** D-103 (paired-bootstrap promotion gate) and D-105 (survivorship rule + tradeable filter + numeric confidence NOT NULL) specified schema amendments. The relevant tables (`eval_harness`, `extracted_facts`, `eval_runs`) were already created in `20260506000010_v3_phase_0_1_schema.sql`. The amendments are additive ALTER statements + a NOT NULL change on `extracted_facts.confidence` (which needs an UPDATE backfill before the constraint).
+
+**Decision.** New migration `20260507000000_v3_d105_eval_harness_extracted_facts_amendments.sql` wraps three changes in a single transaction:
+
+- `eval_harness`: ADD `tradeable_filter_pass boolean NOT NULL DEFAULT false` + `issuer_status text` with CHECK ∈ {active|acquired|delisted|bankrupt}; partial index on `tradeable_filter_pass=true`; comments documenting D-105 curation rule (no survivorship bias, stratify on indication × phase × outcome).
+- `extracted_facts`: UPDATE existing nulls to `0.50` (D-105 sentinel for "needs review"), ALTER COLUMN `confidence` SET NOT NULL, ADD CHECK confidence ∈ [0, 1]; comment documenting the [0,1] semantics (1.00 verbatim → 0.50 derived → <0.50 speculative).
+- `eval_runs`: ADD `brier_delta_vs_prod`, `paired_bootstrap_p`, `ranking_auc_delta_vs_prod`, `n_eval_cases`, `max_single_asset_contribution_pct`, `gate_reason` with appropriate CHECK constraints + per-column comments. `passed_gate` boolean keeps semantics; the new fields record the *inputs* so failed gates are diagnosable.
+
+All ALTERs are idempotent (`IF NOT EXISTS` / `DROP CONSTRAINT IF EXISTS`). Backfill is bounded (single UPDATE on `extracted_facts` rows where confidence IS NULL).
+
+**Consequences.** Closes D-103 + D-105 schema work. Migration is safe to apply against the live Phase 0/1 schema since all tables are additive and the only NOT NULL change has a deterministic backfill. Once applied, the gate logic locked in D-103 has its on-disk record; the survivorship + tradeable-filter audit columns are ready for the D-109 eval_harness seed script to populate; numeric confidence becomes mandatory for new extractor output. No code change required for callers writing new `extracted_facts` rows that already populate confidence (per D-107 the v3 sub-agent output schemas all include confidence per-fact).
