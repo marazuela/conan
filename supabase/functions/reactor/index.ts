@@ -1,6 +1,24 @@
-// Reactor edge function — runs on every signals.INSERT webhook.
+// Reactor edge function — runs on signals.INSERT, signals.UPDATE,
+// AND v3 asset_documents.INSERT webhooks.
 //
-// Flow (spec.md §6.1):
+// v3 Stream 1 added a top-level dispatch on payload.table:
+//
+//   • table='signals'  — legacy v2 path. The function still receives every
+//     signal write so non-FDA verticals (activist_governance, takeover_candidate,
+//     litigation, merger_arb) keep their full convergence flow. Inside
+//     processSignal we short-circuit FDA scoring profiles (binary_catalyst,
+//     fda_event) into the v3 orchestrator queue instead of running the legacy
+//     classifyGroup / bonus stamping / clearDisplacedWinners pipeline.
+//
+//   • table='asset_documents' — v3 path. New material primary links written
+//     by the Sonnet asset_linker (orchestrator_app::asset_linker_run) fire
+//     this trigger via call_reactor_assetdoc(). Reactor enqueues an
+//     orchestrator_runs row with trigger_type='new_doc' (or 'cross_source'
+//     when a sibling primary doc already exists for the same asset within
+//     24h) and returns. The Modal orchestrator_drain_queue function picks
+//     up pending rows on its 5-min poll.
+//
+// Legacy v2 flow on signals (spec.md §6.1) — unchanged for non-FDA profiles:
 //   1. Parse the Supabase DB-webhook envelope; pick record = new signal row.
 //   2. Resolve convergence_key: prefer issuer_figi, else walk entity_identifiers fallback chain.
 //   3. Query the 14d window (30d if any in-group signal is litigation).
@@ -34,6 +52,10 @@ import {
   shouldClearDisplacedWinner,
   shouldUseLitigationWindow,
 } from "./convergence-window.ts";
+import {
+  buildOrchestratorRunInsert,
+  type EnqueueArgs,
+} from "./orchestrator-enqueue.ts";
 
 type Direction = "long" | "short" | "neutral" | null | undefined;
 type Band = "immediate" | "watchlist" | "archive" | "discard";
@@ -57,13 +79,63 @@ interface SignalRow extends Omit<GroupSignal, "score"> {
   auto_caps_triggered?: string[] | null;
 }
 
-interface WebhookPayload {
+interface AssetDocumentRow {
+  id: string;
+  asset_id: string;
+  document_id: string;
+  link_type: "primary" | "mentions" | "pipeline_context" | "safety_signal" | "literature";
+  is_material: boolean;
+  extraction_method: string;
+  extraction_confidence: number | null;
+  created_at: string;
+}
+
+// Webhook envelope is shared across signals + asset_documents. The
+// `record` shape is decided by `table`; we narrow it inside the dispatcher.
+interface SignalsWebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
-  table: string;
+  table: "signals";
   schema: string;
   record: SignalRow;
   old_record: SignalRow | null;
 }
+
+interface AssetDocumentsWebhookPayload {
+  type: "INSERT" | "UPDATE" | "DELETE";
+  table: "asset_documents";
+  schema: string;
+  record: AssetDocumentRow;
+  old_record: null;
+}
+
+interface OtherWebhookPayload {
+  type: "INSERT" | "UPDATE" | "DELETE";
+  table: string;
+  schema: string;
+  record: Record<string, unknown>;
+  old_record: Record<string, unknown> | null;
+}
+
+type WebhookPayload =
+  | SignalsWebhookPayload
+  | AssetDocumentsWebhookPayload
+  | OtherWebhookPayload;
+
+// FDA scoring profiles route into the v3 orchestrator queue instead of the
+// legacy convergence path. The v2 reactor still classifies + stamps the row,
+// so these signals remain queryable in the legacy schema; we just don't run
+// classifyGroup / bonus stamping / alert + thesis_job inserts for them — the
+// orchestrator owns all of that for FDA assets.
+const FDA_PROFILES_ROUTED_TO_ORCHESTRATOR = new Set([
+  "binary_catalyst",
+  "fda_event",
+]);
+
+// Cross-source coalesce window for asset_documents → orchestrator_runs.
+// If a sibling primary doc was linked to the same asset in the last 24h,
+// we tag the new run as 'cross_source' (Tier 1 trigger per spec) instead
+// of 'new_doc' (Tier 2 trigger).
+const CROSS_SOURCE_WINDOW_HOURS = 24;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -92,9 +164,42 @@ Deno.serve(async (req: Request) => {
     return new Response("invalid json", { status: 400 });
   }
 
+  // Dispatch on payload.table — signals (legacy v2 + FDA-profile short-circuit)
+  // vs asset_documents (v3 orchestrator enqueue). Anything else: 200 skipped.
+  if (payload.table === "asset_documents") {
+    if (payload.type !== "INSERT") {
+      return new Response(
+        JSON.stringify({
+          skipped: true,
+          reason: "asset_documents non-INSERT ignored",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const link = (payload as AssetDocumentsWebhookPayload).record;
+    try {
+      const result = await processAssetDocument(link);
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await sb.from("failed_reactor_events").insert({
+        signal_id: null,
+        payload: payload as unknown as Record<string, unknown>,
+        error_message: `[asset_documents] ${message}`,
+      });
+      return new Response(JSON.stringify({ error: message }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    }
+  }
+
   if (payload.table !== "signals") {
     return new Response(
-      JSON.stringify({ skipped: true, reason: "not signals table" }),
+      JSON.stringify({ skipped: true, reason: "unsupported table" }),
       {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -106,8 +211,9 @@ Deno.serve(async (req: Request) => {
   // in that case we re-run convergence. All other UPDATE events are ignored so
   // the reactor isn't re-entered by its own stamping writes (which also UPDATE
   // convergence_* columns).
-  if (payload.type === "UPDATE") {
-    if (!shouldProcessUpdate(payload.record, payload.old_record)) {
+  const signalsPayload = payload as SignalsWebhookPayload;
+  if (signalsPayload.type === "UPDATE") {
+    if (!shouldProcessUpdate(signalsPayload.record, signalsPayload.old_record)) {
       return new Response(
         JSON.stringify({
           skipped: true,
@@ -119,7 +225,7 @@ Deno.serve(async (req: Request) => {
         },
       );
     }
-  } else if (payload.type !== "INSERT") {
+  } else if (signalsPayload.type !== "INSERT") {
     return new Response(
       JSON.stringify({ skipped: true, reason: "unsupported webhook type" }),
       {
@@ -129,7 +235,7 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const sig = payload.record;
+  const sig = signalsPayload.record;
 
   try {
     const result = await processSignal(sig);
@@ -170,6 +276,28 @@ const UNSCORED_RESOLVER_PROFILES = new Set([
 ]);
 
 async function processSignal(sig: SignalRow) {
+  // --- v3 FDA short-circuit.
+  // FDA-profile signals (binary_catalyst, fda_event) skip the legacy
+  // convergence/bonus/alert pipeline. Their orchestration runs through the
+  // v3 orchestrator queue: ingestion adapters write to documents +
+  // asset_documents, the asset_documents trigger fires reactor again on
+  // that table and enqueues an orchestrator_runs row. This `signals` event
+  // is recorded in the legacy schema for non-FDA observability + audit
+  // (the 4 operational scanners co-write to signals as a side-effect of
+  // their existing scanner_base implementation). We acknowledge it here
+  // and return without convergence stamping.
+  if (
+    sig.scoring_profile &&
+    FDA_PROFILES_ROUTED_TO_ORCHESTRATOR.has(sig.scoring_profile)
+  ) {
+    return {
+      processed: true,
+      skipped: "fda_profile_routed_to_orchestrator",
+      signal_id: sig.signal_id,
+      scoring_profile: sig.scoring_profile,
+    };
+  }
+
   // --- Unscored signal short-circuit.
   // Signals from dim_estimator-unsupported profiles arrive with score=NULL.
   // They can't run convergence (no score to weigh) so we enqueue them onto the
@@ -341,6 +469,85 @@ async function processSignal(sig: SignalRow) {
     cross_updates,
     alert_inserted,
     thesis_job_enqueued,
+  };
+}
+
+// ----------------------------------------------------------------------
+// v3 — asset_documents → orchestrator_runs enqueue path.
+// ----------------------------------------------------------------------
+
+async function processAssetDocument(link: AssetDocumentRow) {
+  // The trigger predicate already restricts us to (link_type='primary' AND
+  // is_material=true) — defensive checks here so a misfired webhook can't
+  // enqueue garbage.
+  if (link.link_type !== "primary" || link.is_material !== true) {
+    return {
+      processed: false,
+      skipped: "non_primary_or_immaterial",
+      asset_id: link.asset_id,
+      document_id: link.document_id,
+    };
+  }
+
+  // Decide trigger_type. cross_source = ≥1 prior primary link on the same
+  // asset within the last 24h (this new doc would be the second source);
+  // otherwise new_doc.
+  const since = new Date(
+    Date.now() - CROSS_SOURCE_WINDOW_HOURS * 3600 * 1000,
+  ).toISOString();
+  const { data: priorLinks, error: priorErr } = await sb
+    .from("asset_documents")
+    .select("id")
+    .eq("asset_id", link.asset_id)
+    .eq("link_type", "primary")
+    .eq("is_material", true)
+    .neq("id", link.id)
+    .gte("created_at", since)
+    .limit(1);
+  if (priorErr) throw priorErr;
+  const triggerType: "cross_source" | "new_doc" =
+    (priorLinks?.length ?? 0) > 0 ? "cross_source" : "new_doc";
+
+  const enqueue = await enqueueOrchestratorRun({
+    asset_id: link.asset_id,
+    trigger_type: triggerType,
+    trigger_doc_id: link.document_id,
+  });
+  return {
+    processed: true,
+    asset_id: link.asset_id,
+    document_id: link.document_id,
+    trigger_type: triggerType,
+    enqueued: enqueue.enqueued,
+    orchestrator_run_id: enqueue.run_id,
+    coalesce_dedupe: enqueue.coalesce_dedupe,
+  };
+}
+
+async function enqueueOrchestratorRun(
+  args: EnqueueArgs,
+): Promise<{ enqueued: boolean; run_id: string | null; coalesce_dedupe: boolean }> {
+  // The partial unique index orchestrator_runs_pending_dedup_idx (status='pending')
+  // makes this an idempotent ON CONFLICT DO NOTHING — a follow-up doc on the
+  // same (asset, type, doc) won't double-enqueue while a row is still pending.
+  // Once the drainer flips status, a new row can be enqueued for the next doc.
+  const row = buildOrchestratorRunInsert(args);
+  const { data, error } = await sb
+    .from("orchestrator_runs")
+    .insert(row)
+    .select("id");
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "23505") {
+      // Unique-violation = pending row already exists for this dedupe key.
+      return { enqueued: false, run_id: null, coalesce_dedupe: true };
+    }
+    throw error;
+  }
+  return {
+    enqueued: (data?.length ?? 0) > 0,
+    run_id: data?.[0]?.id ?? null,
+    coalesce_dedupe: false,
   };
 }
 

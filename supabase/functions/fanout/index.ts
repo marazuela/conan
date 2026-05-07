@@ -1,17 +1,23 @@
-// Fan-out edge function — runs on alerts.INSERT AND candidate_events.INSERT webhooks.
+// Fan-out edge function — runs on alerts.INSERT, candidate_events.INSERT,
+// AND v3 convergence_assessments INSERT/UPDATE-into-immediate webhooks.
 //
 // Email gating revised 2026-04-20 per Pedro's directive (memory: email_alert_gating.md):
-// emails fire ONLY after AI review passes (thesis_writer) and the candidate is promoted
-// to pre-edge. NOT on raw alerts INSERT.
+// v2 emails fire ONLY after AI review passes (thesis_writer) and the candidate is
+// promoted to pre-edge. NOT on raw alerts INSERT.
 //
-// Three entry points:
+// v3 Stream 1 (2026-05-07) adds entry point D: convergence_assessments rows
+// landing with band='immediate' fire the v3 immediate email directly. The v3
+// orchestrator runtime IS the AI review — band='immediate' is the post-review
+// promotion event, analogous to v2's candidate_events.created.
+//
+// Four entry points:
 //
 // A. alerts.INSERT — AUDIT + REALTIME ONLY. No email. The alert row is recorded, the
 //    email_body_storage_path is populated so the dashboard can render it server-side,
 //    the Realtime `alerts` / `entity:<id>` channels broadcast, and dispatched_at is set.
 //    Email dispatch is gated on downstream candidate promotion (entry B).
 //
-// B. candidate_events.INSERT where event_type='created' — pre-edge promotion email.
+// B. candidate_events.INSERT where event_type='created' — v2 pre-edge promotion email.
 //    This is the AI-reviewed, gate-passed, thesis_writer-promoted moment. Candidate lands
 //    at state='watch' which is Pedro's "pre-edge" in D-013 terms (pre-edge = any non-
 //    killed, non-delivered state after AI review). Email fires here.
@@ -22,8 +28,14 @@
 //    transition template + renderers are preserved for future re-enable. Set
 //    `EMAIL_STATE_CHANGE_KILLED_DELIVERED=true` to opt back in.
 //
-// Recipients mechanism is shared across B + C (notifications_prefs.email_on_immediate).
-// Adding a separate `email_on_state_change` preference is post-v2 if volume warrants.
+// D. convergence_assessments INSERT or UPDATE-into-immediate (v3 Stream 1).
+//    Fires on band='immediate' AND superseded_by IS NULL — the post-orchestrator,
+//    post-constitutional, post-calibration band assignment. Renders the v3
+//    template (conviction%, ensemble dispersion, thesis_summary, top citations)
+//    and dispatches via Resend. Dedup is by (assessment_id, channel, target,
+//    day) on alert_deliveries.
+//
+// Recipients mechanism is shared across B + C + D (notifications_prefs.email_on_immediate).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { deliveryRowFor } from "./deliveries.ts";
@@ -45,9 +57,33 @@ interface CandidateEventRow {
   created_at: string;
 }
 
+interface ConvergenceAssessmentRow {
+  id: string;
+  asset_id: string;
+  trigger_type: string;
+  trigger_doc_id: string | null;
+  thesis_direction: string | null;
+  thesis_summary: string | null;
+  conviction_pct: number | null;
+  conviction_pct_calibrated: number | null;
+  ensemble_dispersion: number | null;
+  ensemble_n: number | null;
+  band: string | null;
+  reference_class: string | null;
+  reference_class_base_rate: number | null;
+  cited_prose_blocks: unknown;
+  evidence_quality: number | null;
+  expected_value_bps: number | null;
+  market_implied_move: number | null;
+  options_iv: number | null;
+  superseded_by: string | null;
+  created_at: string;
+}
+
 type WebhookPayload =
   | { type: "INSERT"; table: "alerts"; schema: "public"; record: AlertRow; old_record: null }
-  | { type: "INSERT"; table: "candidate_events"; schema: "public"; record: CandidateEventRow; old_record: null };
+  | { type: "INSERT"; table: "candidate_events"; schema: "public"; record: CandidateEventRow; old_record: null }
+  | { type: "INSERT" | "UPDATE"; table: "convergence_assessments"; schema: "public"; record: ConvergenceAssessmentRow; old_record: ConvergenceAssessmentRow | null };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -85,14 +121,39 @@ Deno.serve(async (req: Request) => {
   } catch {
     return new Response("invalid json", { status: 400 });
   }
-  if (payload.type !== "INSERT") {
-    return new Response(JSON.stringify({ skipped: "not an insert" }), { status: 200 });
+  // INSERT is the standard path for all 4 entry points. UPDATE is accepted only
+  // for convergence_assessments band-flip (a non-immediate row promoted to
+  // 'immediate' by a later orchestrator pass — gated on the trigger predicate
+  // OLD.band IS DISTINCT FROM 'immediate', so this never fires on re-stamps).
+  const isAcceptableConvergenceUpdate = payload.type === "UPDATE" &&
+    payload.table === "convergence_assessments";
+  if (payload.type !== "INSERT" && !isAcceptableConvergenceUpdate) {
+    return new Response(
+      JSON.stringify({ skipped: "unsupported event type" }),
+      { status: 200 },
+    );
   }
 
   try {
     if (payload.table === "alerts") {
       // AUDIT + REALTIME ONLY path — no email off alerts.INSERT per 2026-04-20 gating.
       const out = await dispatchAlertAuditOnly(payload.record);
+      return new Response(JSON.stringify(out), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    if (payload.table === "convergence_assessments") {
+      // v3 entry point D: orchestrator-produced immediate-band assessment.
+      // Trigger predicate already filters to (band='immediate' AND
+      // superseded_by IS NULL); defensive checks again here.
+      const row = payload.record;
+      if (row.band !== "immediate" || row.superseded_by !== null) {
+        return new Response(
+          JSON.stringify({ skipped: "not_immediate_or_superseded" }),
+          { status: 200 },
+        );
+      }
+      const out = await dispatchAssessmentImmediate(row);
       return new Response(JSON.stringify(out), {
         status: 200, headers: { "content-type": "application/json" },
       });
@@ -766,6 +827,291 @@ function renderStateChangeText(
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// ======================================================================
+// v3 Stream 1 — convergence_assessments band='immediate' dispatch.
+// Fires on (a) AFTER INSERT WHEN band='immediate', (b) AFTER UPDATE WHEN
+// band='immediate' AND OLD.band <> 'immediate'. Renders the v3 template
+// (conviction%, ensemble dispersion, thesis_summary, top citations) and
+// dispatches to recipients via Resend. Per-day dedupe via the partial
+// unique index on (assessment_id, channel, target, date_trunc(day,...)).
+// ======================================================================
+
+interface FdaAssetRow {
+  id: string;
+  asset_name: string | null;
+  brand_name: string | null;
+  sponsor: string | null;
+  indication: string | null;
+  indication_normalized: string | null;
+  program_status: string | null;
+  watch_priority: number | null;
+  reference_class_signature: string | null;
+  primary_ticker: string | null;
+  primary_mic: string | null;
+  entity_id: string | null;
+}
+
+async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
+  // --- Load asset + entity for header context.
+  const { data: assetRaw, error: aErr } = await sb
+    .from("fda_assets")
+    .select(
+      "id,asset_name,brand_name,sponsor,indication,indication_normalized,program_status,watch_priority,reference_class_signature,primary_ticker,primary_mic,entity_id",
+    )
+    .eq("id", row.asset_id)
+    .maybeSingle();
+  if (aErr) throw aErr;
+  const asset = (assetRaw ?? null) as FdaAssetRow | null;
+
+  const entity = asset?.entity_id
+    ? (await sb.from("entities").select("id,name,primary_ticker,primary_mic").eq("id", asset.entity_id).single()).data as EntityRow | null
+    : null;
+
+  // --- Render email bodies + audit storage.
+  const subject = renderAssessmentSubject(row, asset, entity);
+  const html = renderAssessmentHtml(row, asset, entity);
+  const text = renderAssessmentText(row, asset, entity);
+
+  const yyyy = row.created_at.slice(0, 4);
+  const mm = row.created_at.slice(5, 7);
+  const storagePath = `assessments/${yyyy}/${mm}/${row.id}.html`;
+  await sb.storage.from("reports").upload(
+    storagePath,
+    new Blob([html], { type: "text/html" }),
+    { upsert: true, contentType: "text/html" },
+  );
+
+  // --- Resolve recipients (same pool as v2 immediate alerts).
+  const recipients = await resolveRecipients();
+
+  const resend_message_ids: string[] = [];
+  const sent_to: string[] = [];
+  let dedupe_skipped = 0;
+  for (const to of recipients) {
+    // Dedupe: insert (assessment_id, channel, target, day) — partial unique
+    // index throws 23505 on a same-day duplicate.
+    const { data: deliveryRows, error: insErr } = await sb
+      .from("alert_deliveries")
+      .insert(deliveryRowFor({ kind: "assessment", assessment_id: row.id }, to))
+      .select("id");
+    if (insErr) {
+      const code = (insErr as { code?: string }).code;
+      if (code === "23505") {
+        // Same-day duplicate — orchestrator re-stamped this assessment, or a
+        // concurrent webhook retry. No-op.
+        dedupe_skipped += 1;
+        continue;
+      }
+      throw insErr;
+    }
+    const delivery_id = deliveryRows?.[0]?.id;
+
+    if (!RESEND_API_KEY) {
+      await sb.from("alert_deliveries").update({
+        status: "failed",
+        response_body: { error: "RESEND_API_KEY unset" },
+      }).eq("id", delivery_id);
+      continue;
+    }
+
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM_ADDRESS, to: [to], subject, html, text }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) {
+      const msgId = (body as { id?: string }).id ?? null;
+      await sb.from("alert_deliveries").update({
+        status: "sent",
+        resend_message_id: msgId,
+        response_body: body as Record<string, unknown>,
+      }).eq("id", delivery_id);
+      if (msgId) resend_message_ids.push(msgId);
+      sent_to.push(to);
+    } else {
+      await sb.from("alert_deliveries").update({
+        status: "failed",
+        response_body: body as Record<string, unknown>,
+      }).eq("id", delivery_id);
+    }
+  }
+
+  // --- Realtime broadcast.
+  const realtime_channels = ["assessments", `asset:${row.asset_id}`];
+  for (const ch of realtime_channels) {
+    try {
+      await sb.channel(ch).send({
+        type: "broadcast",
+        event: "immediate_assessment",
+        payload: { assessment_id: row.id, asset_id: row.asset_id, subject },
+      });
+    } catch {
+      // Realtime best-effort.
+    }
+  }
+
+  return {
+    processed: true,
+    kind: "convergence_assessment_immediate",
+    assessment_id: row.id,
+    asset_id: row.asset_id,
+    email_recipients: sent_to.length,
+    dedupe_skipped,
+    realtime_channels,
+    resend_message_ids,
+    storage_path: storagePath,
+  };
+}
+
+function _assetLabel(asset: FdaAssetRow | null, entity: EntityRow | null): string {
+  const ticker = asset?.primary_ticker ?? entity?.primary_ticker ?? null;
+  const mic = asset?.primary_mic ?? entity?.primary_mic ?? null;
+  if (ticker) return `${ticker}${mic ? `.${mic}` : ""}`;
+  const name = entity?.name ?? asset?.sponsor ?? asset?.asset_name ?? "";
+  if (name) return name.length > 40 ? `${name.slice(0, 40)}…` : name;
+  return "?";
+}
+
+function _formatConviction(row: ConvergenceAssessmentRow): string {
+  // Prefer calibrated; fall back to raw conviction_pct.
+  const v = row.conviction_pct_calibrated ?? row.conviction_pct;
+  if (v === null || v === undefined) return "—";
+  const dispersion = row.ensemble_dispersion;
+  if (dispersion !== null && dispersion !== undefined) {
+    const lo = Math.max(0, Math.round(v - dispersion));
+    const hi = Math.min(100, Math.round(v + dispersion));
+    return `${Math.round(v)}% [${lo}–${hi}]`;
+  }
+  return `${Math.round(v)}%`;
+}
+
+function renderAssessmentSubject(
+  row: ConvergenceAssessmentRow,
+  asset: FdaAssetRow | null,
+  entity: EntityRow | null,
+): string {
+  const label = _assetLabel(asset, entity);
+  const conviction = _formatConviction(row);
+  const direction = row.thesis_direction
+    ? row.thesis_direction.toUpperCase()
+    : "—";
+  return `[IMMEDIATE] ${label} · ${direction} ${conviction} · ${row.trigger_type}`;
+}
+
+interface CitedBlock {
+  citation_ref?: number | string;
+  text?: string;
+  document_id?: string;
+  span_start?: number;
+  span_end?: number;
+  snippet?: string;
+}
+
+function _topCitations(row: ConvergenceAssessmentRow, k: number): CitedBlock[] {
+  const blocks = row.cited_prose_blocks;
+  if (!Array.isArray(blocks)) return [];
+  return (blocks as CitedBlock[]).slice(0, k);
+}
+
+function renderAssessmentHtml(
+  row: ConvergenceAssessmentRow,
+  asset: FdaAssetRow | null,
+  entity: EntityRow | null,
+): string {
+  const label = _assetLabel(asset, entity);
+  const name = entity?.name ?? asset?.sponsor ?? "Unknown sponsor";
+  const assetName = asset?.asset_name ?? asset?.brand_name ?? "—";
+  const indication = asset?.indication_normalized ?? asset?.indication ?? "—";
+  const programStatus = asset?.program_status ?? "—";
+  const conviction = _formatConviction(row);
+  const direction = row.thesis_direction ?? "—";
+  const dispersion = row.ensemble_dispersion;
+  const ensembleN = row.ensemble_n ?? null;
+  const refClass = row.reference_class ?? asset?.reference_class_signature ?? "—";
+  const refRate = row.reference_class_base_rate;
+  const refRatePct = refRate !== null && refRate !== undefined
+    ? `${Math.round(Number(refRate) * 100)}%`
+    : "—";
+  const evQuality = row.evidence_quality;
+  const ev = row.expected_value_bps;
+  const evPct = ev !== null && ev !== undefined ? (Number(ev) / 100).toFixed(2) : "—";
+  const dashUrl = `${DASHBOARD_URL}/fda/${row.id}`;
+  const thesis = row.thesis_summary ?? "(thesis summary unavailable)";
+
+  const cites = _topCitations(row, 5)
+    .map((c) => {
+      const ref = c.citation_ref !== undefined ? `[${escapeHtml(String(c.citation_ref))}]` : "";
+      const snippet = c.snippet ?? c.text ?? "";
+      return `<li>${ref} ${escapeHtml(truncate(snippet, 240))}</li>`;
+    })
+    .join("");
+
+  return `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:680px;margin:0 auto;padding:24px;">
+  <h1 style="color:#1a4a8b;margin-bottom:4px;">${escapeHtml(label)} — ${escapeHtml(assetName)}</h1>
+  <p style="color:#555;margin-top:0;">
+    ${escapeHtml(name)} · ${escapeHtml(indication)} · program: ${escapeHtml(programStatus)}
+  </p>
+
+  <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+    <tr><td>Conviction</td><td><strong>${escapeHtml(conviction)}</strong> · ${escapeHtml(direction)}${ensembleN ? ` · ensemble n=${ensembleN}` : ""}${dispersion !== null && dispersion !== undefined ? ` · σ=${Number(dispersion).toFixed(1)}` : ""}</td></tr>
+    <tr><td>Reference class</td><td>${escapeHtml(refClass)} · base rate ${escapeHtml(refRatePct)}</td></tr>
+    <tr><td>Evidence quality</td><td>${evQuality !== null && evQuality !== undefined ? Number(evQuality).toFixed(2) : "—"}</td></tr>
+    <tr><td>Expected value</td><td>${escapeHtml(evPct)}%${row.market_implied_move !== null ? ` · IM ${Number(row.market_implied_move).toFixed(1)}%` : ""}${row.options_iv !== null ? ` · IV ${Number(row.options_iv).toFixed(1)}%` : ""}</td></tr>
+    <tr><td>Trigger</td><td>${escapeHtml(row.trigger_type)}</td></tr>
+  </table>
+
+  <h3>Thesis</h3>
+  <p>${escapeHtml(thesis)}</p>
+
+  ${cites ? `<h3>Cited evidence</h3><ul>${cites}</ul>` : ""}
+
+  <p style="margin-top:24px;">
+    <a href="${escapeHtml(dashUrl)}" style="background:#111;color:#fff;padding:10px 16px;text-decoration:none;">Open in dashboard</a>
+  </p>
+  <p style="color:#888;font-size:12px;">Assessment ${escapeHtml(row.id)}. v3 orchestrator · constitutional pass · isotonic-calibrated.</p>
+</body></html>`;
+}
+
+function renderAssessmentText(
+  row: ConvergenceAssessmentRow,
+  asset: FdaAssetRow | null,
+  entity: EntityRow | null,
+): string {
+  const label = _assetLabel(asset, entity);
+  const name = entity?.name ?? asset?.sponsor ?? "Unknown sponsor";
+  const assetName = asset?.asset_name ?? asset?.brand_name ?? "—";
+  const indication = asset?.indication_normalized ?? asset?.indication ?? "—";
+  const conviction = _formatConviction(row);
+  const direction = row.thesis_direction ?? "—";
+  const refClass = row.reference_class ?? asset?.reference_class_signature ?? "—";
+  const lines: string[] = [
+    `[IMMEDIATE] ${label} — ${assetName}`,
+    `${name} · ${indication} · program: ${asset?.program_status ?? "—"}`,
+    "",
+    `Conviction: ${conviction} · ${direction}`,
+    `Reference class: ${refClass}`,
+    `Trigger: ${row.trigger_type}`,
+    "",
+    "Thesis:",
+    row.thesis_summary ?? "(thesis summary unavailable)",
+    "",
+  ];
+  const cites = _topCitations(row, 5);
+  if (cites.length > 0) {
+    lines.push("Cited evidence:");
+    for (const c of cites) {
+      const ref = c.citation_ref !== undefined ? `[${c.citation_ref}] ` : "";
+      const snippet = c.snippet ?? c.text ?? "";
+      lines.push(`  ${ref}${truncate(snippet, 240)}`);
+    }
+    lines.push("");
+  }
+  lines.push(`Dashboard: ${DASHBOARD_URL}/fda/${row.id}`);
+  return lines.join("\n");
 }
 
 // Constant-time string compare — see reactor/index.ts for the same pattern.

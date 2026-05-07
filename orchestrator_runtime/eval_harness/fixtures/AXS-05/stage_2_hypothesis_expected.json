@@ -1,0 +1,48 @@
+{
+  "_doc": "Hand-curated expected Stage 2 output for the AXS-05 (Auvelity in Alzheimer Disease Agitation) thesis. Used as a reference for fixture-based regression tests; not directly asserted by stage_2_3_test.py (which exercises validators on synthetic JSON). When Stage 2 is run end-to-end on the AXS-05 fact set, the model output should structurally match this shape (3-5 hypotheses, each with kill_conditions + supporting_fact_ids in 8-char short notation). Short ids below are realistic hex (real fact_id UUIDs are hex) so the strings here would round-trip through Stage 7's CITE_FACT_RE.",
+  "hypotheses": [
+    {
+      "hypothesis_id": "H1",
+      "label": "bull",
+      "claim": "FDA approves AXS-05 for Alzheimer Disease Agitation on the 2026-04-30 PDUFA based on the two pivotal Phase 3 trials (ACCORD, ADVANCE-1) and the established safety profile from the major depressive disorder approval.",
+      "mechanism": "Two independently positive Phase 3 trials [F:a0c1d4f1] [F:b2e3f456] meet FDA's 'substantial evidence of effectiveness' bar [F:c4d5e678]. The dextromethorphan/bupropion combination has an established safety profile from the 2022 MDD approval (Auvelity) [F:d6e7f890], reducing regulatory risk relative to a first-in-class submission. Breakthrough Therapy Designation [F:e8f9a012] further supports the bull case.",
+      "direction": "bullish",
+      "supporting_fact_ids": ["a0c1d4f1", "b2e3f456", "c4d5e678", "d6e7f890", "e8f9a012"],
+      "contradicting_fact_ids": [],
+      "kill_conditions": [
+        "FDA issues a Complete Response Letter on 2026-04-30",
+        "FDA convenes an unscheduled AdComm in Q1 2026",
+        "Axsome announces an unsolicited 3-month PDUFA extension"
+      ],
+      "prior_estimate_pct": 65
+    },
+    {
+      "hypothesis_id": "H2",
+      "label": "base",
+      "claim": "FDA approves AXS-05 on the 2026-04-30 PDUFA but with label restrictions (e.g. boxed warning on suicidal ideation, narrower indication than originally sought).",
+      "mechanism": "The bupropion component carries an existing FDA boxed warning [F:f0a1b234]. The agitation indication is the first FDA-approved drug for ADA [F:1a2b3c45], so the agency may apply restrictive labeling consistent with novel-indication caution. Phase 3 safety database shows manageable but non-zero AE rate [F:2b3c4d56].",
+      "direction": "bullish",
+      "supporting_fact_ids": ["f0a1b234", "1a2b3c45", "2b3c4d56"],
+      "contradicting_fact_ids": [],
+      "kill_conditions": [
+        "FDA issues a clean approval with no boxed warning beyond the bupropion class label",
+        "FDA issues a Complete Response Letter rather than a restricted approval"
+      ],
+      "prior_estimate_pct": 25
+    },
+    {
+      "hypothesis_id": "H3",
+      "label": "bear",
+      "claim": "FDA issues a Complete Response Letter on 2026-04-30 citing CMC, label-language, or safety-monitoring concerns despite the positive efficacy data.",
+      "mechanism": "Novel indications in geriatric populations historically draw additional safety scrutiny [F:3c4d5e67]. The agitation endpoint (CMAI total score change) has not been previously validated for FDA registration in ADA [F:4d5e6f78], introducing endpoint-translatability risk. CRL rate for first-in-class neuropsych submissions is ~22% per the reference class [F:5e6f7a89].",
+      "direction": "bearish",
+      "supporting_fact_ids": ["3c4d5e67", "4d5e6f78", "5e6f7a89"],
+      "contradicting_fact_ids": ["a0c1d4f1", "b2e3f456"],
+      "kill_conditions": [
+        "FDA approves on or before the PDUFA date with no CRL",
+        "Axsome reports a successful late-cycle FDA meeting with no major issues raised"
+      ],
+      "prior_estimate_pct": 10
+    }
+  ]
+}

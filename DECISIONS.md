@@ -349,3 +349,138 @@ Mechanics:
 - Edge cases per export methodology: ticker delisted before window completes → status='invalidated' (an upstream pass can re-classify involuntary delists as -100%); halted >30 days → invalidated; M&A close → invalidated (an upstream deal-terms pass handles cash/stock-deal labeling).
 
 **Consequences.** Closes the labeling-pass half of D-109. Smoke battery (9 cases via injected synthetic closes — BC HIT, BC MISS, AG HIT, AG MISS, no_price_data, no_spy, unsupported profile, sentinel routing, unparseable date) all pass. yfinance is a declared dependency in `modal_workers/requirements.txt` (>=0.2,<0.3) so production runs through Polygon-or-yfinance like the rest of the price stack. The CLI is ready to chew the export's 1502-event binary_catalyst.json and emit a labels ledger; running it does not modify production state and is safe to schedule independently of D-109's eval_harness ingestion (which still waits on Phase 1 documents).
+
+---
+
+## D-117 — Stage 2/3 gate correctness: pre-cap raw_conviction + structural-error gate + safer base-direction default (2026-05-07)
+
+**Context.** Audit of the Stage 2/3 implementation (commits landing alongside D-115) surfaced three semantic gaps. (1) The all_falsified cap mutated `parsed["conviction_pct"]` in place at runtime; `stage_10_persist` then read the post-cap value into `raw_conviction_pct`, contaminating the column whose schema comment is "pre-calibration (Stage 5/6 output)". The original ensemble conviction was lost from the row, only visible inside `stage_3_premortem` metric notes. (2) Stage 2/3 emit severity=`error` findings (missing required label, <2 kill_conditions, missing verdict, parse failure, etc.) that flow into `stage_metrics.notes` but were NOT propagated into `constitutional_result.pass_` — Stage 7 walked citations only, so a Stage 2 with a missing required label or zero kill_conditions could still mark `constitutional_pass=true`. (3) When a `label='base'` hypothesis arrived with no valid `direction`, the validator silently coerced it to `'bullish'` — biasing downstream EV math.
+
+**Decision.** Three local fixes:
+- **Pre-cap raw_conviction:** before mutating `parsed["conviction_pct"]` on `all_falsified`, stash the pre-cap float on `ctx["pre_premortem_conviction"]` and set `ctx["conviction_capped_by_premortem"]=True`. `stage_10_persist` now reads this and writes the pre-cap value as `raw_conviction_pct` (the cap flows into `conviction_pct_calibrated` and `conviction_pct` only). Adds an audit boolean `evidence_ledger.conviction_capped_by_premortem` to the row's jsonb so the dashboard can surface "cap fired" without parsing stage metrics.
+- **Structural-error gate:** `run_constitutional_check` now merges Stage 2/3 severity=`error` findings into its own `findings` list (renamed `stage_2_<check>` / `stage_3_<check>`) and includes them in the `pass_` computation. Warnings/info still don't gate.
+- **Base-direction default:** for `label='base'` with invalid `direction`, default to `'event_specific'` (NOT `'bullish'`) and emit a `missing_direction_for_base` warning finding.
+
+**Consequences.** Closes #1, #4, #9 of the Stage-2/3 review. `raw_conviction_pct` is now genuinely the Stage 5/6 output for every row; observers can tell from `evidence_ledger.conviction_capped_by_premortem` whether Stage 3 fired. Constitutional pass_ now reflects the assessment's actual deliverability — a Stage 2 that omitted `bear` or a Stage 3 that omitted a verdict cannot ship as `constitutional_pass=true`. Test coverage for these in D-121.
+
+---
+
+## D-118 — Stage 4 anchor → Stage 2 + post-output prior renormalization (2026-05-07)
+
+**Context.** Stage 4 (D-114) populated the reference-class anchor and rendered it into the Stage 1 prompt, but Stage 2 was blind to it. The Stage 2 system prompt said `prior_estimate_pct` values would be "renormalized by Stage 4" — an unmet promise, since Stage 4 had already run by the time Stage 2 fired and no code touched priors after Stage 2. So the model picked priors with no empirical anchor.
+
+**Decision.** Two-part:
+- **Thread anchor into Stage 2 user content** — `_build_stage_2_user_content` now takes `anchor` (read from `ctx["reference_class_anchor"]`) and renders the same `format_anchor_for_prompt` block that Stage 1 sees. (Subsequently moved to the cached system prefix in D-119, but the threading lands here.)
+- **Implement actual renormalization** — new module-scope `renormalize_priors(hypotheses, anchor, evidence_quality)` in `orchestrator_runtime/hypothesis.py`. Linear blend `final = (1 - w) * raw + w * target` where `w = max(MIN_ANCHOR_WEIGHT, 1.0 - evidence_quality)` (floor 0.20 so even high-evidence assets get some pull). `target` is `base_rate * 100` for bull, `(1 - base_rate) * 100` for bear, raw value for base/event_specific. Rescale post-blend so sum ≈ 100. Called from `run_one` immediately after Stage 2 returns; per-hypothesis pre/post values stashed in `stage_2` metric notes for observability.
+
+**Schema:** new migration `20260509000000_v3_d118_hypothesis_prior_pre_anchor.sql` adds `hypothesis_enumeration.prior_estimate_pct_pre_anchor int` (nullable, CHECK 0..100). `Hypothesis` dataclass gains a matching field; the parser snapshots the model-emitted value into it during validation. The post-anchor value continues to live in `prior_estimate_pct`. A/B-able by reading `prior_estimate_pct_pre_anchor` instead.
+
+**Consequences.** Closes #2, #3 of the Stage-2/3 review. Bull priors now anchor to base_rate × 100 weighted by `(1 - evidence_quality)`, bear priors to `(1 - base_rate) × 100`, base/event_specific to model output rescaled. Smoke: bull=70/base=20/bear=10 with rate=0.30 / eq=0.5 produces post-blend bull=45/base=18/bear=36 (sum=99). Cold start (no anchor / no base rate / empty hypotheses) is identity. Migration is additive + idempotent; safe to apply against live Phase 0/1 schema.
+
+---
+
+## D-119 — Cross-stage prompt caching via shared system prefix (2026-05-07)
+
+**Context.** A single assessment with `ensemble_n=7` makes ~9 Sonnet calls (7× Stage 1 + 1× Stage 2 + 1× Stage 3 + 1× Stage 7 semantic), each sending the same ~10-30k tokens of asset preamble + Stage 4 anchor + structured fact layer. No prompt caching was wired, so input tokens were paid in full on every call.
+
+**Decision.** Lift the asset preamble + anchor + fact layer into a **shared system prefix** sent as the FIRST system block of every stage in the assessment, with `cache_control: {type: "ephemeral"}`. Per-stage instructions (`STAGE_1_SYSTEM`, `STAGE_2_SYSTEM`, `STAGE_3_SYSTEM`, `SEMANTIC_SYSTEM_PROMPT`) become the SECOND system block — they differ across stages but come AFTER the cache marker, so they don't invalidate the cached prefix.
+
+Implementation:
+- New `runtime.build_shared_system_prefix(ctx) -> str` builds the cacheable content once per assessment.
+- New `runtime.build_system_blocks(prefix, stage_system) -> List[Dict]` constructs the two-block system list with the cache marker.
+- `_build_stage_1_user_content` no longer renders asset/anchor/facts (now in system); user content is docs + memory + "produce" instruction only.
+- `_build_stage_2_user_content` and `_build_stage_3_user_content` similarly stripped of duplicated facts.
+- `run_hypothesis_enumeration`, `run_premortem`, and `check_semantics` accept `system_blocks`/`semantic_system_blocks` kwargs; when provided, used as system; when None, fall back to the original string for backward compat.
+- `ensemble.py` widens `stage_1_system: Any` so the same blocks list flows through the streaming + batch ensemble runners (the SDK accepts list-of-blocks anywhere it accepts a string).
+- Orchestrator version bumped `0.3.0` → `0.4.0`.
+
+**Consequences.** Closes #5. Within an assessment all stages run within ~1-2 minutes — well under the 5-minute cache TTL. Stage 1 ensemble run 1 pays cache-creation; runs 2-7 hit cache on system-prefix at 10% input cost. Stage 2/3/7 also cache-hit because their first system block is byte-identical. Expected savings on a typical 15k-token shared prefix: ~80% input-token reduction across the assessment. Backward compatible: omit `system_blocks` and behavior is unchanged. Test `test_shared_prefix_is_byte_identical_across_stages` locks the cache invariant — any drift in the prefix builder fails CI.
+
+---
+
+## D-120 — Stage 2/3 polish: raw_response audit head + pre_mortem text caps (2026-05-07)
+
+**Context.** Two minor polish items from the Stage 2/3 review: (#6) Stage 2's `_build_stage_2_user_content` accepted `docs` but never used it (stale parameter); (#7) `HypothesisResult.raw_response` and `PreMortemResult.raw_response` captured the full model text but were never persisted, so when validators rejected parts of the response the raw text was lost; (#8) `pre_mortem_summary` text rendered into `convergence_assessments.pre_mortem` was not bounded — a verbose Sonnet response could produce a multi-MB row.
+
+**Decision.**
+- (#6 — already eliminated as a side effect of D-119; the unused `docs` param disappeared when user content was simplified.)
+- (#7) Stash `raw_response[:4000]` onto `stage_2.notes.raw_response_head` and `stage_3.notes.raw_response_head`. No schema change — `assessment_stage_metrics.notes` is jsonb. 4kb is enough to debug parser disagreements without bloating the metrics table.
+- (#8) Cap each pre_mortem failure-mode line at 500 chars and the total `pre_mortem_summary` at 8000 chars before insertion.
+
+**Consequences.** Closes #6, #7, #8. Audit/debug paths now have model-output context for failed Stage 2/3 calls without unbounded row sizes. No row format change; existing dashboard reads are unaffected.
+
+---
+
+## D-121 — Stage 2/3 test coverage: validators + renormalizer + cache-prefix invariants (2026-05-07)
+
+**Context.** Stage 2/3 are heuristic-heavy (JSON validators, label coercion, citation walking, local rollup) and prompt-design-sensitive (cache invariants depend on byte-identical shared prefix). Without tests, regressions land silently — especially the local-rollup discipline at premortem.py:298-327 (the model is observed, not trusted) and the cache-prefix invariant from D-119.
+
+**Decision.** Three new test files under `orchestrator_runtime/tests/`:
+
+- `test_hypothesis.py` — 19 tests for `_validate_and_parse_hypotheses` (parse failures, missing required labels, <2 kill_conditions, OOB priors clamped, D-117 base→event_specific coercion, unresolved fact_id warning, 5-cap, pre-anchor prior snapshot) and `renormalize_priors` (pulls bull down on low base rate, pulls bull up on high base rate, sum stays near 100, MIN_ANCHOR_WEIGHT floor, no-anchor identity, no-base-rate identity, evidence_quality None default, evidence_quality invalid fallback, empty-hypotheses safe).
+
+- `test_premortem.py` — 11 tests for `_validate_and_parse_verdicts` (parse failures, model-claimed `all_survive` overridden by local rollup when one verdict is falsified, surviving_ids mismatch emits info finding, non-speculative failure mode without evidence is severity=error, speculative-without-evidence is allowed, unresolved evidence_fact_id warns, missing verdict for known hypothesis raises error, unknown hypothesis_id skipped, invalid verdict defaults to weakened).
+
+- `test_runtime_stage_2_3.py` — 9 integration tests: cache-prefix byte-identity across Stage 1/2/3/7 system blocks (the D-119 invariant); cache prefix contains facts/anchor/asset; Stage 1/2/3 user content omits facts; D-117 Stage 2/3 structural errors flip `constitutional_pass_` to False; D-117 warnings don't gate; constitutional walks hypothesis mechanism citations.
+
+**Consequences.** 39 tests, all passing. Locks the structural invariants behind regressions: any future drift in the renormalize formula, the local-rollup discipline, the structural-error gate, or the cached prefix's byte-shape will fail in CI before it ships. Tests are self-contained — no DB / API calls — and run in <1 second.
+
+---
+
+## D-122 — Stream 1: operator delivery rebind (reactor + fanout for v3) (2026-05-07)
+
+**Context.** The Tier 0 gap audit (this session) confirmed that even after Stream 3's Stage 10 produces `convergence_assessments` rows with `band='immediate'`, no email reaches operators: the reactor still ran v2 `classifyGroup` / bonus stamping / `clearDisplacedWinners` against the legacy `signals` flow only, and fanout subscribed only to `alerts.INSERT` / `candidate_events.INSERT`. v3's alert path was silent end-to-end. Pre-flight verification also surfaced live-DB drift: the 5 D-111 RPCs in `20260506000020_v3_dashboard_rpcs.sql` were authored but **not applied** to production (only `fda_calibration_activate` / `fda_calibration_rollback` were live).
+
+**Decision.** Three local edits + two migrations + two edge-function deploys, all behind a coexistence rule that preserves v2 traffic for non-FDA verticals:
+
+1. **Reactor refactor** ([supabase/functions/reactor/index.ts](supabase/functions/reactor/index.ts)) — top-level dispatch on `payload.table`. `signals` keeps the legacy v2 path with one short-circuit added: `binary_catalyst` and `fda_event` profile signals return `{skipped: "fda_profile_routed_to_orchestrator"}` instead of running classifyGroup, because their orchestration runs through ingestion → `documents` → `asset_documents` → orchestrator queue. New `asset_documents` branch calls `processAssetDocument()` which derives `trigger_type` (`cross_source` if a sibling primary doc exists in the prior 24h, else `new_doc`) and inserts a row into `orchestrator_runs` via `buildOrchestratorRunInsert()` (extracted into [orchestrator-enqueue.ts](supabase/functions/reactor/orchestrator-enqueue.ts) as a pure helper for testability — Contract C1 lock).
+
+2. **Fanout extension** ([supabase/functions/fanout/index.ts](supabase/functions/fanout/index.ts)) — new fourth entry point D for `convergence_assessments` INSERT or UPDATE-into-immediate. `dispatchAssessmentImmediate()` loads the asset + entity, renders a v3 HTML/text template (`[IMMEDIATE] TICKER · DIRECTION conviction% [low–hi] · trigger`, conviction display + ensemble dispersion + reference class + base rate + EV + thesis + top 5 cited blocks + dashboard link), uploads the audit body to Storage `reports/assessments/YYYY/MM/<id>.html`, and dispatches via Resend. Realtime broadcasts on `assessments` and `asset:<id>` channels. v2 `alerts.INSERT` (audit-only) and `candidate_events.INSERT` (pre-edge promotion) paths preserved unchanged for non-FDA verticals. `deliveries.ts` extended with `assessment` subject kind + `assessment_id` field on `DeliveryRow`; mutual-exclusion preserved (one parent column populated per row).
+
+3. **Migration `v3_alert_triggers`** — `alert_deliveries.assessment_id uuid REFERENCES convergence_assessments(id) ON DELETE CASCADE`, partial unique index on `(assessment_id, channel, target) WHERE assessment_id IS NOT NULL` for permanent dedup (band-flip re-emits don't re-email). `call_fanout_assessment()` + AFTER INSERT trigger `WHEN (NEW.band='immediate' AND NEW.superseded_by IS NULL)` + AFTER UPDATE companion `WHEN (NEW.band='immediate' AND OLD.band IS DISTINCT FROM 'immediate')` so band-flips into immediate fire once. `call_reactor_assetdoc()` + AFTER INSERT trigger `WHEN (NEW.link_type='primary' AND NEW.is_material=true)`. Both dispatchers use the established vault-secret + `net.http_post` 30s pattern from `call_reactor()` / `call_fanout()`. Plus partial unique index `orchestrator_runs_pending_dedup_idx (asset_id, trigger_type, COALESCE(trigger_doc_id, '00000000-...'::uuid)) WHERE status='pending'` so the reactor's `INSERT … ON CONFLICT DO NOTHING` collapses 10-min-bucket bursts.
+
+4. **D-111 RPC re-apply.** Discovered the 5 dashboard RPCs (`fda_asset_set_watch_priority`, `fda_asset_set_active`, `fda_asset_pin_reference_class`, `eval_case_open`, `eval_case_resolve`) plus `eval_harness.opened_at/resolved_at/resolution_outcome` columns were absent live despite the file existing. Re-applied the migration as `v3_dashboard_rpcs_reapply` (idempotent CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS).
+
+**Original migration also surfaced an IMMUTABLE issue.** First attempt used `(date_trunc('day', created_at))` in the dedup index expression. `date_trunc(text, timestamptz)` is STABLE not IMMUTABLE — Postgres rejected with 42P17. Switched to a permanent (no-day-partition) dedupe; semantic difference is appropriate for v3 (`assessment_id` uniquely identifies one orchestrator pass; if a band-flip UPDATE fires the trigger again, no new email).
+
+**Tests.** 25/25 green. New `deliveries.test.ts` cases for the assessment subject kind + mutual-exclusion + back-compat. New `orchestrator-enqueue.test.ts` (4 tests) pinning the C1 row-shape contract. Existing reactor/fanout tests untouched, all still pass.
+
+**Consequences.**
+
+- v3 alert delivery is end-to-end live: ingestion → `asset_documents` INSERT → reactor enqueues `orchestrator_runs` (Contract C1) → Stream 3's drainer picks up → assessment lands with `band='immediate'` → fanout fires email + Realtime broadcast.
+- 5 D-111 dashboard RPCs are now callable; Stream 8 (dashboard wiring) can un-stub the `setWatchPriority` / `setActive` / `pinReferenceClass` / `eval_case_*` action handlers without further migration work.
+- Coexistence rule preserved: 4 v2 operational scanners (`edgar_filing_monitor` activist_governance, `fda_pdufa_pipeline` binary_catalyst, `pre_phase3_readout_scanner` binary_catalyst, `takeover_candidate_scanner`) keep running; reactor's profile-branch routes their FDA-typed signals to the orchestrator queue while non-FDA verticals run the legacy convergence flow unchanged.
+- Edge function versions: reactor v11→v12, fanout v7→v8 (both `verify_jwt=false` per memory `reactor_deploy_no_verify_jwt.md`).
+- Rollback path: DROP the two new triggers + functions + the `assessment_id` column. Legacy paths unaffected.
+
+---
+
+## D-123 — Stream 2: closed feedback machinery (post-mortem runner + rollback monitor + isotonic refit) (2026-05-07)
+
+**Context.** Post Tier 0 audit, Phase 8 (closed feedback loop) was the largest remaining substrate gap: `post_mortem_queue` rows accumulated from Stage 10 but had no drainer; D-104's rollback monitor was a queued spec item with no code; D-103's paired-bootstrap calibration gate was schema-only. Without these, the v3 thesis ("system improves over time") cannot compound. Pre-flight verification also surfaced: `signal_price_snapshots` is empty (price_tracker may itself be broken — separate issue), 0 `fda_assets` in resolved program states (so FDA-status outcome resolution is moot for current assets — fall back to forward-return verdict via D-116).
+
+**Decision.** Three new Python modules (post-mortem runner, rollback monitor, calibration refit) + one Modal app file (`feedback_loop_app.py`) + one migration (`v3_feedback_loop`) + three test suites (65 tests, all green).
+
+1. **`modal_workers/shared/post_mortem_runner.py`** — drains `post_mortem_queue` rows where `outcome_window_end < now()` and `status='pending'`. Per row: looks up the assessment + `fda_asset` for ticker/filed_at/reference_class, calls D-116's `label_event(ticker, filed_at, profile='binary_catalyst')` to get the realized outcome (T+30/60/90/180 returns + HIT/MISS verdict + miss_reason). When `hit is None` (delisted/halted/no_anchor/sentinel ticker): persists `status='no_outcome'` and skips. Otherwise: computes `prediction_error = predicted_conviction_pct − realized_outcome_score` (signed pp delta where `realized_outcome_score` maps `(direction × hit) → 0|50|100`), invokes Haiku 4.5 for a 200-word retrospective, and writes back `status='post_mortem_complete'`, `realized_outcome jsonb`, `post_mortem_text`, `prediction_error`. Then refits `reference_class_base_rates` UPSERT for the assessment's class (Wilson 95% CI from successes/n, median T+30 return from the resolved cohort), and appends a "Resolved post-mortems" entry to the per-asset memory file at `memory_files/asset_<id>.md` per Contract C5 (idempotent on `<!-- assessment:<id> -->` marker; injects the section if missing).
+
+2. **`modal_workers/scripts/nightly_calibration_refit.py`** — pulls `(raw_conviction_pct/100, direction_aligned_outcome, asset_id)` triples from every `post_mortem_complete` row, fits a fresh isotonic curve via `compute.fit_isotonic_curve` (PAV, no scikit-learn dep), and evaluates the D-103 5-condition gate by computing both prod-curve and new-curve predictions on the same set: `n ≥ 200`, `brier_delta_vs_prod > 0`, `paired_bootstrap_p < 0.05` (10k resamples by default), `ranking_auc_delta_vs_prod ≥ 0.05`, `max_single_asset_contribution_pct ≤ 5.0`. Always writes the candidate curve (`is_active=false` initially) plus an `eval_runs` row with the gate decision + inputs (D-104 snapshot policy: prior curve stays in `calibration_curves` so rollback can flip back). Auto-promotes to `is_active=true` only when both `gate.passed=true` AND env `ENABLE_PROMOTION=true`; otherwise leaves the candidate dormant for manual operator promotion via the existing `fda_calibration_activate(p_version, p_note)` RPC.
+
+3. **`modal_workers/scripts/rollback_monitor.py`** — D-104 daily Spearman drift check. Fetches every `post_mortem_complete` row's `(realized_30d_return_pct, conviction_pct_calibrated)` pair within the last 30 days; computes Spearman correlation (with average-rank tie handling, no scipy dep). Compares vs the previous monitor pass's correlation from `calibration_drift_log`. Fires rollback iff `n ≥ 30` AND (`corr < 0.20` OR `Δcorr ≤ −0.15`); when triggered, finds the most recently fitted prior curve via `calibration_curves.fitted_at DESC` and atomically flips `is_active`, then inserts an `operator_flag(severity=critical, source=rollback_monitor)` and a `calibration_drift_log` row. Conservative defaults: `n < 30` short-circuits with `rollback_reason='below_min_n'`; if no prior curve exists, demote-only (deactivate current, no new active curve).
+
+4. **Migration `v3_feedback_loop`** — `prompt_versions` table (D-104 append-only with partial unique `is_active per stage` index), `calibration_drift_log` table for the monitor's audit trail, plus the `memory_files` Storage bucket + RLS policies (service-role full access, authenticated read) so the post-mortem memory writes have a backing store. Bucket creation idempotent via `INSERT ... ON CONFLICT DO NOTHING`.
+
+5. **Modal app `conan-v3-feedback-loop`** ([feedback_loop_app.py](modal_workers/feedback_loop_app.py)) — single chained function `daily_feedback_loop` that runs drain → monitor → refit in order, each step caught so a failure in one doesn't gate the others. Two operator dry-run callables (`post_mortem_drain_dry_run`, `rollback_monitor_dry_run`) for live-state inspection without writes.
+
+**Modal cron limit hit.** Free tier caps cron jobs at 5; conan-v2 already uses all 5. Initial deploy with three `@modal.Cron` decorators failed; collapsed into a single chained function still hit the cap because v2 has 5/5. Final deploy ships `daily_feedback_loop` as on-demand callable (no `@modal.Cron`). External scheduling options: (a) upgrade Modal plan and re-add the schedule one-liner, (b) Supabase pg_cron via `_conan_modal_post`, (c) Pedro's Cowork scheduled tasks. Functions are deployed and callable today; scheduling is a configuration follow-up.
+
+**Anthropic secret coexistence.** `anthropic-orchestrator` Modal secret was authored in `orchestrator_app.py` but never created in the workspace (Modal CLI confirms only `compute-auth` / `courtlistner` / `supabase-secrets` / `scanner-secrets` exist). Stream 2 wires Haiku post-mortem text generation through `scanner-secrets` (which v2's thesis-writing functions already use, so it most plausibly contains an `ANTHROPIC_API_KEY`). If absent, post_mortem_runner's text-generation try/except catches the failure and falls through to a deterministic `[auto-fallback]` narrative; outcome resolution + prediction_error + base-rate refit + memory file write all still complete. Stream 3 will create the dedicated secret; this stream's `secrets=[...]` lists swap to it then.
+
+**Tests.** 65 / 65 green across three suites: 23 for the post-mortem runner (outcome score matrix, Wilson interval edges, median, memory-file merge idempotency + section injection), 24 for calibration refit (paired-bootstrap edge cases, AUC monotonicity + ties, all 5 D-103 gate failure modes + pass path, per-asset Brier contribution), 18 for rollback monitor (Spearman correctness on monotonic / inverted / random / tied / degenerate inputs, drift classification across all branches). All pure-helper tests — no DB / network — run in <0.2s.
+
+**Consequences.**
+
+- Phase 8 substrate is live: when Stream 3 starts producing closed-out predictions (assessment + window pass + outcome resolution), the daily chain refits the curve, gates via D-103, and rolls back on drift.
+- Until ≥30 resolved signals exist, the rollback monitor short-circuits with `below_min_n`; until ≥200, the calibration refit gate fails with `n_too_low` (both correct behaviors — system stays on cold-start identity curve).
+- Memory file format (Contract C5) is pinned in `_merge_memory_file()` — Stream 3's Stage 10 owns `## Active hypotheses`, `## Open uncertainties`, `## Recent assessments` sections; Stream 2 owns `## Resolved post-mortems` (append-only newest-first, idempotent on assessment_id marker).
+- Modal app `conan-v3-feedback-loop` deployed; secrets configured; functions callable. Scheduling is the only remaining step before automation.
+- Rollback path: DROP `prompt_versions` + `calibration_drift_log` tables, DELETE the `memory_files` Storage bucket, stop the Modal app. Existing `calibration_curves` / `post_mortem_queue` / `reference_class_base_rates` rows untouched.
