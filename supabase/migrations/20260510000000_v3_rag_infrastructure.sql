@@ -3,9 +3,13 @@
 -- Eight new tables for the contextual-retrieval pipeline:
 --   1. document_chunks                  — provider-agnostic chunk metadata
 --   2. chunk_embeddings_literature      — pubmed/biorxiv/medrxiv (1024-dim Matryoshka)
---   3. chunk_embeddings_filings         — edgar/federal_register/fda_advisory (2048-dim)
---   4. chunk_embeddings_labels_aes      — dailymed/faers/openfda/warning_letter/483 (2048-dim)
---   5. chunk_embeddings_news            — polygon_news/press_release/clinicaltrials (2048-dim)
+--   3. chunk_embeddings_filings         — edgar/federal_register/fda_advisory (2000-dim Matryoshka)
+--   4. chunk_embeddings_labels_aes      — dailymed/faers/openfda/warning_letter/483 (2000-dim)
+--   5. chunk_embeddings_news            — polygon_news/press_release/clinicaltrials (2000-dim)
+--
+-- 2000-dim chosen over native 2048 because pgvector HNSW caps at 2000 dims;
+-- Voyage-3 + OpenAI text-embedding-3-large both Matryoshka-truncate cleanly
+-- to 2000 (Voyage retains ~99% of full ranking on retrieval benchmarks).
 --   6. citation_graph_cache             — doc-to-doc citation edges
 --   7. retrieval_cache                  — query-result cache, TTL-keyed
 --   8. rag_eval_gold + rag_eval_log     — RAGAS gold set + run log
@@ -91,7 +95,7 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_filings (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2048) NOT NULL,
+  embedding vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
@@ -118,7 +122,7 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_labels_aes (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2048) NOT NULL,
+  embedding vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
@@ -145,7 +149,7 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_news (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2048) NOT NULL,
+  embedding vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );

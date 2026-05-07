@@ -61,11 +61,14 @@ SOURCE_TO_CORPUS = {
 
 CORPUS_FAMILIES = ("literature", "filings", "labels_aes", "news")
 
-# Embedding dimensions per corpus family (Matryoshka 1024 for literature,
-# 2048 elsewhere). Voyage and OpenAI both honor these via their dims param.
+# Embedding dimensions per corpus family. Matryoshka 1024 for literature
+# (smaller vector reduces index cost on the densest corpus); 2000 elsewhere
+# (pgvector HNSW caps at 2000 dims; Voyage-3 + OpenAI embedding-3-large both
+# Matryoshka-truncate cleanly to 2000). Voyage and OpenAI both honor these
+# via their dims param.
 CORPUS_DIM = {
     "literature": 1024,
-    "filings": 2048,
-    "labels_aes": 2048,
-    "news": 2048,
+    "filings": 2000,
+    "labels_aes": 2000,
+    "news": 2000,
 }
