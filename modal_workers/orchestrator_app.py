@@ -63,6 +63,10 @@ scanner_secrets = modal.Secret.from_name("scanner-secrets")
 # RAG_PROVIDER). Wired into orchestrator_run_one so Stage 1 RAG retrieval
 # (Phase 2B, ORCH_ENABLE_STAGE_1_RAG=1) can dispatch embed queries.
 rag_secrets = modal.Secret.from_name("rag-providers")
+# Shared compute auth secret. Same value as conan-v2's compute-auth secret +
+# Supabase internal_config.compute_secret. Required by the v3 multiplex
+# FastAPI endpoint (compute_v3_dispatch).
+compute_auth_secrets = modal.Secret.from_name("compute-auth")
 
 
 # ============================================================================
@@ -489,6 +493,161 @@ def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
     from orchestrator_runtime.tier2 import fail_tier2_run
 
     return fail_tier2_run(SupabaseClient(), run_id, error_message)
+
+
+# ============================================================================
+# compute_v3_dispatch — multiplex FastAPI endpoint
+#
+# One Modal endpoint slot, N logical compute operations. Cowork-side skills
+# (and the Supabase RPC bridges in supabase/migrations/2026051*_v3_compute_rpcs.sql)
+# call this endpoint with {"action": "<name>", "args": {...}} bodies; this
+# function dispatches to the right helper in orchestrator_runtime.
+#
+# WHY one slot: Modal's free-tier 8 fastapi_endpoint cap is fully consumed by
+# conan-v2's compute RPCs. Spinning up a separate FastAPI endpoint per v3
+# compute action would push us over the cap. A single multiplexer keeps v3
+# at exactly one HTTP-level slot regardless of how many actions we add.
+#
+# Auth: requires `x-conan-compute-secret` header (same shared secret as v2).
+# Mirrors the v2 `_verify_compute_secret` pattern (constant-time compare,
+# 401 on mismatch, 500 on server misconfiguration).
+#
+# Action contract:
+#   tier2_bulk_enqueue: args={asset_ids: [str, ...]}
+#   tier2_complete:    args={run_id, payload, cost_usd?, latency_ms?}
+#   tier2_fail:        args={run_id, error_message}
+#   ic_memo_run:       args={assessment_id, question?, persist?}
+#
+# Each action's response shape matches the underlying runtime helper's
+# return value verbatim — see orchestrator_runtime.tier2 / ic_memo_runner
+# for the per-action contracts.
+# ============================================================================
+
+# Importable for tests (without spinning up Modal at import time).
+COMPUTE_V3_ACTIONS = frozenset({
+    "tier2_bulk_enqueue",
+    "tier2_complete",
+    "tier2_fail",
+    "ic_memo_run",
+})
+
+
+def _verify_compute_secret(provided: Optional[str]) -> None:
+    """Raise FastAPI HTTPException if `provided` doesn't match
+    CONAN_COMPUTE_SECRET. Constant-time compare so an attacker can't
+    learn the prefix byte-by-byte."""
+    import hmac
+    from fastapi import HTTPException
+
+    expected = os.environ.get("CONAN_COMPUTE_SECRET", "")
+    if not expected:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "server misconfiguration: CONAN_COMPUTE_SECRET not set",
+            },
+        )
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "invalid or missing x-conan-compute-secret"},
+        )
+
+
+def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Pure dispatcher: route `action` to the right helper. Imported by
+    the FastAPI endpoint AND by tests (so we don't have to import the
+    Modal app to exercise routing)."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from orchestrator_runtime.tier2 import (
+        complete_tier2_run,
+        enqueue_tier2_bulk,
+        fail_tier2_run,
+    )
+    from orchestrator_runtime.ic_memo_runner import run_ic_memo
+
+    if action not in COMPUTE_V3_ACTIONS:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"unknown action {action!r}",
+                "valid_actions": sorted(COMPUTE_V3_ACTIONS),
+            },
+        )
+
+    sb = SupabaseClient()
+    if action == "tier2_bulk_enqueue":
+        return enqueue_tier2_bulk(sb, args["asset_ids"])
+    if action == "tier2_complete":
+        return complete_tier2_run(
+            sb,
+            args["run_id"],
+            args["payload"],
+            cost_usd=args.get("cost_usd", 0.0),
+            latency_ms=args.get("latency_ms"),
+        )
+    if action == "tier2_fail":
+        return fail_tier2_run(sb, args["run_id"], args.get("error_message", ""))
+    # ic_memo_run
+    return run_ic_memo(
+        sb,
+        args["assessment_id"],
+        question=args.get("question"),
+        persist=args.get("persist", True),
+    )
+
+
+def _compute_v3_header_default():
+    """Late binding so imports don't fail when fastapi isn't installed
+    (e.g. during local pytest runs that don't exercise the endpoint)."""
+    from fastapi import Header
+    return Header(default=None)
+
+
+@app.function(
+    image=image,
+    timeout=120,
+    secrets=[supabase_secrets, anthropic_secrets, compute_auth_secrets],
+)
+@modal.fastapi_endpoint(method="POST", label="compute-v3")
+def compute_v3_dispatch(
+    payload: dict,
+    x_conan_compute_secret: Optional[str] = _compute_v3_header_default(),
+) -> Dict[str, Any]:
+    """Multiplex compute endpoint. Single Modal slot, N actions.
+
+    Body: {"action": "<name>", "args": {...}}.
+    Header: x-conan-compute-secret.
+
+    The deployed URL is seeded into Supabase
+    `internal_config.modal_url_compute_v3` by the v3 compute RPCs migration;
+    SQL `rpc_tier2_*` / `rpc_ic_memo_run` wrappers POST here via pg_net.
+    """
+    _verify_compute_secret(x_conan_compute_secret)
+
+    if not isinstance(payload, dict):
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "payload must be a JSON object"},
+        )
+    action = payload.get("action")
+    args = payload.get("args") or {}
+    if not isinstance(action, str) or not action:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "missing required field: action"},
+        )
+    if not isinstance(args, dict):
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "args must be a JSON object"},
+        )
+
+    return _dispatch_compute_v3_action(action, args)
 
 
 # ============================================================================
