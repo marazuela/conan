@@ -100,6 +100,12 @@ ORCHESTRATOR_VERSION = "orch-v0.4.0-mvp"
 # OFF to minimize risk of regressions; enable per-assessment via env or by
 # passing `enable_sub_agents=True` to run_one().
 ENABLE_SUB_AGENTS_DEFAULT = os.environ.get("ORCH_ENABLE_SUB_AGENTS") == "1"
+
+# Phase 2B: when set, stage_1_rag_retrieve() injects local-corpus retrieval
+# results into ctx before Stage 1. Off by default during ramp; flip to "1"
+# once the RAG backfill (Phase 1A) is run against live data.
+ENABLE_STAGE_1_RAG_DEFAULT = os.environ.get("ORCH_ENABLE_STAGE_1_RAG") == "1"
+STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
 SUB_AGENT_LOOP_MAX_TURNS = 4
 
 # D-119: shared system prefix lifted from per-stage user content. All stages
@@ -296,6 +302,77 @@ def stage_4_anchor(
         },
     )
     return anchor, metric
+
+
+# ===========================================================================
+# Stage 1 RAG retrieval (Phase 2B) — runs between Stage 4 and Stage 1
+# ===========================================================================
+
+def stage_1_rag_retrieve(
+    sb: SupabaseClient,
+    ctx: Dict[str, Any],
+    *,
+    k: int = STAGE_1_RAG_K,
+    asset_scoped: bool = False,
+) -> StageMetric:
+    """Retrieve top-k chunks from the local RAG corpus and store them in
+    ``ctx["rag_chunks"]`` for ``_build_stage_1_user_content`` to render.
+
+    The retrieved chunks land in the user message (NOT the cached system
+    prefix) so retrieval drift between runs does not bust the asset-level
+    cache. Per D-119, the system prefix only contains things that are
+    deterministic given the asset.
+
+    Query construction: indication + drug_name (best heuristic seed for the
+    high-recall retrieval pass; the model can then iterate via the sub-agent
+    `internal_rag_hybrid_search` tool for narrower follow-up queries).
+
+    Cold-start safe: if the corpus is empty, hybrid_search returns [] and the
+    user content omits the retrieved-context section entirely.
+    """
+    asset = ctx.get("asset") or {}
+    drug = (asset.get("drug_name") or "").strip()
+    indication = (
+        asset.get("indication_normalized") or asset.get("indication") or ""
+    ).strip()
+    query = " ".join(filter(None, [indication, drug])) or asset.get("ticker")
+    if not query:
+        ctx["rag_chunks"] = []
+        return StageMetric(
+            stage_name="stage_1_rag_retrieve",
+            model="rag",
+            input_tokens=0, output_tokens=0,
+            cost_usd=0.0, latency_ms=0,
+            notes={"skipped": "no_query"},
+        )
+
+    t0 = time.time()
+    try:
+        from orchestrator_runtime import rag_handle
+        chunks = rag_handle.hybrid_search(
+            sb, query,
+            corpus="all",
+            k=k,
+            asset_id=asset.get("id") if asset_scoped else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # RAG is best-effort. If the corpus or RPCs aren't ready, log and
+        # emit an empty list so Stage 1 falls through to the legacy path.
+        logger.warning("stage_1_rag_retrieve: %s — degrading to no RAG", exc)
+        chunks = []
+
+    ctx["rag_chunks"] = chunks
+    return StageMetric(
+        stage_name="stage_1_rag_retrieve",
+        model="rag",
+        input_tokens=0, output_tokens=0,
+        cost_usd=0.0,
+        latency_ms=int((time.time() - t0) * 1000),
+        notes={
+            "n_chunks": len(chunks), "k": k,
+            "asset_scoped": asset_scoped, "query": query[:200],
+        },
+    )
 
 
 # ===========================================================================
@@ -1125,6 +1202,7 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     """
     docs = ctx["documents"]
     memory_text = ctx["memory_text"]
+    rag_chunks = ctx.get("rag_chunks") or []
 
     docs_section_parts = []
     for d in docs:
@@ -1140,9 +1218,19 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     memory_section = (f"\n\n## Prior assessment memory\n\n{memory_text}\n"
                       if memory_text else "")
 
+    rag_section = ""
+    if rag_chunks:
+        from orchestrator_runtime import rag_handle
+        rendered = rag_handle.format_chunks_for_prompt(rag_chunks)
+        rag_section = (
+            f"\n## Retrieved context ({len(rag_chunks)} chunks from local "
+            f"primary-source corpus — cite via [D:<doc>] or [C:<chunk>])\n\n"
+            f"{rendered}\n"
+        )
+
     return f"""Document window: last 180 days (most recent {len(docs)} material \
 documents shown below; full set has more)
-
+{rag_section}
 ## Document excerpts ({len(docs)} documents, head-only excerpts)
 
 {docs_section}{memory_section}
@@ -1275,6 +1363,15 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     logger.info("=== Stage 4: reference-class anchor ===")
     anchor, m4 = stage_4_anchor(sb, ctx)
     run.stage_metrics.append(m4)
+
+    if ENABLE_STAGE_1_RAG_DEFAULT:
+        logger.info("=== Stage 1 RAG retrieve (k=%d) ===", STAGE_1_RAG_K)
+        m_rag = stage_1_rag_retrieve(sb, ctx, k=STAGE_1_RAG_K)
+        run.stage_metrics.append(m_rag)
+        logger.info(
+            "Stage 1 RAG: %d chunks", len(ctx.get("rag_chunks") or []),
+        )
+
     if anchor.has_signal:
         br = anchor.base_rate
         logger.info(
