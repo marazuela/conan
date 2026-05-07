@@ -1028,6 +1028,11 @@ def stage_10_persist(
     # 1h-TTL system block A doesn't bloat. Best-effort: a write failure does
     # not block the assessment from returning.
     try:
+        # D-123 C5: read prior memory, then append-merge a new entry into
+        # ## Recent assessments (idempotent on assessment_id, capped at 5).
+        store = MemoryStore(sb)
+        prior_blobs = store.load_all(asset_id=asset_id)
+        prior_text = (prior_blobs.asset or "") if prior_blobs else ""
         memory_summary = _build_asset_memory_summary(
             asset=ctx["asset"],
             parsed=parsed,
@@ -1036,8 +1041,9 @@ def stage_10_persist(
             band=band,
             direction=direction,
             assessment_id=assessment_id,
+            prior_text=prior_text,
         )
-        MemoryStore(sb).write(
+        store.write(
             scope="asset",
             scope_id=asset_id,
             content=memory_summary,
@@ -1046,6 +1052,32 @@ def stage_10_persist(
         logger.warning("memory writeback failed for asset=%s: %s", asset_id, exc)
 
     return assessment_id
+
+
+RECENT_ASSESSMENTS_CAP = 5
+
+
+def _parse_recent_assessments(prior_text: str) -> List[str]:
+    """Extract the bullet entries inside `## Recent assessments` from a
+    prior memory file. Returns the list of bullet lines (without the leading
+    '- '). Idempotent: if the section is missing, returns []."""
+    if not prior_text:
+        return []
+    lines = prior_text.splitlines()
+    out: List[str] = []
+    in_section = False
+    for ln in lines:
+        if ln.strip().startswith("## "):
+            if in_section:
+                break  # next section started
+            if ln.strip().lower() == "## recent assessments":
+                in_section = True
+            continue
+        if not in_section:
+            continue
+        if ln.strip().startswith("- "):
+            out.append(ln.strip()[2:])
+    return out
 
 
 def _build_asset_memory_summary(
@@ -1057,8 +1089,14 @@ def _build_asset_memory_summary(
     band: str,
     direction: str,
     assessment_id: str,
+    prior_text: str = "",
 ) -> str:
-    """Compact asset-scope memory blob written by Stage 10."""
+    """Compact asset-scope memory blob written by Stage 10.
+
+    D-123 Contract C5: `## Recent assessments` is append-only newest-first,
+    idempotent on assessment_id (re-running the same assessment doesn't
+    duplicate the entry), capped at RECENT_ASSESSMENTS_CAP.
+    """
     reasoning = (parsed.get("reasoning_summary") or "")[:1200]
     uncertainties = parsed.get("uncertainties") or []
     unc_lines = [
@@ -1067,6 +1105,21 @@ def _build_asset_memory_summary(
         if isinstance(u, dict)
     ]
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Append-merge ## Recent assessments — newest first, dedupe by id.
+    new_entry = (
+        f"{timestamp[:19].replace('T', ' ')}Z · "
+        f"id={assessment_id[:8]} · band={band} · dir={direction} · "
+        f"conv={conviction_calibrated:.1f}"
+    )
+    prior = _parse_recent_assessments(prior_text)
+    # Idempotency marker: assessment_id substring.
+    seen_id = f"id={assessment_id[:8]}"
+    deduped = [e for e in prior if seen_id not in e]
+    merged = [new_entry] + deduped
+    merged = merged[:RECENT_ASSESSMENTS_CAP]
+    recent_lines = "\n".join(f"- {e}" for e in merged)
+
     return (
         f"# Asset memory — {asset.get('drug_name') or asset.get('ticker') or asset.get('id')}\n\n"
         f"_Last updated: {timestamp}_\n\n"
@@ -1079,7 +1132,7 @@ def _build_asset_memory_summary(
         f"## Reasoning summary\n\n{reasoning}\n\n"
         f"## Open uncertainties (top 5)\n\n"
         + ("\n".join(unc_lines) if unc_lines else "_(none recorded)_")
-        + "\n"
+        + f"\n\n## Recent assessments\n\n{recent_lines}\n"
     )
 
 

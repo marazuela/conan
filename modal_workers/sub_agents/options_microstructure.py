@@ -61,7 +61,8 @@ _provider: Optional[PolygonOptionsData] = None
 def _p() -> PolygonOptionsData:
     global _provider
     if _provider is None:
-        _provider = PolygonOptionsData()
+        from modal_workers.providers.polygon.base import PolygonClient
+        _provider = PolygonOptionsData(client=PolygonClient())
     return _provider
 
 
