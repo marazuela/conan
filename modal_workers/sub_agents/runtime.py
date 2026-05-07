@@ -124,7 +124,14 @@ ROLE_REGISTRY: Dict[str, "SubAgentRunner"] = {}
 
 class SubAgentRunner:
     """Base class. Subclasses set role, skill_path, schema_filename, tool_defs,
-    and implement build_handler()."""
+    and implement build_handler().
+
+    Opt-in shared tools: setting `internal_rag_default_corpus` (one of
+    literature/filings/labels_aes/news/all) injects the two `internal_rag_*`
+    tools into `effective_tool_defs()` and chains the corresponding handler
+    via `_rag_tools.chain_handlers`. Setting `compute_tools_enabled=True`
+    additionally injects `compute_similar_resolved_cases`. Subclasses still
+    define their role-specific tools and handler — the merge is additive."""
 
     role: str = ""
     skill_path: Optional[Path] = None
@@ -134,8 +141,39 @@ class SubAgentRunner:
     max_turns: int = DEFAULT_MAX_TURNS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
 
+    # Opt-in shared tools.
+    internal_rag_default_corpus: Optional[str] = None
+    compute_tools_enabled: bool = False
+
     def __init__(self, client: Optional[OrchestratorClient] = None):
         self._client = client or OrchestratorClient()
+
+    def effective_tool_defs(self) -> List[Dict[str, Any]]:
+        """Role tool_defs + opt-in shared tool defs."""
+        defs: List[Dict[str, Any]] = list(self.tool_defs or [])
+        if self.internal_rag_default_corpus:
+            from modal_workers.sub_agents._rag_tools import (
+                internal_rag_tool_defs,
+            )
+            defs.extend(internal_rag_tool_defs(self.internal_rag_default_corpus))
+        if self.compute_tools_enabled:
+            from modal_workers.sub_agents._rag_tools import compute_tool_defs
+            defs.extend(compute_tool_defs())
+        return defs
+
+    def _wrap_handler(self, role_handler: ToolHandler) -> ToolHandler:
+        """Chain role handler with opt-in shared handlers."""
+        if not (self.internal_rag_default_corpus or self.compute_tools_enabled):
+            return role_handler
+        from modal_workers.sub_agents._rag_tools import (
+            chain_handlers, make_compute_handler, make_internal_rag_handler,
+        )
+        chain: List[ToolHandler] = [role_handler]
+        if self.internal_rag_default_corpus:
+            chain.append(make_internal_rag_handler())
+        if self.compute_tools_enabled:
+            chain.append(make_compute_handler())
+        return chain_handlers(*chain)
 
     # ---------- abstract-ish hooks ----------
 
@@ -180,7 +218,8 @@ class SubAgentRunner:
             {"role": "user", "content": [{"type": "text", "text": user_text}]}
         ]
 
-        handler = self.build_handler()
+        handler = self._wrap_handler(self.build_handler())
+        effective_tools = self.effective_tool_defs()
         tool_log: List[Dict[str, Any]] = []
         total_in = total_out = 0
         total_cost = 0.0
@@ -194,7 +233,7 @@ class SubAgentRunner:
                 messages=messages,
                 model=self.model,
                 max_tokens=self.max_output_tokens,
-                tools=self.tool_defs or None,
+                tools=effective_tools or None,
             )
             total_in += res.input_tokens
             total_out += res.output_tokens

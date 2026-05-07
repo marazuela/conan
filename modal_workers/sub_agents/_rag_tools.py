@@ -170,10 +170,15 @@ def make_compute_handler() -> Callable[[str, Dict[str, Any]], Dict[str, Any]]:
             sb = SupabaseClient()
             cases = similar_resolved_cases(
                 sb,
-                reference_class_signature=inp["reference_class_signature"],
+                reference_class=inp["reference_class_signature"],
                 k=int(inp.get("k", 10)),
             )
-            return {"count": len(cases), "cases": cases}
+            # SimilarResolvedCase is a dataclass; serialize for tool result.
+            from dataclasses import asdict
+            return {
+                "count": len(cases),
+                "cases": [asdict(c) for c in cases],
+            }
         raise KeyError(f"_compute handler does not own tool: {name}")
 
     return handle

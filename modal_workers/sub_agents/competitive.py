@@ -73,6 +73,7 @@ class CompetitiveRunner(SubAgentRunner):
     skill_path = SKILL_PATH
     schema_filename = "competitive_landscape_v1.json"
     tool_defs = _TOOL_DEFS
+    internal_rag_default_corpus = "all"
 
     def build_handler(self) -> ToolHandler:
         def handle(name: str, inp: Dict[str, Any]) -> Dict[str, Any]:

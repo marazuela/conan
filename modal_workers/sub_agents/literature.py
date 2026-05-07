@@ -83,6 +83,7 @@ class LiteratureRunner(SubAgentRunner):
     skill_path = SKILL_PATH
     schema_filename = "literature_review_v1.json"
     tool_defs = _TOOL_DEFS
+    internal_rag_default_corpus = "literature"
 
     def build_handler(self) -> ToolHandler:
         def handle(name: str, inp: Dict[str, Any]) -> Dict[str, Any]:
