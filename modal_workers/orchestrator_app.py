@@ -370,15 +370,21 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
 # Operator-refresh endpoint — dashboard "Refresh" button creates a run
 # ============================================================================
 
-# NOTE (2026-05-07, deploy-time blocker): Modal free-tier caps web endpoints
-# at 8 per workspace; conan-v2's compute RPCs already use all 8. The two
-# fastapi_endpoint decorators below are commented out so the core orchestrator
-# functions (asset_linker_run, fact_extractor_run, orchestrator_run_one,
-# orchestrator_drain_queue, asset_linker_pass2_run) can deploy. Re-enable by
-# (a) upgrading the Modal plan or (b) freeing 2 endpoints elsewhere, then
-# uncommenting the @modal.fastapi_endpoint decorators below + redeploying.
-# Until then: dashboard's Refresh button can call orchestrator_run_one
-# directly via Modal CLI, and health is observable via `modal app list`.
+# NOTE (2026-05-08, slot accounting): Modal free-tier caps web endpoints at
+# 8 per workspace. v2 dropped its `health` HTTP endpoint on 2026-05-08
+# (now a plain @app.function callable via `modal run conan-v2::health`),
+# freeing 1 slot. v3 currently uses 1 slot via `compute_v3_dispatch`
+# (the multiplex above). Workspace total: 7 (v2) + 1 (v3) = 8/8.
+#
+# The two endpoints below stay commented out — adding either would put us
+# at 9/8 and the deploy would fail. To re-enable them in the future:
+#   (a) drop another v2 endpoint to a plain @app.function, or
+#   (b) fold their logic into compute_v3_dispatch as new actions
+#       (operator_refresh becomes action='operator_refresh',
+#        health becomes action='health'), or
+#   (c) upgrade the Modal plan.
+# Until then: dashboard's Refresh button calls orchestrator_run_one
+# directly via Modal CLI; health smoke is `modal run conan-v3-orchestrator::health`.
 
 # ============================================================================
 # Operator-refresh endpoint — dashboard "Refresh" button creates a run

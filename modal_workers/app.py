@@ -99,11 +99,20 @@ def rubric_apply_caps(payload: dict) -> dict:
 
 
 # ----------------------------------------------------------------------
-# health — trivial liveness check; doubles as smoke test after deploy.
+# health — trivial liveness check.
+#
+# 2026-05-08 — demoted from `@modal.fastapi_endpoint` (label='health',
+# URL https://marazuela--health.modal.run) to a plain Modal function to
+# free one of the workspace's 8 free-tier `fastapi_endpoint` slots so
+# conan-v3-orchestrator's `compute-v3` multiplex can deploy. No code in
+# this repo or the Cowork skills called the HTTP endpoint — it was a
+# manual smoke test only ("doubles as smoke test after deploy" per its
+# original comment). Manual smoke now: `modal run conan-v2::health`.
+# (The local engine `health_check.py` is unrelated; it never hit this
+# endpoint.)
 # ----------------------------------------------------------------------
 
 @app.function(image=image, timeout=10)
-@modal.fastapi_endpoint(method="GET", label="health")
 def health() -> dict:
     from modal_workers.shared.rubric_engine import WEIGHTS
     return {
