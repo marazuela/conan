@@ -3,24 +3,26 @@
 Reads (asset, extracted_facts, key documents, market context, prior memory)
 and emits one `convergence_assessments` row.
 
-This is a SIMPLIFIED v0.1 implementation of the plan's 10-stage pipeline. The
+This is a SIMPLIFIED v0.2 implementation of the plan's 10-stage pipeline. The
 fully-built pipeline (Stages 0-10 with ensemble + critique + isotonic
 calibration + memory tool + interleaved thinking + Citations API) is the
-next-iteration deliverable. v0.1 demonstrates the core synthesis loop
+next-iteration deliverable. v0.2 demonstrates the core synthesis loop
 end-to-end on the VRDN MVP.
 
-What v0.1 includes:
+What v0.2 includes:
   Stage 0  — load asset metadata + extracted_facts (no full memory hierarchy)
   Stage 1  — Sonnet synthesis (cited prose, fact_id-anchored)
+  Stage 4  — reference-class anchoring (base rate + similar resolved cases)
+  Stage 6  — Batch / streaming ensemble + dispersion (when ensemble_n > 1)
+  Stage 7  — Sonnet constitutional pass with citation-resolution check
   Stage 9  — Sonnet structured-output extraction → schema-validated JSON
   Stage 10 — write convergence_assessments row + post_mortem_queue stub
 
-What v0.1 skips (next iteration):
+What v0.2 skips (next iteration):
   Stage 2-3 — hypothesis enumeration + adversarial pre-mortem
-  Stage 4   — reference-class anchoring (compute-mcp tools)
-  Stage 6   — N=7 Batch ensemble + dispersion
-  Stage 7   — Sonnet constitutional pass with citation-resolution check
-  Stage 8   — isotonic calibration (no curve fitted yet)
+  Stage 8   — isotonic calibration (curve-fitting math lives in
+              modal_workers.shared.compute; no curve fitted yet —
+              conviction_pct_calibrated == raw_conviction_pct until refit)
 
 Run:
   ANTHROPIC_API_KEY=... SUPABASE_URL=... \\
@@ -40,6 +42,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from modal_workers.shared.compute import (
+    Stage4Anchor,
+    apply_isotonic_calibration,
+    build_stage_4_anchor,
+    format_anchor_for_prompt,
+    get_active_calibration_curve,
+)
 from modal_workers.shared.supabase_client import SupabaseClient
 from orchestrator_runtime.client import (
     DEFAULT_EXTRACTOR_MODEL,
@@ -60,7 +69,7 @@ from orchestrator_runtime.constitutional import (
 
 logger = logging.getLogger(__name__)
 
-ORCHESTRATOR_VERSION = "orch-v0.1.0-mvp"
+ORCHESTRATOR_VERSION = "orch-v0.2.0-mvp"
 
 # Per-asset doc-buffer construction caps (keep below Tier-1 rate limit
 # of 30k input tokens/min on the new API key)
@@ -181,7 +190,47 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         "documents": docs,
         "memory_text": memory_text,
         "asset_doc_links": asset_docs,
+        "reference_class_anchor": None,  # populated by stage_4_anchor
     }
+
+
+# ===========================================================================
+# Stage 4 — reference-class anchoring
+# ===========================================================================
+
+def stage_4_anchor(
+    sb: SupabaseClient,
+    ctx: Dict[str, Any],
+) -> tuple[Stage4Anchor, StageMetric]:
+    """Look up the empirical base rate + similar resolved cases for the
+    asset's reference_class_signature. Result is attached to ctx so the
+    Stage 1 prompt builder can render an anchor section, and threaded
+    into Stage 7 / Stage 10 downstream.
+    """
+    t0 = time.monotonic()
+    asset = ctx["asset"]
+    reference_class = asset.get("reference_class_signature")
+    anchor = build_stage_4_anchor(
+        sb,
+        reference_class=reference_class,
+        exclude_asset_id=asset.get("id"),
+    )
+    ctx["reference_class_anchor"] = anchor
+    metric = StageMetric(
+        stage_name="stage_4_reference_class_anchor",
+        model="deterministic",
+        latency_ms=int((time.monotonic() - t0) * 1000),
+        notes={
+            "reference_class": reference_class,
+            "has_base_rate": anchor.base_rate is not None,
+            "n_similar_cases": len(anchor.similar_cases),
+            "n_cases_in_class": (anchor.base_rate.n_cases
+                                 if anchor.base_rate else None),
+            "approval_rate_pct": (round(anchor.base_rate.as_pct(), 2)
+                                  if anchor.base_rate else None),
+        },
+    )
+    return anchor, metric
 
 
 # ===========================================================================
@@ -249,62 +298,9 @@ def stage_1_synthesize(
     ctx: Dict[str, Any],
     model: str,
 ) -> tuple[str, StageMetric]:
-    asset = ctx["asset"]
+    user_content = _build_stage_1_user_content(ctx)
     facts = ctx["facts"]
     docs = ctx["documents"]
-    memory_text = ctx["memory_text"]
-
-    # Format facts compactly
-    facts_section = "\n".join(
-        f"- F:{f['id'][:8]} ({f['fact_type']}, conf={f.get('confidence')}, "
-        f"doc=D:{f['document_id'][:8]}): {f['fact_text']}\n"
-        f"  evidence: \"{f['evidence_quote'][:300]}\""
-        for f in facts
-    )
-
-    # Format document excerpts (head + tail of each, char-budgeted)
-    docs_section_parts = []
-    for d in docs:
-        text = d.get("raw_text") or ""
-        excerpt = (text[:DOC_EXCERPT_CHARS] +
-                   ("\n[…trim…]\n" if len(text) > DOC_EXCERPT_CHARS else ""))
-        docs_section_parts.append(
-            f"### D:{d['id'][:8]} — {d['source']}/{d['doc_type']} — "
-            f"{d.get('title') or '(untitled)'} — {d.get('published_at')}\n"
-            f"{excerpt}"
-        )
-    docs_section = "\n\n".join(docs_section_parts)
-
-    memory_section = (f"\n\n## Prior assessment memory\n\n{memory_text}\n"
-                      if memory_text else "")
-
-    user_content = f"""Tracked asset:
-  asset_id: {asset['id']}
-  ticker: {asset.get('ticker')}
-  drug_name: {asset.get('drug_name')}
-  generic_name: {asset.get('generic_name') or '(unknown)'}
-  sponsor_name: {asset.get('sponsor_name')}
-  indication: {asset.get('indication')}
-  indication_normalized: {asset.get('indication_normalized') or '(unknown)'}
-  reference_class: {asset.get('reference_class_signature') or '(unknown)'}
-  application_number: {asset.get('application_number') or '(unknown)'}
-  program_status: {asset.get('program_status') or '(unknown)'}
-
-Document window: last 180 days (most recent {len(docs)} material documents \
-shown below; full set has more)
-
-## Structured fact layer ({len(facts)} facts, ranked by confidence then \
-recency)
-
-{facts_section}
-
-## Document excerpts ({len(docs)} documents, head-only excerpts)
-
-{docs_section}{memory_section}
-
-Produce the cited prose synthesis per the system prompt. End with the \
-Conclusion section in the exact format specified."""
-
     result = a_client.call(
         system=STAGE_1_SYSTEM,
         messages=[{"role": "user", "content": user_content}],
@@ -455,7 +451,28 @@ def stage_10_persist(
     if evidence_quality is not None:
         evidence_quality = max(0.0, min(1.0, evidence_quality))
 
-    band = derive_band(conviction)
+    # Stage 8 — isotonic calibration if a curve is active
+    active_curve = get_active_calibration_curve(sb)
+    if active_curve and active_curve.get("curve_data"):
+        calibrated = apply_isotonic_calibration(
+            conviction / 100.0, active_curve["curve_data"]) * 100.0
+        calibrated = max(0.0, min(100.0, calibrated))
+        calibration_curve_version: Optional[str] = active_curve.get("version")
+    else:
+        calibrated = conviction
+        calibration_curve_version = None
+
+    band = derive_band(calibrated)
+
+    # Stage 4 anchor (populated upstream; safe-degrade to Nones if absent)
+    anchor: Optional[Stage4Anchor] = ctx.get("reference_class_anchor")
+    reference_class_value: Optional[str] = (
+        anchor.reference_class if anchor and anchor.reference_class else None)
+    base_rate_value: Optional[float] = (
+        anchor.base_rate.approval_rate if anchor and anchor.base_rate else None)
+    similar_case_ids: List[str] = (
+        [c.eval_harness_id for c in anchor.similar_cases]
+        if anchor and anchor.similar_cases else [])
 
     total_input = sum(m.input_tokens for m in run.stage_metrics)
     total_output = sum(m.output_tokens for m in run.stage_metrics)
@@ -499,8 +516,13 @@ def stage_10_persist(
               "affected_id": f.affected_id}
              for f in constitutional_result.findings]
             if constitutional_result else None),
-        "conviction_pct_calibrated": conviction,  # MVP skips Stage 8 isotonic
-        "conviction_pct": conviction,
+        "reference_class": reference_class_value,
+        "reference_class_base_rate": (
+            round(base_rate_value, 3) if base_rate_value is not None else None),
+        "similar_resolved_case_ids": similar_case_ids or None,
+        "conviction_pct_calibrated": round(calibrated, 2),
+        "calibration_curve_version": calibration_curve_version,
+        "conviction_pct": round(calibrated, 2),
         "evidence_quality": evidence_quality,
         "band": band,
         "total_input_tokens": total_input,
@@ -620,6 +642,11 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     memory_section = (f"\n\n## Prior assessment memory\n\n{memory_text}\n"
                       if memory_text else "")
 
+    anchor = ctx.get("reference_class_anchor")
+    anchor_block = format_anchor_for_prompt(anchor) if anchor is not None else None
+    anchor_section = (f"\n## Reference-class anchor\n\n{anchor_block}\n\n"
+                      if anchor_block else "")
+
     return f"""Tracked asset:
   asset_id: {asset['id']}
   ticker: {asset.get('ticker')}
@@ -634,7 +661,7 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
 
 Document window: last 180 days (most recent {len(docs)} material documents \
 shown below; full set has more)
-
+{anchor_section}
 ## Structured fact layer ({len(facts)} facts, ranked by confidence then \
 recency)
 
@@ -666,6 +693,22 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                 asset.get("ticker"), asset.get("drug_name"),
                 asset.get("indication"), asset.get("application_number") or "no_app#",
                 len(ctx["facts"]), len(ctx["documents"]))
+
+    logger.info("=== Stage 4: reference-class anchor ===")
+    anchor, m4 = stage_4_anchor(sb, ctx)
+    run.stage_metrics.append(m4)
+    if anchor.has_signal:
+        br = anchor.base_rate
+        logger.info(
+            "Stage 4: class=%s base_rate=%s n=%s similar=%d",
+            anchor.reference_class,
+            (f"{br.as_pct():.1f}%" if br else "n/a"),
+            (br.n_cases if br else "n/a"),
+            len(anchor.similar_cases),
+        )
+    else:
+        logger.info("Stage 4: no anchor signal for class=%s",
+                    anchor.reference_class or "(unknown)")
 
     user_content = _build_stage_1_user_content(ctx)
 
@@ -779,7 +822,8 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             thesis_direction=parsed.get("thesis_direction") or "neutral",
             conviction_pct=conviction_for_check,
             reference_class=asset.get("reference_class_signature"),
-            reference_class_base_rate=None,  # plug in when reference_class_base_rates table populated
+            reference_class_base_rate=(
+                anchor.base_rate.approval_rate if anchor.base_rate else None),
             model=extractor_model,
             skip_semantic=constitutional_skip_semantic,
         )
