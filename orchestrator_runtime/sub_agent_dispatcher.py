@@ -1,0 +1,312 @@
+"""sub_agent_dispatcher — routes Stage 1 tool calls to the four sub-agent runners.
+
+Exposes one Anthropic tool definition (`dispatch_sub_agent`) and a single
+handler function the Stage 1 tool-use loop calls. Internally:
+
+  - Maps role → runner class via modal_workers.sub_agents.ROLE_REGISTRY.
+  - Runs the chosen runner (synchronous; concurrency is handled at the Stage 1
+    level via parallel tool-use — Anthropic emits multiple tool_use blocks in
+    one assistant turn, and Stage 1's loop dispatches them in parallel).
+  - Logs every dispatch to the sub_agent_calls table.
+  - Enforces a per-assessment aggregate token budget across all sub-agent
+    calls (default ORCH_SUB_AGENT_BUDGET_TOKENS=200000). Hooks (Stream 4.6)
+    enforce the same cap from outside; this is the in-process safeguard.
+  - Schema-validation failures land in failed_reactor_events with
+    source='sub_agent.<role>' (per memory: failed_reactor_events_shared_dlq).
+
+Stage 1 wires this in via:
+
+    from orchestrator_runtime.sub_agent_dispatcher import (
+        DISPATCH_TOOL_DEF, dispatch_sub_agent_tool,
+    )
+    tools = [..., DISPATCH_TOOL_DEF]
+    # in the tool-use loop:
+    if name == "dispatch_sub_agent":
+        result = dispatch_sub_agent_tool(input, assessment_id=...)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import Any, Awaitable, Dict, List, Optional
+
+from modal_workers.shared.supabase_client import SupabaseClient
+from modal_workers.sub_agents import ROLE_REGISTRY, SubAgentResult, SubAgentSchemaError
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "200000"))
+
+
+DISPATCH_TOOL_DEF: Dict[str, Any] = {
+    "name": "dispatch_sub_agent",
+    "description": (
+        "Spawn a parallel research sub-agent. Use to gather: 'literature' for "
+        "peer-reviewed + preprint papers; 'competitive' for competitor pipeline + "
+        "moat analysis; 'regulatory_history' for prior AdComms / analogous "
+        "approvals / FDA-staff concerns; 'options_microstructure' for "
+        "straddle-implied move + IV term + OI concentration before the catalyst "
+        "date. Issue parallel tool_use blocks for independent topics. Each call "
+        "returns a JSON object validated against the sub-agent's _v1 schema; on "
+        "schema failure the result has schema_pass=false and the error in "
+        "errors[]. Do NOT retry on schema_pass=false — flag the gap in your "
+        "uncertainties output instead."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "role": {
+                "type": "string",
+                "enum": ["literature", "competitive", "regulatory_history", "options_microstructure"],
+            },
+            "question": {
+                "type": "string",
+                "description": "Research question or scoped query for the sub-agent (1-3 sentences).",
+            },
+            "priority": {
+                "type": "string",
+                "enum": ["high", "normal"],
+                "default": "normal",
+            },
+        },
+        "required": ["role", "question"],
+    },
+}
+
+
+@dataclass
+class DispatchOutcome:
+    """In-memory dispatch outcome wrapped for sub_agent_calls + Stage 1 consumption."""
+    role: str
+    schema_pass: bool
+    output: Dict[str, Any]
+    errors: List[str]
+    tokens: int
+    cost_usd: float
+    latency_ms: int
+    sub_agent_call_id: Optional[str] = None
+
+
+_sb: Optional[SupabaseClient] = None
+_running_total_tokens = 0
+
+
+def _client() -> SupabaseClient:
+    global _sb
+    if _sb is None:
+        _sb = SupabaseClient()
+    return _sb
+
+
+def _log_to_dlq(role: str, errors: List[str], payload: Dict[str, Any]) -> None:
+    try:
+        _client()._rest(
+            "POST", "failed_reactor_events",
+            json={
+                "payload": {
+                    "source": f"sub_agent.{role}",
+                    "schema_filename": f"{role}_review_v1.json"
+                    if role == "literature" else f"{role}_v1.json",
+                    "raw_output": payload,
+                },
+                "error_message": "; ".join(errors)[:1000],
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("sub_agent_dispatcher: DLQ write failed: %s", exc)
+
+
+def _log_call(
+    *,
+    assessment_id: Optional[str],
+    role: str,
+    question: str,
+    output: Dict[str, Any],
+    schema_pass: bool,
+    schema_retries: int,
+    tokens: int,
+    cost_usd: float,
+    latency_ms: int,
+) -> Optional[str]:
+    try:
+        rows = _client()._rest(
+            "POST", "sub_agent_calls",
+            json={
+                "assessment_id": assessment_id,
+                "role": role,
+                "query": question[:8000],
+                "output": output,
+                "schema_pass": schema_pass,
+                "schema_retries": schema_retries,
+                "tokens": tokens,
+                "cost_usd": round(cost_usd, 4),
+                "latency_ms": latency_ms,
+            },
+            headers={"Prefer": "return=representation"},
+        ) or []
+        if rows and isinstance(rows, list):
+            return rows[0].get("id")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sub_agent_dispatcher: sub_agent_calls insert failed: %s", exc)
+    return None
+
+
+def reset_budget() -> None:
+    """Call once per assessment before the first dispatch."""
+    global _running_total_tokens
+    _running_total_tokens = 0
+
+
+def dispatch_sub_agent(
+    role: str,
+    question: str,
+    *,
+    asset_context: Optional[Dict[str, Any]] = None,
+    assessment_id: Optional[str] = None,
+    priority: str = "normal",
+    budget_token_cap: Optional[int] = None,
+) -> DispatchOutcome:
+    """Run one sub-agent and return its outcome. Used by Stage 1's tool-use loop."""
+    global _running_total_tokens
+
+    runner_cls = ROLE_REGISTRY.get(role)
+    if runner_cls is None:
+        return DispatchOutcome(
+            role=role,
+            schema_pass=False,
+            output={},
+            errors=[f"unknown role: {role}"],
+            tokens=0,
+            cost_usd=0.0,
+            latency_ms=0,
+        )
+
+    cap = budget_token_cap or DEFAULT_BUDGET_TOKENS
+    remaining = max(0, cap - _running_total_tokens)
+    if remaining <= 0:
+        return DispatchOutcome(
+            role=role,
+            schema_pass=False,
+            output={},
+            errors=[f"sub_agent_budget_exhausted: {_running_total_tokens}/{cap} tokens"],
+            tokens=0,
+            cost_usd=0.0,
+            latency_ms=0,
+        )
+
+    runner = runner_cls()
+    schema_pass = True
+    errors: List[str] = []
+    output: Dict[str, Any] = {}
+    tokens = 0
+    cost = 0.0
+    latency = 0
+
+    try:
+        result: SubAgentResult = runner.run(
+            question=question,
+            asset_context=asset_context or {},
+            budget_token_cap=remaining,
+        )
+        output = result.output
+        tokens = result.tokens_input + result.tokens_output
+        cost = result.cost_usd
+        latency = result.latency_ms
+    except SubAgentSchemaError as exc:
+        schema_pass = False
+        errors = exc.errors
+        output = exc.payload or {}
+        _log_to_dlq(role, errors, output)
+    except Exception as exc:  # noqa: BLE001
+        schema_pass = False
+        errors = [f"{type(exc).__name__}: {exc}"]
+        logger.exception("sub_agent_dispatcher[%s] runtime error", role)
+
+    _running_total_tokens += tokens
+    call_id = _log_call(
+        assessment_id=assessment_id,
+        role=role,
+        question=question,
+        output=output,
+        schema_pass=schema_pass,
+        schema_retries=0,
+        tokens=tokens,
+        cost_usd=cost,
+        latency_ms=latency,
+    )
+
+    return DispatchOutcome(
+        role=role,
+        schema_pass=schema_pass,
+        output=output,
+        errors=errors,
+        tokens=tokens,
+        cost_usd=cost,
+        latency_ms=latency,
+        sub_agent_call_id=call_id,
+    )
+
+
+def dispatch_sub_agent_tool(
+    tool_input: Dict[str, Any],
+    *,
+    asset_context: Optional[Dict[str, Any]] = None,
+    assessment_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Stage 1 tool-handler. Called when Claude emits a `dispatch_sub_agent` tool_use block."""
+    role = tool_input.get("role", "")
+    question = tool_input.get("question", "")
+    priority = tool_input.get("priority", "normal")
+    outcome = dispatch_sub_agent(
+        role,
+        question,
+        asset_context=asset_context,
+        assessment_id=assessment_id,
+        priority=priority,
+    )
+    # Trim large outputs returned to the model — schema-validated payload + status
+    return {
+        "role": outcome.role,
+        "schema_pass": outcome.schema_pass,
+        "errors": outcome.errors,
+        "output": outcome.output,
+        "metadata": {
+            "tokens": outcome.tokens,
+            "cost_usd": outcome.cost_usd,
+            "latency_ms": outcome.latency_ms,
+            "sub_agent_call_id": outcome.sub_agent_call_id,
+        },
+    }
+
+
+async def dispatch_parallel(
+    requests: List[Dict[str, Any]],
+    *,
+    asset_context: Optional[Dict[str, Any]] = None,
+    assessment_id: Optional[str] = None,
+) -> List[DispatchOutcome]:
+    """Fire multiple dispatch_sub_agent calls in parallel via asyncio.
+
+    Each request is {role, question, priority?}. Anthropic's parallel tool-use
+    feature already emits multiple tool_use blocks in one assistant turn; this
+    helper is for callers that want to dispatch a batch directly (eg. the
+    eval_harness runner).
+    """
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(
+            None,
+            lambda r=req: dispatch_sub_agent(
+                r["role"], r["question"],
+                asset_context=asset_context,
+                assessment_id=assessment_id,
+                priority=r.get("priority", "normal"),
+            ),
+        )
+        for req in requests
+    ]
+    return await asyncio.gather(*tasks)

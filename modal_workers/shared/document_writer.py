@@ -184,14 +184,50 @@ class DocumentWriter:
         )
 
     def _upload_to_anthropic(self, body: bytes, filename: str) -> Optional[str]:
-        """Upload bytes to Anthropic Files API. Returns file_id or None on failure."""
-        # Stub for Phase 5. Implementation will use anthropic SDK's files.upload().
-        # Defer until we have the orchestrator runtime client wired up — we don't
-        # want adapter code to depend on the anthropic SDK.
-        logger.warning(
-            "document_writer: Anthropic Files API upload not yet implemented; "
-            "skipping for %s", filename)
-        return None
+        """Upload bytes to Anthropic Files API. Returns file_id or None on failure.
+
+        Stream 3.2: real implementation. Uses the anthropic SDK Beta files API
+        (the GA endpoint accepts the same call shape — see Anthropic Files docs).
+        Failure returns None and logs; the caller falls back to raw_text.
+        """
+        try:
+            import anthropic
+        except ImportError:
+            logger.warning(
+                "document_writer: anthropic SDK not installed; "
+                "Files API upload skipped for %s", filename,
+            )
+            return None
+
+        try:
+            client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+            # files.create accepts a tuple (filename, bytes, mime_type) under the
+            # standard SDK; if the SDK exposes it under .beta.files we route there.
+            files_api = getattr(getattr(client, "beta", None), "files", None) or getattr(
+                client, "files", None
+            )
+            if files_api is None:
+                logger.warning(
+                    "document_writer: anthropic SDK has no files API surface; "
+                    "skipping upload for %s", filename,
+                )
+                return None
+            resp = files_api.create(
+                file=(filename, body, "application/pdf"),
+            )
+            file_id = getattr(resp, "id", None)
+            if file_id:
+                logger.info(
+                    "document_writer: uploaded to anthropic files api filename=%s file_id=%s",
+                    filename, file_id,
+                )
+            return file_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "document_writer: anthropic Files API upload failed for %s: %s",
+                filename, exc,
+            )
+            return None
 
     def _is_freshly_inserted(self, record: Dict[str, Any]) -> bool:
         """Heuristic: if fetched_at is within the last 5 seconds, this is a fresh row.

@@ -559,5 +559,299 @@ def main(argv: List[str] | None = None) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Pass-2 verifier — Haiku 4.5 verifies low-confidence agent_pass1 links.
+# Triggered on rows where extraction_method='agent_pass1' AND
+# extraction_confidence < 0.80 AND verified_by_pass2 = false. Verdicts:
+#   'kept'     — link is correct
+#   'demoted'  — real link but is_material should be false
+#   'rejected' — spans don't substantiate the claim
+# Rejected sets is_material=false but never DELETEs (audit-trail survival).
+# Batched 5 links per Haiku call for ~$0.002/link.
+# ---------------------------------------------------------------------------
+
+PASS2_MODEL = "claude-haiku-4-5-20251001"
+PASS2_BATCH_SIZE = 5
+PASS2_DEFAULT_THRESHOLD = 0.80
+
+
+@dataclass
+class Pass2Verdict:
+    asset_documents_id: str
+    verdict: str   # 'kept' | 'demoted' | 'rejected'
+    confidence: float
+    reasoning: str
+
+
+@dataclass
+class Pass2Stats:
+    rows_seen: int = 0
+    batches_called: int = 0
+    api_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    kept: int = 0
+    demoted: int = 0
+    rejected: int = 0
+    errors: int = 0
+
+
+PASS2_SYSTEM_PROMPT = """You are a verifier for a document → asset linker.
+
+For each pass-1 link, decide whether the extracted spans actually substantiate \
+the claimed link_type to the named asset:
+- "kept": the spans clearly support the link_type and the asset.
+- "demoted": the spans support a real mention of the asset, but the content is \
+boilerplate / not substantively material to a thesis (e.g. a generic pipeline \
+list mention, a 13F-style holdings line, a corporate-history sentence).
+- "rejected": the spans do NOT actually substantiate this asset+link_type \
+(wrong asset, wrong link_type, or spans don't say what pass-1 claimed).
+
+Output JSON only:
+{"verdicts": [
+  {"asset_documents_id": "<uuid>", "verdict": "kept|demoted|rejected", \
+"confidence": 0.0-1.0, "reasoning": "<≤200 chars>"},
+  ...
+]}
+
+No commentary. No markdown fences."""
+
+
+def _fetch_pass2_pending(
+    client: SupabaseClient,
+    asset_id: Optional[str] = None,
+    max_links: int = 200,
+    threshold: float = PASS2_DEFAULT_THRESHOLD,
+) -> List[Dict[str, Any]]:
+    """Fetch asset_documents rows needing pass-2, joined with asset + document
+    context for the verifier prompt."""
+    params: Dict[str, str] = {
+        "select": (
+            "id,asset_id,document_id,link_type,extraction_confidence,"
+            "extracted_spans,is_material,"
+            "asset:fda_assets(id,drug_name,generic_name,sponsor_name,indication),"
+            "document:documents(id,source,doc_type,title,published_at)"
+        ),
+        "extraction_method": "eq.agent_pass1",
+        "verified_by_pass2": "is.false",
+        "extraction_confidence": f"lt.{threshold}",
+        "order": "asset_id.asc,document_id.asc,extraction_confidence.asc",
+        "limit": str(max_links),
+    }
+    if asset_id:
+        params["asset_id"] = f"eq.{asset_id}"
+    return client._rest("GET", "asset_documents", params=params) or []
+
+
+def _build_pass2_user_content(rows: List[Dict[str, Any]]) -> str:
+    """Render a batch of up to PASS2_BATCH_SIZE asset_documents rows as the
+    verifier user prompt. Includes asset card + spans only (not full doc)."""
+    parts: List[str] = []
+    for r in rows:
+        asset = r.get("asset") or {}
+        doc = r.get("document") or {}
+        spans = r.get("extracted_spans") or []
+        spans_rendered = "\n".join(
+            f"  - {(s or {}).get('text', '') if isinstance(s, dict) else str(s)}"
+            for s in spans[:6]
+        )
+        parts.append(
+            f"asset_documents_id: {r['id']}\n"
+            f"link_type: {r['link_type']}\n"
+            f"is_material (pass-1): {r.get('is_material')}\n"
+            f"pass-1 confidence: {r.get('extraction_confidence')}\n"
+            f"asset:\n"
+            f"  drug_name: {asset.get('drug_name', '?')}\n"
+            f"  generic_name: {asset.get('generic_name', '?')}\n"
+            f"  sponsor_name: {asset.get('sponsor_name', '?')}\n"
+            f"  indication: {asset.get('indication', '?')}\n"
+            f"document: source={doc.get('source')}, doc_type={doc.get('doc_type')}, "
+            f"title={doc.get('title') or '(none)'}\n"
+            f"extracted_spans:\n{spans_rendered or '  (none)'}\n"
+        )
+    return (
+        "Verify each pass-1 link below. Output one verdict per "
+        "asset_documents_id, in the same order.\n\n"
+        + "\n---\n".join(parts)
+    )
+
+
+def verify_link_pass2_batch(
+    client: anthropic.Anthropic,
+    rows: List[Dict[str, Any]],
+) -> tuple[List[Pass2Verdict], int, int]:
+    """Send up to PASS2_BATCH_SIZE rows to Haiku 4.5. Returns
+    (verdicts, in_tokens, out_tokens). Verdicts are returned in the same order
+    as the input rows; missing/invalid verdicts are dropped."""
+    user_content = _build_pass2_user_content(rows)
+    resp = client.messages.create(
+        model=PASS2_MODEL,
+        max_tokens=1024,
+        system=PASS2_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    in_tokens = resp.usage.input_tokens
+    out_tokens = resp.usage.output_tokens
+    text_out = "".join(b.text for b in resp.content if b.type == "text").strip()
+    if text_out.startswith("```"):
+        text_out = re.sub(r"^```(?:json)?\s*\n?", "", text_out)
+        text_out = re.sub(r"\n?```\s*$", "", text_out)
+    try:
+        parsed = json.loads(text_out)
+    except json.JSONDecodeError as exc:
+        logger.warning("Pass-2 JSON parse failed: %s — head=%r",
+                       exc, text_out[:200])
+        return [], in_tokens, out_tokens
+
+    valid_verdicts = {"kept", "demoted", "rejected"}
+    valid_ids = {r["id"] for r in rows}
+    out: List[Pass2Verdict] = []
+    for v in parsed.get("verdicts", []) or []:
+        if not isinstance(v, dict):
+            continue
+        ad_id = v.get("asset_documents_id")
+        verdict = v.get("verdict")
+        if ad_id not in valid_ids or verdict not in valid_verdicts:
+            continue
+        confidence = float(v.get("confidence") or 0.0)
+        confidence = max(0.0, min(1.0, confidence))
+        out.append(Pass2Verdict(
+            asset_documents_id=ad_id,
+            verdict=verdict,
+            confidence=confidence,
+            reasoning=str(v.get("reasoning", ""))[:200],
+        ))
+    return out, in_tokens, out_tokens
+
+
+def _apply_pass2_verdict(
+    sb: SupabaseClient,
+    verdict: Pass2Verdict,
+) -> bool:
+    """PATCH asset_documents with pass-2 results. 'rejected' also flips
+    is_material=false. Never DELETEs."""
+    from datetime import datetime, timezone
+    patch: Dict[str, Any] = {
+        "verified_by_pass2": True,
+        "pass2_verdict": verdict.verdict,
+        "pass2_confidence": round(verdict.confidence, 2),
+        "pass2_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if verdict.verdict in ("demoted", "rejected"):
+        patch["is_material"] = False
+    try:
+        sb._rest(
+            "PATCH", "asset_documents",
+            params={"id": f"eq.{verdict.asset_documents_id}"},
+            json_body=patch,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Pass-2 PATCH failed for %s: %s",
+                       verdict.asset_documents_id, exc)
+        return False
+
+
+def pass2_main(argv: List[str] | None = None) -> int:
+    """CLI entry. Walks pass-2 backlog in batches of PASS2_BATCH_SIZE,
+    grouped by document for prompt-cache friendliness."""
+    p = argparse.ArgumentParser(prog="asset_linker_pass2")
+    p.add_argument("--asset-id", default=None,
+                   help="Restrict to one fda_asset (default: all)")
+    p.add_argument("--max-links", type=int, default=200,
+                   help="Max links to verify this run")
+    p.add_argument("--threshold", type=float, default=PASS2_DEFAULT_THRESHOLD,
+                   help="Verify links with extraction_confidence below this")
+    p.add_argument("--budget-usd", type=float, default=2.0,
+                   help="Stop early if cumulative pass-2 cost exceeds this")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Classify but do not write pass-2 fields")
+    args = p.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        logger.error("ANTHROPIC_API_KEY not set")
+        return 2
+
+    sb = SupabaseClient()
+    a_client = anthropic.Anthropic()
+    stats = Pass2Stats()
+
+    pending = _fetch_pass2_pending(
+        sb,
+        asset_id=args.asset_id,
+        max_links=args.max_links,
+        threshold=args.threshold,
+    )
+    stats.rows_seen = len(pending)
+    if not pending:
+        logger.info("No pass-2 backlog (asset_id=%s threshold=%s)",
+                    args.asset_id, args.threshold)
+        return 0
+    logger.info("Pass-2 backlog: %d row(s); batching %d/call",
+                len(pending), PASS2_BATCH_SIZE)
+
+    # Lazy import to avoid pulling pricing into the asset_linker import path
+    # for callers that only need pass-1.
+    from orchestrator_runtime.pricing import estimate_cost as _pricing
+
+    for i in range(0, len(pending), PASS2_BATCH_SIZE):
+        if stats.cost_usd > args.budget_usd:
+            logger.warning("Budget exceeded ($%.4f > $%.2f); stopping",
+                           stats.cost_usd, args.budget_usd)
+            break
+        batch = pending[i:i + PASS2_BATCH_SIZE]
+        try:
+            verdicts, in_tok, out_tok = verify_link_pass2_batch(a_client, batch)
+        except anthropic.APIError as exc:
+            logger.warning("Pass-2 API error on batch starting %s: %s",
+                           batch[0]["id"], exc)
+            stats.errors += 1
+            time.sleep(2.0)
+            continue
+
+        stats.batches_called += 1
+        stats.api_calls += 1
+        stats.input_tokens += in_tok
+        stats.output_tokens += out_tok
+        stats.cost_usd += _pricing(
+            PASS2_MODEL, input_tokens=in_tok, output_tokens=out_tok,
+        )
+
+        for v in verdicts:
+            if v.verdict == "kept":
+                stats.kept += 1
+            elif v.verdict == "demoted":
+                stats.demoted += 1
+            else:
+                stats.rejected += 1
+            if not args.dry_run:
+                _apply_pass2_verdict(sb, v)
+
+        logger.info(
+            "batch %d (size=%d): %d verdicts (kept=%d demoted=%d rejected=%d) "
+            "tokens in=%d out=%d cum_cost=$%.4f",
+            stats.batches_called, len(batch), len(verdicts),
+            sum(1 for x in verdicts if x.verdict == "kept"),
+            sum(1 for x in verdicts if x.verdict == "demoted"),
+            sum(1 for x in verdicts if x.verdict == "rejected"),
+            in_tok, out_tok, stats.cost_usd,
+        )
+
+    logger.info("=" * 60)
+    logger.info("Pass-2 summary:")
+    logger.info("  rows_seen=%d  batches_called=%d  api_calls=%d  errors=%d",
+                stats.rows_seen, stats.batches_called, stats.api_calls,
+                stats.errors)
+    logger.info("  verdicts: kept=%d demoted=%d rejected=%d",
+                stats.kept, stats.demoted, stats.rejected)
+    logger.info("  tokens: in=%d out=%d cost_usd=$%.4f",
+                stats.input_tokens, stats.output_tokens, stats.cost_usd)
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

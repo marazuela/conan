@@ -36,7 +36,10 @@ import modal
 # Distinct Modal app name. Coexists with conan-v2 in the same Modal workspace.
 app = modal.App("conan-v3-orchestrator")
 
-# v3-specific image — adds anthropic SDK to the v2 base list.
+# v3-specific image — adds anthropic SDK + RAG providers to the v2 base list.
+# RAG SDKs (voyageai, openai, cohere) are installed but their API keys are
+# only required when RAG_PROVIDER=voyage or openai_cohere; absent keys
+# surface as warnings, not import failures.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
@@ -44,6 +47,10 @@ image = (
         "pydantic>=2",
         "requests>=2.31",
         "anthropic>=0.50",
+        "voyageai>=0.3",
+        "openai>=1.50",
+        "cohere>=5.10",
+        "mcp[cli]>=1.20",
     )
     .add_local_python_source("modal_workers", "orchestrator_runtime")
 )
@@ -52,6 +59,10 @@ image = (
 anthropic_secrets = modal.Secret.from_name("anthropic-orchestrator")
 supabase_secrets = modal.Secret.from_name("supabase-secrets")
 scanner_secrets = modal.Secret.from_name("scanner-secrets")
+# RAG provider keys (VOYAGE_API_KEY, OPENAI_API_KEY, COHERE_API_KEY,
+# RAG_PROVIDER) live in `rag-providers` — wire to the RAG functions when
+# the augmenter / embedder backfill / eval gate Modal functions land.
+# `modal.Secret.from_name("rag-providers")` will resolve at deploy time.
 
 
 # ============================================================================
@@ -76,6 +87,38 @@ def asset_linker_run(
     if asset_id:
         argv.extend(["--asset-id", asset_id])
     rc = linker_main(argv)
+    return {"return_code": rc}
+
+
+# ============================================================================
+# Asset linker pass-2 — Haiku verifier on low-confidence pass-1 links
+# ============================================================================
+
+@app.function(
+    image=image,
+    timeout=3600,
+    secrets=[anthropic_secrets, supabase_secrets],
+)
+def asset_linker_pass2_run(
+    asset_id: Optional[str] = None,
+    max_links: int = 200,
+    threshold: float = 0.80,
+    budget_usd: float = 2.0,
+) -> Dict[str, Any]:
+    """Verify low-confidence pass-1 links with Haiku 4.5. Updates
+    asset_documents.{verified_by_pass2, pass2_verdict, pass2_confidence,
+    pass2_at}; rejected verdicts also flip is_material=false (no DELETE).
+    Idempotent — skips rows already verified."""
+    from modal_workers.extractor.asset_linker import pass2_main
+
+    argv = [
+        "--max-links", str(max_links),
+        "--threshold", str(threshold),
+        "--budget-usd", str(budget_usd),
+    ]
+    if asset_id:
+        argv.extend(["--asset-id", asset_id])
+    rc = pass2_main(argv)
     return {"return_code": rc}
 
 
@@ -138,6 +181,11 @@ def orchestrator_run_one(
 
     sb = SupabaseClient()
     a_client = OrchestratorClient()
+    # CLI-style invocation: no orchestrator_runs row, kill switch off by
+    # default (operator already chose to spawn this run). Pass
+    # hard_kill_usd via env var ORCH_HARD_KILL_USD to opt in.
+    hard_kill_usd_str = os.environ.get("ORCH_HARD_KILL_USD")
+    hard_kill = float(hard_kill_usd_str) if hard_kill_usd_str else None
     aid = run_one(
         sb, a_client,
         asset_id=asset_id,
@@ -149,6 +197,7 @@ def orchestrator_run_one(
         run_constitutional=constitutional,
         constitutional_skip_semantic=constitutional_deterministic_only,
         enable_premortem=enable_premortem,
+        hard_kill_usd=hard_kill,
     )
     return {"assessment_id": aid}
 
@@ -175,8 +224,12 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     """
     from datetime import datetime, timezone
     from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.shared.cost_budget import (
+        PER_RUN_HARD_KILL_USD, check_24h_thresholds,
+    )
     from orchestrator_runtime.client import (
-        DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL, OrchestratorClient,
+        BudgetExceededError, DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL,
+        OrchestratorClient,
     )
     from orchestrator_runtime.runtime import run_one
 
@@ -192,10 +245,12 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         },
     ) or []
 
-    a_client = OrchestratorClient()
+    # NB: each run uses a fresh OrchestratorClient so the budget accumulator
+    # is isolated. Sharing a client across runs would commingle budgets.
     drained = 0
     completed = 0
     failed = 0
+    killed_budget = 0
 
     for run_row in pending:
         run_id = run_row["id"]
@@ -212,6 +267,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
             },
         )
 
+        a_client = OrchestratorClient()
         try:
             aid = run_one(
                 sb, a_client,
@@ -223,6 +279,19 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                                             "operator_refresh"} else 1,
                 ensemble_mode="streaming",
                 run_constitutional=True,
+                run_id=run_id,
+                hard_kill_usd=PER_RUN_HARD_KILL_USD,
+            )
+            # cost_actual_usd lookup — convergence_assessments.cost_usd is
+            # already populated by runtime.run_one() at line 638.
+            cost_rows = sb._rest(
+                "GET", "convergence_assessments",
+                params={"id": f"eq.{aid}", "select": "cost_usd"},
+            ) or []
+            cost_actual = (
+                float(cost_rows[0]["cost_usd"])
+                if cost_rows and cost_rows[0].get("cost_usd") is not None
+                else None
             )
             sb._rest(
                 "PATCH", "orchestrator_runs",
@@ -231,9 +300,26 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                     "status": "completed",
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "assessment_id": aid,
+                    "cost_actual_usd": cost_actual,
                 },
             )
             completed += 1
+        except BudgetExceededError as exc:
+            # Mid-run hard kill. Write the partial accumulator (we already
+            # paid for every call up to and including the trigger) and mark
+            # status='killed_budget' so dashboards distinguish from 'failed'.
+            partial_cost = a_client.get_accumulated_cost()
+            sb._rest(
+                "PATCH", "orchestrator_runs",
+                params={"id": f"eq.{run_id}"},
+                json_body={
+                    "status": "killed_budget",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "cost_actual_usd": round(partial_cost, 4),
+                    "error_message": str(exc)[:1000],
+                },
+            )
+            killed_budget += 1
         except Exception as exc:
             sb._rest(
                 "PATCH", "orchestrator_runs",
@@ -247,7 +333,20 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
             failed += 1
         drained += 1
 
-    return {"drained": drained, "completed": completed, "failed": failed}
+        # End-of-run 24h soft alerts (fire-and-forget). Run regardless of
+        # status because killed_budget runs still contributed cost.
+        try:
+            check_24h_thresholds(sb, asset_id)
+        except Exception as exc:  # noqa: BLE001
+            # Telemetry should never break drain progression.
+            pass
+
+    return {
+        "drained": drained,
+        "completed": completed,
+        "failed": failed,
+        "killed_budget": killed_budget,
+    }
 
 
 # ============================================================================

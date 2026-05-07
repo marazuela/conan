@@ -66,6 +66,53 @@ CITE_FACT_RE = re.compile(r"\[F:([0-9a-f]{6,12})\]", re.IGNORECASE)
 CITE_DOC_RE = re.compile(r"\[D:([0-9a-f]{6,12})\]", re.IGNORECASE)
 
 
+def extract_native_citations(
+    response_content: Optional[List[Any]],
+) -> List[Dict[str, Any]]:
+    """Stream 3.3 — walk Anthropic Citations API metadata from a response.
+
+    When Stage 1 receives a document block with `citations: {enabled: true}`,
+    Claude's response text blocks include a `citations` array with entries
+    like `{type: "char_location", cited_text, document_index, document_title,
+    start_char_index, end_char_index}`. This helper flattens those into a
+    list of dicts that callers can cross-reference against ctx["documents"].
+
+    Returns [] if response_content is None or no native citations were found.
+    Used additively alongside the regex resolver — does NOT replace it, since
+    extracted_facts (which aren't documents) keep the [F:short] notation.
+    """
+    out: List[Dict[str, Any]] = []
+    if not response_content:
+        return out
+    for block in response_content:
+        btype = getattr(block, "type", None) or (
+            block.get("type") if isinstance(block, dict) else None
+        )
+        if btype != "text":
+            continue
+        cites = getattr(block, "citations", None)
+        if cites is None and isinstance(block, dict):
+            cites = block.get("citations")
+        if not cites:
+            continue
+        for c in cites:
+            entry = c if isinstance(c, dict) else getattr(c, "__dict__", {})
+            if not entry:
+                if hasattr(c, "model_dump"):
+                    entry = c.model_dump()
+                else:
+                    entry = {
+                        attr: getattr(c, attr)
+                        for attr in ("type", "cited_text", "document_index",
+                                     "document_title", "start_char_index",
+                                     "end_char_index", "start_page_number",
+                                     "end_page_number")
+                        if hasattr(c, attr)
+                    }
+            out.append(entry)
+    return out
+
+
 def check_citations_resolve(
     cited_prose: str,
     fact_ids: List[str],
