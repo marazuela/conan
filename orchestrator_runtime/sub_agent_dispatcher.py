@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "200000"))
 
 
+def _is_role_disabled(role: str) -> bool:
+    """Per-role kill switch. ORCH_DISABLE_LITERATURE=1 etc. lets us turn off
+    a single misbehaving runner without disabling the whole dispatch loop.
+
+    Comparison is case-insensitive on the env-var side; role values are the
+    canonical lowercase strings from DISPATCH_TOOL_DEF.input_schema.
+    """
+    if not role:
+        return False
+    flag = f"ORCH_DISABLE_{role.upper()}"
+    return os.environ.get(flag) == "1"
+
+
 DISPATCH_TOOL_DEF: Dict[str, Any] = {
     "name": "dispatch_sub_agent",
     "description": (
@@ -180,6 +193,21 @@ def dispatch_sub_agent(
             schema_pass=False,
             output={},
             errors=[f"unknown role: {role}"],
+            tokens=0,
+            cost_usd=0.0,
+            latency_ms=0,
+        )
+
+    if _is_role_disabled(role):
+        logger.info(
+            "sub_agent_dispatcher: role=%s disabled via ORCH_DISABLE_%s — skipping",
+            role, role.upper(),
+        )
+        return DispatchOutcome(
+            role=role,
+            schema_pass=False,
+            output={},
+            errors=[f"role_disabled: ORCH_DISABLE_{role.upper()}=1"],
             tokens=0,
             cost_usd=0.0,
             latency_ms=0,
