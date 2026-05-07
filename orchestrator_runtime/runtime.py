@@ -1372,7 +1372,8 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             enable_premortem: bool = True,
             dry_run: bool = False,
             run_id: Optional[str] = None,
-            hard_kill_usd: Optional[float] = 15.0) -> Optional[str]:
+            hard_kill_usd: Optional[float] = 15.0,
+            parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Build one convergence_assessments row.
 
     run_id + hard_kill_usd activate the per-run cost ceiling (Stream 6
@@ -1381,6 +1382,12 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
     converts that into status='killed_budget' on orchestrator_runs.
     Pass hard_kill_usd=None to disable the kill switch (useful for
     backtests / one-off CLI runs).
+
+    Phase 4A (D-127): pass a mutable dict via `parsed_out` to receive the
+    Stage 9 parsed payload (`thesis_direction`, `conviction_pct`,
+    `evidence_quality`, etc.) before persistence. The replay harness uses
+    this to convert a `dry_run=True` invocation into a ReplayOutput
+    without touching the DB.
     """
     if hard_kill_usd is not None:
         a_client.attach_budget(run_id, hard_kill_usd)
@@ -1389,6 +1396,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             sb, a_client, asset_id, trigger_type, model, extractor_model,
             ensemble_n, ensemble_mode, run_constitutional,
             constitutional_skip_semantic, enable_premortem, dry_run,
+            parsed_out,
         )
     finally:
         if hard_kill_usd is not None:
@@ -1402,7 +1410,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    run_constitutional: bool,
                    constitutional_skip_semantic: bool,
                    enable_premortem: bool,
-                   dry_run: bool) -> Optional[str]:
+                   dry_run: bool,
+                   parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
     logger.info("=== Stage 0: load context ===")
@@ -1717,6 +1726,13 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                     constitutional_result.n_citations_resolved,
                     constitutional_result.n_citations_checked,
                     constitutional_result.semantic_cost_usd)
+
+    # Phase 4A (D-127): expose parsed payload to the replay harness before
+    # the persistence gate. dict.update() preserves the caller's reference
+    # so they can read it after run_one returns.
+    if parsed_out is not None:
+        parsed_out.clear()
+        parsed_out.update(parsed)
 
     if dry_run:
         logger.info("[dry-run] would persist; assessment summary:")

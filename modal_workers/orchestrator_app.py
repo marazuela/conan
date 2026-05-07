@@ -163,6 +163,7 @@ def orchestrator_run_one(
     constitutional: bool = True,
     constitutional_deterministic_only: bool = False,
     enable_premortem: bool = True,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Produce one convergence_assessment for the given asset.
 
@@ -172,6 +173,12 @@ def orchestrator_run_one(
     enable_premortem: run Stage 2 (hypothesis enumeration) + Stage 3
         (adversarial pre-mortem). Default True. Disable to fall back to
         v0.2 behavior (Stage 1 + 9 + 7 + 10) if a regression is found.
+    dry_run: if True, skip Stage 10 persist — runs the full pipeline
+        (Anthropic costs incurred) but does NOT write convergence_assessments,
+        hypothesis_enumeration, premortem_assessments, post_mortem_queue rows
+        and does NOT trigger reactor fanout. Use to smoke-test prompt /
+        sub-agent changes without disturbing live state. Returns
+        {"assessment_id": null, "dry_run": true}.
     """
     from modal_workers.shared.supabase_client import SupabaseClient
     from orchestrator_runtime.client import (
@@ -197,9 +204,10 @@ def orchestrator_run_one(
         run_constitutional=constitutional,
         constitutional_skip_semantic=constitutional_deterministic_only,
         enable_premortem=enable_premortem,
+        dry_run=dry_run,
         hard_kill_usd=hard_kill,
     )
-    return {"assessment_id": aid}
+    return {"assessment_id": aid, "dry_run": dry_run}
 
 
 # ============================================================================
@@ -210,7 +218,12 @@ def orchestrator_run_one(
     image=image,
     timeout=3600,
     secrets=[anthropic_secrets, supabase_secrets],
-    schedule=modal.Period(minutes=5),
+    # NOTE (2026-05-07): Modal free-tier caps cron jobs at 5; conan-v2
+    # already uses all 5. Drainer ships as on-demand callable for now.
+    # Re-enable by upgrading plan and uncommenting:
+    #   schedule=modal.Period(minutes=5),
+    # Until then trigger via `modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue`
+    # or via Supabase pg_cron + _conan_modal_post helper.
 )
 def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     """Drain pending orchestrator_runs rows and dispatch each to the
@@ -353,12 +366,26 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
 # Operator-refresh endpoint — dashboard "Refresh" button creates a run
 # ============================================================================
 
+# NOTE (2026-05-07, deploy-time blocker): Modal free-tier caps web endpoints
+# at 8 per workspace; conan-v2's compute RPCs already use all 8. The two
+# fastapi_endpoint decorators below are commented out so the core orchestrator
+# functions (asset_linker_run, fact_extractor_run, orchestrator_run_one,
+# orchestrator_drain_queue, asset_linker_pass2_run) can deploy. Re-enable by
+# (a) upgrading the Modal plan or (b) freeing 2 endpoints elsewhere, then
+# uncommenting the @modal.fastapi_endpoint decorators below + redeploying.
+# Until then: dashboard's Refresh button can call orchestrator_run_one
+# directly via Modal CLI, and health is observable via `modal app list`.
+
+# ============================================================================
+# Operator-refresh endpoint — dashboard "Refresh" button creates a run
+# ============================================================================
+
 @app.function(
     image=image,
     timeout=15,
     secrets=[supabase_secrets],
 )
-@modal.fastapi_endpoint(method="POST", label="orchestrator-operator-refresh")
+# @modal.fastapi_endpoint(method="POST", label="orchestrator-operator-refresh")
 def operator_refresh_endpoint(payload: dict) -> dict:
     """Dashboard 'Refresh' button POSTs {asset_id, [optional]trigger_doc_id}
     here. Inserts an orchestrator_runs row; orchestrator_drain_queue picks it
@@ -392,7 +419,7 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 # Health check
 # ============================================================================
 
-@app.function(image=image, timeout=5)
-@modal.fastapi_endpoint(method="GET", label="orchestrator-health")
+@app.function(image=image, timeout=10)
+# @modal.fastapi_endpoint(method="GET", label="orchestrator-health")
 def health() -> dict:
     return {"app": "conan-v3-orchestrator", "ok": True}

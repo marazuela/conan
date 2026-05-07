@@ -90,6 +90,12 @@ def _categorize_skip(label: Dict[str, Any]) -> Optional[str]:
         return "ma_outcome_pending"
     if "delisted" in miss:
         return "delisted_no_window"
+    if "private_discard" in miss or "unresolvable" in miss:
+        return "private_or_unresolvable"
+    if "missing_ticker_or_filed_at" in miss:
+        return "missing_required_field"
+    if "unresolved_ticker_sentinel" in miss:
+        return "ticker_sentinel"
     return "other"
 
 
