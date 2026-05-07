@@ -60,9 +60,9 @@ anthropic_secrets = modal.Secret.from_name("anthropic-orchestrator")
 supabase_secrets = modal.Secret.from_name("supabase-secrets")
 scanner_secrets = modal.Secret.from_name("scanner-secrets")
 # RAG provider keys (VOYAGE_API_KEY, OPENAI_API_KEY, COHERE_API_KEY,
-# RAG_PROVIDER) live in `rag-providers` — wire to the RAG functions when
-# the augmenter / embedder backfill / eval gate Modal functions land.
-# `modal.Secret.from_name("rag-providers")` will resolve at deploy time.
+# RAG_PROVIDER). Wired into orchestrator_run_one so Stage 1 RAG retrieval
+# (Phase 2B, ORCH_ENABLE_STAGE_1_RAG=1) can dispatch embed queries.
+rag_secrets = modal.Secret.from_name("rag-providers")
 
 
 # ============================================================================
@@ -153,7 +153,7 @@ def fact_extractor_run(
 @app.function(
     image=image,
     timeout=3600,
-    secrets=[anthropic_secrets, supabase_secrets],
+    secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
 )
 def orchestrator_run_one(
     asset_id: str,
@@ -217,7 +217,7 @@ def orchestrator_run_one(
 @app.function(
     image=image,
     timeout=3600,
-    secrets=[anthropic_secrets, supabase_secrets],
+    secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
     # NOTE (2026-05-07): Modal free-tier caps cron jobs at 5; conan-v2
     # already uses all 5. Drainer ships as on-demand callable for now.
     # Re-enable by upgrading plan and uncommenting:

@@ -156,9 +156,9 @@ def _embed_and_persist(
         for r, v in zip(slice_, vectors):
             rows.append({
                 "chunk_id": r["id"],
-                "document_id": r["document_id"],
                 "provider": embedder.provider,
                 "model": embedder.name,
+                "dim": dim,
                 "embedding": v,
             })
         sb._rest("POST", table, json_body=rows)
