@@ -55,6 +55,7 @@ import {
   buildOrchestratorRunInsert,
   type EnqueueArgs,
 } from "./orchestrator-enqueue.ts";
+import { fetchWithRetry } from "./fetch-retry.ts";
 
 type Direction = "long" | "short" | "neutral" | null | undefined;
 type Band = "immediate" | "watchlist" | "archive" | "discard";
@@ -139,8 +140,18 @@ const CROSS_SOURCE_WINDOW_HOURS = 24;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WEBHOOK_SECRET = Deno.env.get("WEBHOOK_SECRET") ?? "";
-const RUBRIC_MODAL_URL = Deno.env.get("RUBRIC_APPLY_CAPS_URL") ??
-  "https://marazuela--rubric-apply-caps.modal.run";
+// F-202: fail-fast on missing env var. Previous fallback to
+// "https://marazuela--rubric-apply-caps.modal.run" silently routed traffic
+// to a personal Modal namespace if the secret was unset/typo'd.
+function requireEnv(name: string, hint: string): string {
+  const v = Deno.env.get(name);
+  if (!v) throw new Error(`${name} env var is required; ${hint}`);
+  return v;
+}
+const RUBRIC_MODAL_URL: string = requireEnv(
+  "RUBRIC_APPLY_CAPS_URL",
+  "set via Supabase Dashboard → Edge Functions → Secrets",
+);
 
 const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -759,7 +770,7 @@ async function rubricApplyCaps(
     profile: row.scoring_profile,
     band,
   };
-  const r = await fetch(RUBRIC_MODAL_URL, {
+  const r = await fetchWithRetry(RUBRIC_MODAL_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
