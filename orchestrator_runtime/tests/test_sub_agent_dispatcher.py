@@ -79,6 +79,33 @@ def test_dispatch_unknown_role_returns_error_outcome():
     assert any("unknown role" in e for e in out.errors)
 
 
+def test_dispatch_skips_role_when_kill_switch_set(monkeypatch):
+    """ORCH_DISABLE_<ROLE>=1 short-circuits the runner; the dispatch loop
+    keeps moving without crashing the rest of Stage 1."""
+    monkeypatch.setenv("ORCH_DISABLE_LITERATURE", "1")
+    disp.reset_budget()
+    fake = _FakeRunner.for_role("literature", {"schema_version": 1, "asset_id": "x"})
+    with patch.dict(ROLE_REGISTRY, {"literature": fake}, clear=False):
+        out = disp.dispatch_sub_agent("literature", "find papers")
+    assert out.schema_pass is False
+    assert out.role == "literature"
+    assert any("role_disabled" in e for e in out.errors)
+    # Runner was NOT called — token budget untouched.
+    assert out.tokens == 0
+
+
+def test_dispatch_unaffected_when_other_role_disabled(monkeypatch):
+    """Disabling literature doesn't block competitive."""
+    monkeypatch.setenv("ORCH_DISABLE_LITERATURE", "1")
+    disp.reset_budget()
+    fake = _FakeRunner.for_role("competitive", {"schema_version": 1})
+    with patch.dict(ROLE_REGISTRY, {"competitive": fake}, clear=False), \
+         patch.object(disp, "_log_call", return_value="call-id-c"):
+        out = disp.dispatch_sub_agent("competitive", "scan pipeline")
+    assert out.schema_pass is True
+    assert out.role == "competitive"
+
+
 def test_dispatch_routes_to_runner_and_returns_outcome():
     disp.reset_budget()
     fake = _FakeRunner.for_role("literature", {"schema_version": 1, "asset_id": "x"})
