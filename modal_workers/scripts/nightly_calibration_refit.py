@@ -37,7 +37,7 @@ import os
 import random
 import sys
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from modal_workers.shared.compute import (
@@ -496,6 +496,221 @@ def _insert_eval_run(
 # CLI
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Phase 4B — Tier-2 quality gate
+#
+# Compares 30-day Brier between Tier-1 (full pipeline) and Tier-2 (Cowork
+# bulk single-shot) assessments. Surfaces an operator_flag with
+# source='tier2_quality' when Tier-2 is materially worse than Tier-1
+# (default threshold: 0.15 absolute Brier delta). Also tracks both Brier
+# values + sample counts in evidence so operators can sanity-check.
+#
+# Gate semantics (per bulk_orchestrator.md §Verification): Tier-2 should
+# stay within 0.15 Brier of Tier-1. We fire when
+# (tier2_brier - tier1_brier) > 0.15 — Tier-2 demonstrably worse. We do
+# NOT fire when Tier-2 is BETTER than Tier-1; that's a happy surprise
+# but not an alert condition. Insufficient samples (< MIN_PER_TIER per
+# side) → resolve any open flag and exit (no comparison possible).
+# ---------------------------------------------------------------------------
+
+TIER2_QUALITY_THRESHOLD = 0.15
+TIER2_QUALITY_MIN_PER_TIER = 30   # below this, statistical power is too low
+TIER2_QUALITY_LOOKBACK_DAYS = 30
+TIER2_QUALITY_FLAG_SOURCE = "tier2_quality"
+TIER2_QUALITY_FLAG_KIND = "tier2_brier_drift"
+
+
+@dataclass
+class TierBrierGate:
+    """Result of a Tier-1 vs Tier-2 Brier comparison sweep."""
+    n_tier1: int
+    n_tier2: int
+    brier_tier1: Optional[float]
+    brier_tier2: Optional[float]
+    delta: Optional[float]            # tier2 - tier1; positive = Tier-2 worse
+    threshold: float
+    flagged: bool
+    skip_reason: Optional[str]        # set when comparison was skipped
+
+    def to_evidence(self) -> Dict[str, Any]:
+        return {
+            "n_tier1": self.n_tier1,
+            "n_tier2": self.n_tier2,
+            "brier_tier1": (
+                round(self.brier_tier1, 4)
+                if self.brier_tier1 is not None else None
+            ),
+            "brier_tier2": (
+                round(self.brier_tier2, 4)
+                if self.brier_tier2 is not None else None
+            ),
+            "delta": (
+                round(self.delta, 4) if self.delta is not None else None
+            ),
+            "threshold": self.threshold,
+            "skip_reason": self.skip_reason,
+        }
+
+
+def _fetch_tier_brier_pairs(
+    sb: SupabaseClient,
+    *,
+    lookback_days: int,
+) -> Tuple[List[Tuple[float, int]], List[Tuple[float, int]]]:
+    """Pull (conviction_pct/100, hit_int) tuples from post_mortem_complete
+    rows whose underlying convergence_assessments row was created in the
+    last `lookback_days`, partitioned by tier (1, 2). Returns
+    (tier1_pairs, tier2_pairs).
+    """
+    pms = sb._rest("GET", "post_mortem_queue", params={
+        "select": "assessment_id,realized_outcome,predicted_direction",
+        "status": "eq.post_mortem_complete",
+        "limit": "10000",
+    }) or []
+    if not pms:
+        return [], []
+
+    assessment_ids = [p["assessment_id"] for p in pms]
+    in_filter = f"in.({','.join(assessment_ids)})"
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    ).isoformat()
+    assessments = sb._rest("GET", "convergence_assessments", params={
+        "select": "id,tier,conviction_pct,thesis_direction,created_at",
+        "id": in_filter,
+        "created_at": f"gte.{cutoff}",
+        "limit": "10000",
+    }) or []
+    asmt_by_id = {a["id"]: a for a in assessments}
+
+    tier1: List[Tuple[float, int]] = []
+    tier2: List[Tuple[float, int]] = []
+    for p in pms:
+        ro = p.get("realized_outcome") or {}
+        hit = ro.get("hit")
+        if hit is None:
+            continue
+        a = asmt_by_id.get(p["assessment_id"])
+        if not a:
+            continue
+        pct = a.get("conviction_pct")
+        if pct is None:
+            continue
+        realized_int = _direction_aligned_outcome(
+            p.get("predicted_direction"), bool(hit),
+        )
+        pair = (float(pct) / 100.0, realized_int)
+        tier = a.get("tier")
+        if tier == 1:
+            tier1.append(pair)
+        elif tier == 2:
+            tier2.append(pair)
+        # tier=3 (backtest) is not part of the production-quality gate.
+
+    return tier1, tier2
+
+
+def evaluate_tier_brier_gate(
+    tier1_pairs: List[Tuple[float, int]],
+    tier2_pairs: List[Tuple[float, int]],
+    *,
+    threshold: float = TIER2_QUALITY_THRESHOLD,
+    min_per_tier: int = TIER2_QUALITY_MIN_PER_TIER,
+) -> TierBrierGate:
+    """Pure helper: given two lists of (predicted, realized) pairs, decide
+    whether the Tier-2 quality flag should fire."""
+    n1, n2 = len(tier1_pairs), len(tier2_pairs)
+
+    if n1 < min_per_tier or n2 < min_per_tier:
+        return TierBrierGate(
+            n_tier1=n1, n_tier2=n2,
+            brier_tier1=None, brier_tier2=None,
+            delta=None, threshold=threshold,
+            flagged=False,
+            skip_reason=(
+                f"insufficient_samples(min_per_tier={min_per_tier}, "
+                f"n_tier1={n1}, n_tier2={n2})"
+            ),
+        )
+
+    b1 = brier_score([p for p, _ in tier1_pairs],
+                     [r for _, r in tier1_pairs])
+    b2 = brier_score([p for p, _ in tier2_pairs],
+                     [r for _, r in tier2_pairs])
+    delta = b2 - b1
+    flagged = delta > threshold
+
+    return TierBrierGate(
+        n_tier1=n1, n_tier2=n2,
+        brier_tier1=b1, brier_tier2=b2,
+        delta=delta, threshold=threshold,
+        flagged=flagged, skip_reason=None,
+    )
+
+
+def run_tier_quality_gate(
+    *,
+    sb: Optional[SupabaseClient] = None,
+    lookback_days: int = TIER2_QUALITY_LOOKBACK_DAYS,
+    threshold: float = TIER2_QUALITY_THRESHOLD,
+    min_per_tier: int = TIER2_QUALITY_MIN_PER_TIER,
+) -> TierBrierGate:
+    """Phase 4B: compare Tier-1 vs Tier-2 30-day Brier, raise/resolve the
+    `tier2_quality` operator_flag accordingly. Safe to run nightly even
+    when there's no Tier-2 production data — it'll just resolve any prior
+    flag and skip with `insufficient_samples`."""
+    sb = sb or SupabaseClient()
+    from modal_workers.observability import _resolve_flag, _upsert_flag
+
+    tier1, tier2 = _fetch_tier_brier_pairs(sb, lookback_days=lookback_days)
+    gate = evaluate_tier_brier_gate(
+        tier1, tier2, threshold=threshold, min_per_tier=min_per_tier,
+    )
+
+    if gate.flagged:
+        _upsert_flag(
+            sb,
+            severity="warn",
+            source=TIER2_QUALITY_FLAG_SOURCE,
+            kind=TIER2_QUALITY_FLAG_KIND,
+            title=(
+                f"Tier-2 Brier {gate.brier_tier2:.3f} is "
+                f"{gate.delta:+.3f} worse than Tier-1 "
+                f"{gate.brier_tier1:.3f} over {lookback_days}d "
+                f"(threshold {threshold:.2f})"
+            ),
+            evidence=gate.to_evidence(),
+        )
+    else:
+        _resolve_flag(
+            sb,
+            source=TIER2_QUALITY_FLAG_SOURCE,
+            kind=TIER2_QUALITY_FLAG_KIND,
+            note=(
+                f"auto-resolved: " + (
+                    gate.skip_reason
+                    if gate.skip_reason
+                    else f"delta={gate.delta:+.3f} <= {threshold}"
+                )
+            ),
+        )
+
+    logger.info(
+        "tier2_quality_gate: n_tier1=%d n_tier2=%d brier1=%s brier2=%s "
+        "delta=%s flagged=%s skip=%s",
+        gate.n_tier1, gate.n_tier2,
+        f"{gate.brier_tier1:.3f}" if gate.brier_tier1 is not None else "—",
+        f"{gate.brier_tier2:.3f}" if gate.brier_tier2 is not None else "—",
+        f"{gate.delta:+.3f}" if gate.delta is not None else "—",
+        gate.flagged, gate.skip_reason or "",
+    )
+    return gate
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Nightly isotonic calibration refit (D-103).")
     parser.add_argument("--min-n", type=int, default=GATE_MIN_N)
@@ -503,6 +718,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--enable-promotion", action="store_true",
                         help="Override env ENABLE_PROMOTION; if set, gate-passing curves auto-promote.")
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--skip-tier-quality-gate", action="store_true",
+                        help="Skip the Phase 4B Tier-1 vs Tier-2 Brier comparison.")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -519,6 +736,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         result.n_training, result.gate.passed, result.gate.gate_reason,
         result.activated, result.new_curve_version,
     )
+
+    if not args.skip_tier_quality_gate:
+        # Run independently of the calibration refit's outcome — even if the
+        # refit short-circuited on no_baseline, we still want to flag any
+        # pre-existing Tier-2 quality regression.
+        try:
+            run_tier_quality_gate()
+        except Exception:  # noqa: BLE001
+            # Quality gate is observability-only; never let it fail the
+            # calibration refit's exit code.
+            logger.exception("tier2_quality_gate: errored, continuing")
+
     return 0 if (result.gate.passed or result.n_training == 0) else 0
 
 

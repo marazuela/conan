@@ -416,6 +416,82 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 
 
 # ============================================================================
+# Phase 4B — Tier-2 (Cowork bulk) dispatch surface
+# ============================================================================
+#
+# Three sync Modal functions form the contract Cowork calls into. The
+# bulk_orchestrator skill itself runs ON the Cowork machine (not on Modal);
+# these endpoints are the bridge between Cowork's local skill execution and
+# the production DB / queue.
+#
+# Cowork-side flow (per scheduled cadence):
+#   1. Resolve a list of asset_ids due (per fda_assets.watch_priority).
+#   2. Modal call: tier2_bulk_enqueue(asset_ids) → for each asset, creates a
+#      pending orchestrator_runs row (tier=2) AND returns the input blob the
+#      skill consumes. Single round-trip.
+#   3. For each asset, run the bulk_orchestrator skill against the blob.
+#   4. Modal call: tier2_complete(run_id, payload) per success → validates,
+#      persists tier=2 convergence_assessments, applies §Escalation rule
+#      (high conviction / direction change / new primary doc), enqueues
+#      tier1 escalation if triggered, marks the run completed.
+#   5. Modal call: tier2_fail(run_id, error) per skill error → marks failed.
+#
+# All deterministic logic (validator, persister, escalation rule) lives in
+# orchestrator_runtime/tier2.py — these endpoints are thin glue.
+# ============================================================================
+
+@app.function(
+    image=image,
+    timeout=120,
+    secrets=[supabase_secrets],
+)
+def tier2_bulk_enqueue(asset_ids: list) -> Dict[str, Any]:
+    """Phase 4B: enqueue Tier-2 scheduled bulk runs. Thin wrapper around
+    `orchestrator_runtime.tier2.enqueue_tier2_bulk` — see that function for
+    the full contract."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from orchestrator_runtime.tier2 import enqueue_tier2_bulk
+
+    return enqueue_tier2_bulk(SupabaseClient(), asset_ids)
+
+
+@app.function(
+    image=image,
+    timeout=120,
+    secrets=[supabase_secrets],
+)
+def tier2_complete(
+    run_id: str,
+    payload: Dict[str, Any],
+    cost_usd: float = 0.0,
+    latency_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Phase 4B: Cowork posts a completed Tier-2 skill run here. Thin
+    wrapper around `orchestrator_runtime.tier2.complete_tier2_run`."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from orchestrator_runtime.tier2 import complete_tier2_run
+
+    return complete_tier2_run(
+        SupabaseClient(), run_id, payload,
+        cost_usd=cost_usd, latency_ms=latency_ms,
+    )
+
+
+@app.function(
+    image=image,
+    timeout=15,
+    secrets=[supabase_secrets],
+)
+def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
+    """Phase 4B: Cowork reports a Tier-2 skill error. Thin wrapper around
+    `orchestrator_runtime.tier2.fail_tier2_run`."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from orchestrator_runtime.tier2 import fail_tier2_run
+
+    return fail_tier2_run(SupabaseClient(), run_id, error_message)
+
+
+# ============================================================================
 # Health check
 # ============================================================================
 
