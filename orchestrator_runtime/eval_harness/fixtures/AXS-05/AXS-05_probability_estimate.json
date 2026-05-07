@@ -1,0 +1,383 @@
+{
+  "drug": "AXS-05",
+  "indication": "Alzheimer Disease Agitation",
+  "ticker": "AXSM",
+  "company_name": "Axsome Therapeutics",
+  "catalyst": "2026-04-30",
+  "mode": "evaluative",
+  "as_of": "2026-05-05T05:45:30.882192Z",
+  "trial_discovery": "provided",
+  "trials": [
+    {
+      "nct_id": "NCT05557409",
+      "title": "ADVANCE-2: Addressing Dementia Via Agitation-Centered Evaluation 2: A Randomized, Double-blind, Placebo-controlled Trial to Assess the Efficacy and Safety of AXS-05 for the Treatment of Alzheimer's Disease Agitation",
+      "phase": "PHASE3",
+      "status": "COMPLETED",
+      "sponsor": "Axsome Therapeutics, Inc.",
+      "conditions": [
+        "Agitation in Patients With Dementia of the Alzheimer's Type",
+        "Alzheimer Disease",
+        "Agitation"
+      ],
+      "interventions": [
+        {
+          "name": "AXS-05",
+          "type": "DRUG"
+        },
+        {
+          "name": "Placebo",
+          "type": "DRUG"
+        }
+      ],
+      "primary_outcomes": [
+        {
+          "measure": "Cohen-Mansfield Agitation Inventory (CMAI)",
+          "time_frame": "Up to 5 weeks"
+        }
+      ],
+      "enrollment": 408,
+      "start_date": "2022-09-06",
+      "completion_date": "2024-12-21",
+      "results_first_posted": null,
+      "has_results": null,
+      "source_url": "https://clinicaltrials.gov/study/NCT05557409"
+    },
+    {
+      "nct_id": "NCT04797715",
+      "title": "A Double-blind, Placebo-controlled, Randomized Withdrawal Trial to Assess the Efficacy and Safety of AXS-05 for the Treatment of Agitation in Subjects With Dementia of the Alzheimer's Type",
+      "phase": "PHASE3",
+      "status": "COMPLETED",
+      "sponsor": "Axsome Therapeutics, Inc.",
+      "conditions": [
+        "Agitation in Patients With Dementia of the Alzheimer's Type",
+        "Alzheimer Disease",
+        "Agitation,Psychomotor"
+      ],
+      "interventions": [
+        {
+          "name": "AXS-05",
+          "type": "DRUG"
+        },
+        {
+          "name": "Placebo",
+          "type": "DRUG"
+        }
+      ],
+      "primary_outcomes": [
+        {
+          "measure": "Time from randomization to relapse of agitation symptoms",
+          "time_frame": "up to 26 weeks"
+        }
+      ],
+      "enrollment": 178,
+      "start_date": "2020-12-31",
+      "completion_date": "2022-11-21",
+      "results_first_posted": null,
+      "has_results": null,
+      "source_url": "https://clinicaltrials.gov/study/NCT04797715"
+    },
+    {
+      "nct_id": "NCT03226522",
+      "title": "A Randomized, Double-blind, Placebo-controlled Trial to Assess the Efficacy and Safety of AXS-05 for the Treatment of Agitation in Subjects With Dementia of the Alzheimer's Type",
+      "phase": "PHASE2, PHASE3",
+      "status": "COMPLETED",
+      "sponsor": "Axsome Therapeutics, Inc.",
+      "conditions": [
+        "Agitation in Patients With Dementia of the Alzheimer's Type",
+        "Alzheimer Disease",
+        "Agitation,Psychomotor"
+      ],
+      "interventions": [
+        {
+          "name": "AXS-05",
+          "type": "DRUG"
+        },
+        {
+          "name": "Bupropion",
+          "type": "DRUG"
+        },
+        {
+          "name": "Placebo",
+          "type": "DRUG"
+        }
+      ],
+      "primary_outcomes": [
+        {
+          "measure": "Change in CMAI Total Score",
+          "time_frame": "5 weeks"
+        }
+      ],
+      "enrollment": 366,
+      "start_date": "2017-07-13",
+      "completion_date": "2020-04-17",
+      "results_first_posted": "2023-09-13",
+      "has_results": null,
+      "source_url": "https://clinicaltrials.gov/study/NCT03226522"
+    }
+  ],
+  "forensics": [
+    {
+      "dimension": "primary_endpoint_achievement",
+      "finding": "0/3 Phase 3 trials hit primary endpoint",
+      "signal": "negative",
+      "magnitude_pp": -8,
+      "evidence": "hit rate 0.00",
+      "source": "ClinicalTrials.gov",
+      "confidence": 0.85
+    },
+    {
+      "dimension": "sap_integrity",
+      "finding": "no trial in set has posted results \u2014 SAP integrity not verifiable from CT.gov alone",
+      "signal": "neutral",
+      "magnitude_pp": 0,
+      "evidence": "results-not-posted",
+      "source": "ClinicalTrials.gov",
+      "confidence": 0.3
+    },
+    {
+      "dimension": "population",
+      "finding": "aggregate enrollment 952 \u2014 moderate power",
+      "signal": "neutral",
+      "magnitude_pp": 0,
+      "evidence": "sample size adequate but not large",
+      "source": "ClinicalTrials.gov",
+      "confidence": 0.65
+    },
+    {
+      "dimension": "trial_design",
+      "finding": "3 pivotal trials \u2014 independent replication mitigates single-trial variance",
+      "signal": "positive",
+      "magnitude_pp": 3,
+      "evidence": "multi-pivotal program",
+      "source": "ClinicalTrials.gov",
+      "confidence": 0.8
+    }
+  ],
+  "adcom": {
+    "status": "low",
+    "rationale": "no AdCom notices in Federal Register matching term",
+    "source": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions[term]=AXS-05%20Alzheimer%20Disease%20Agitation&conditions[type][]=NOTICE",
+    "confidence": 0.85
+  },
+  "label_risk": {
+    "boxed_warning_probability": 0.2,
+    "rems_likelihood": "low",
+    "indication_restriction_risk": "unknown",
+    "pmr_likelihood": "moderate",
+    "rationale": "Conservative NME class default: boxed-warning base rate ~20% for NMEs per FDA CDER data (2013-2023). REMS + indication-restriction assessment requires P2 class-precedent lookup; P2 not yet built.",
+    "source": "FDA CDER NME approval statistics (2013-2023 aggregate); P2 integration pending",
+    "confidence": 0.4,
+    "p2_available": false
+  },
+  "cmc": {
+    "status": "low",
+    "rationale": "no recent FDA-483 observations identified in primary search (best-effort scan; for full assurance, query the FDA inspection database directly)",
+    "source": "https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/inspection-classification-database",
+    "confidence": 0.55
+  },
+  "class_precedent": {
+    "drug": "AXS-05",
+    "indication": "Major Depressive Disorder",
+    "ticker": "AXSM",
+    "cik": "1579428",
+    "company_name": "Axsome Therapeutics",
+    "mechanism_of_action": "NMDA receptor antagonist + CYP2D6 inhibitor",
+    "class_label": "NMDA antagonist (depression / mood)",
+    "class_confidence": 0.65,
+    "class_method": "class_atlas",
+    "as_of": "2026-04-28T23:52:38.866763Z",
+    "lookback_years": 10,
+    "approval_rate_class": 0.667,
+    "approval_rate_class_ci": [
+      0.208,
+      0.939
+    ],
+    "adcom_rate": 0.2,
+    "adcom_rate_confidence": 0.55,
+    "adcom_rate_method": "offline_illustrative",
+    "boxed_warning_rate": 0.5,
+    "rems_rate": 0.5,
+    "median_review_days": 366,
+    "n_approvals": 2,
+    "n_crls": 1,
+    "n_withdrawals": 0,
+    "n_total_in_class": 3,
+    "approvals": [
+      {
+        "drug": "esketamine",
+        "brand": "Spravato",
+        "sponsor": "Janssen",
+        "approval_date": "2019-03-05",
+        "appl_no": "211243",
+        "review_priority": "PRIORITY",
+        "indication": "Treatment-resistant depression",
+        "boxed_warning": true,
+        "rems": true,
+        "adcom_held": true,
+        "adcom_vote": "14-2",
+        "review_days": 244,
+        "designation": [
+          "Breakthrough",
+          "Priority Review"
+        ],
+        "source": "https://api.fda.gov/drug/drugsfda.json?search=openfda.brand_name:%22spravato%22",
+        "confidence": 0.95
+      },
+      {
+        "drug": "AXS-05",
+        "brand": "Auvelity",
+        "sponsor": "Axsome Therapeutics",
+        "approval_date": "2022-08-19",
+        "appl_no": "211078",
+        "review_priority": "PRIORITY",
+        "indication": "Major Depressive Disorder",
+        "boxed_warning": false,
+        "rems": false,
+        "adcom_held": false,
+        "adcom_vote": null,
+        "review_days": 366,
+        "designation": [
+          "Priority Review"
+        ],
+        "source": "https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=211078",
+        "confidence": 0.95
+      }
+    ],
+    "crls": [
+      {
+        "drug": "AXS-05",
+        "sponsor": "Axsome Therapeutics",
+        "crl_date": "2021-08-12",
+        "indication": "Major Depressive Disorder",
+        "publicly_disclosed_grounds": [
+          "CMC"
+        ],
+        "subsequent_outcome": "approved on resubmission",
+        "source": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001579428&type=8-K",
+        "confidence": 0.85
+      }
+    ],
+    "withdrawals": [],
+    "adcom": {
+      "results": [
+        {
+          "publication_date": "2019-02-12",
+          "title": "Psychopharmacologic Drugs Advisory Committee \u2014 esketamine for treatment-resistant depression",
+          "html_url": "https://www.federalregister.gov/documents/2019/02/12/2019-02125/...",
+          "division": "psychiatry",
+          "source": "(offline)",
+          "confidence": 0.85
+        }
+      ],
+      "n": 1,
+      "division": "psychiatry",
+      "source_url": "(offline)"
+    },
+    "sponsor_history": {
+      "ticker": "AXSM",
+      "cik": "1579428",
+      "company_name": "Axsome Therapeutics",
+      "_status": "offline_illustrative",
+      "prior_approvals": [
+        {
+          "drug": "AXS-05 / Auvelity",
+          "indication": "MDD",
+          "approval_date": "2022-08-19",
+          "source": "https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=211078"
+        }
+      ],
+      "prior_crls_received": [
+        {
+          "drug": "AXS-05",
+          "indication": "MDD",
+          "filed": "2021-08-12",
+          "form": "8-K",
+          "snippet": "received a Complete Response Letter relating to deficiencies identified...",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1579428/"
+        }
+      ],
+      "prior_crl_same_indication": false,
+      "breakthrough_designation": false,
+      "priority_review": true,
+      "rtor_participation": false,
+      "ongoing_inspection_concerns": false,
+      "source": "(offline illustrative)",
+      "confidence": 0.55
+    },
+    "confidence": 0.3,
+    "source": "openFDA + Federal Register + EDGAR EFTS (offline)",
+    "data_quality_notes": [
+      "class_membership_inference: class_atlas",
+      "offline mode \u2014 values illustrative",
+      "n_total_in_class = 3 (sparse)"
+    ]
+  },
+  "probability": {
+    "p_low": 0.552,
+    "p_mid": 0.617,
+    "p_high": 0.682,
+    "spread": 0.13,
+    "ledger": [
+      {
+        "adjustment": "class base rate",
+        "sign": "anchor",
+        "magnitude_pp": 67,
+        "rationale": "starting probability",
+        "source": "openFDA + Federal Register + EDGAR EFTS (offline)",
+        "confidence": 0.3
+      },
+      {
+        "adjustment": "trial: primary_endpoint_achievement",
+        "sign": "negative",
+        "magnitude_pp": -8,
+        "rationale": "0/3 Phase 3 trials hit primary endpoint",
+        "source": "ClinicalTrials.gov",
+        "confidence": 0.85
+      },
+      {
+        "adjustment": "trial: sap_integrity",
+        "sign": "neutral",
+        "magnitude_pp": 0,
+        "rationale": "no trial in set has posted results \u2014 SAP integrity not verifiable from CT.gov alone",
+        "source": "ClinicalTrials.gov",
+        "confidence": 0.3
+      },
+      {
+        "adjustment": "trial: population",
+        "sign": "neutral",
+        "magnitude_pp": 0,
+        "rationale": "aggregate enrollment 952 \u2014 moderate power",
+        "source": "ClinicalTrials.gov",
+        "confidence": 0.65
+      },
+      {
+        "adjustment": "trial: trial_design",
+        "sign": "positive",
+        "magnitude_pp": 3,
+        "rationale": "3 pivotal trials \u2014 independent replication mitigates single-trial variance",
+        "source": "ClinicalTrials.gov",
+        "confidence": 0.8
+      },
+      {
+        "adjustment": "AdCom risk",
+        "sign": "neutral",
+        "magnitude_pp": 0,
+        "rationale": "no AdCom notices in Federal Register matching term",
+        "source": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions[term]=AXS-05%20Alzheimer%20Disease%20Agitation&conditions[type][]=NOTICE",
+        "confidence": 0.85
+      },
+      {
+        "adjustment": "CMC / manufacturing risk",
+        "sign": "neutral",
+        "magnitude_pp": 0,
+        "rationale": "no recent FDA-483 observations identified in primary search (best-effort scan; for full assurance, query the FDA inspection database directly)",
+        "source": "https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/inspection-classification-database",
+        "confidence": 0.55
+      }
+    ],
+    "overall_confidence": 0.71
+  },
+  "data_quality": [
+    "label_risk_class_default_confidence_0.40_p2_pending"
+  ]
+}
