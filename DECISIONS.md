@@ -484,3 +484,90 @@ Implementation:
 - Memory file format (Contract C5) is pinned in `_merge_memory_file()` — Stream 3's Stage 10 owns `## Active hypotheses`, `## Open uncertainties`, `## Recent assessments` sections; Stream 2 owns `## Resolved post-mortems` (append-only newest-first, idempotent on assessment_id marker).
 - Modal app `conan-v3-feedback-loop` deployed; secrets configured; functions callable. Scheduling is the only remaining step before automation.
 - Rollback path: DROP `prompt_versions` + `calibration_drift_log` tables, DELETE the `memory_files` Storage bucket, stop the Modal app. Existing `calibration_curves` / `post_mortem_queue` / `reference_class_base_rates` rows untouched.
+
+---
+
+## D-124 — Phase 1 close-out: RAG infra + sub-agent stack + 7 MCP servers (2026-05-07)
+
+**Context.** With Tier 0 streams 1+2 (D-122 / D-123) shipped, Phase 1 of the v3 plan (`~/.claude/plans/the-fda-cockpit-still-clever-valley.md`) called for the foundation lift across three concurrent workstreams that all import each other at the runtime level: RAG infrastructure (Phase 4.5), sub-agent runtime (Phase 5), and MCP servers (Phase 4.7). Landing them separately would have left the orchestrator runtime broken between PRs, so they're bundled atomically in commit `53258e0`.
+
+**Decision (RAG — Phase 4.5).**
+
+- Migration `20260510000000_v3_rag_infrastructure.sql` — 8 tables: `document_chunks`, four `chunk_embeddings_*` (literature 1024-dim Matryoshka, internal/adcomm/post_mortems 2048-dim), `citation_graph_cache`, `retrieval_cache`, `rag_eval_gold`, `rag_eval_log`. Plus `rag_bm25_search` and `rag_dense_search` plpgsql RPCs (Postgres FTS + pgvector HNSW search surfaces).
+- `modal_workers/rag/` (~1,800 LOC, 9 modules): section-aware hierarchical chunker (recursive 512-token windows + 100-token overlap inside parsed logical sections), embedder (Voyage-3-large primary / OpenAI text-embedding-3-large fallback via Protocol-typed handle), reranker (Voyage rerank-2.5 / Cohere rerank-3.5 fallback), hybrid_search (BM25 top-150 + dense top-150 → RRF k=60 → rerank → top-{k}), Haiku-4.5 contextual_augmenter (Anthropic's Contextual Retrieval pattern with prompt caching), citation_graph (Semantic Scholar 1-hop expansion for literature corpus only), and RAGAS eval gate scaffolding with synthetic-from-post-mortems generation.
+- `orchestrator_runtime/rag_handle.py` — runtime-side direct-import handle that mirrors `compute.py`'s dual surface from D-114 (avoids subprocess overhead on the critical path; the MCP wrapper is for Cowork bulk + operator tool use).
+- `modal_workers/scripts/backfill_rag_corpus.py` — one-shot script that walks `documents`, chunks per corpus assignment, runs Haiku contextual augmentation, embeds via the chosen provider, and inserts into `chunk_embeddings_*`. Not run yet — depends on the migration applying + a provider key bundle existing.
+
+**Decision (sub-agents — Phase 5).**
+
+- `modal_workers/sub_agents/{literature,competitive,regulatory_history,options_microstructure}.py` — four Sonnet 4.5 tool-use loops (one per role). Each loads its skill markdown, spawns an Anthropic SDK session with the role's `allowed-tools` MCP filter, runs the multi-step retrieval+synthesis loop with interleaved-thinking and a `SUB_AGENT_LOOP_MAX_TURNS=4` hard cap, validates the structured output against the role's `*_v1.json` schema in `conan-cowork-skills/schemas/`, retries on validation failure (max 3×), and writes the per-role memory file.
+- Shared `sub_agents/runtime.py` — generic harness all four roles plug into (skill loader, schema validator with retry+feedback loop, memory writeback, observability hook into `sub_agent_calls`).
+- `orchestrator_runtime/sub_agent_dispatcher.py` (Contract C6) — exports `SUB_AGENT_TOOL_SCHEMA` (Anthropic tool definition) + `execute_dispatch(role, query, ctx)`. Stage 1 imports both and registers the tool; the dispatcher invokes the corresponding Modal function and writes the `sub_agent_calls` audit row.
+- Feature flag `ORCH_ENABLE_SUB_AGENTS` (default OFF). Stage 1 dispatch only fires when the flag is set; cold-start runs synthesize without the sub-agent layer. The flip to ON is gated on a live integration loop observation, not a code change.
+- `modal_workers/sub_agents/_rag_tools.py` — common helper that wires the shared RAG handle into each sub-agent's tool surface.
+
+**Decision (MCP servers — Phase 4.7).**
+
+- 7 FastMCP servers in `conan-fda-orchestrator-plugin/mcp_servers/`: `pubmed_mcp` (PubMed E-utils + Semantic Scholar 1-hop), `biorxiv_mcp` (bioRxiv + medRxiv API), `clinicaltrials_mcp` (ClinicalTrials.gov v2), `openfda_mcp` (drug labels + warning letters + FAERS + Orange Book), `fda_adcomm_mcp` (calendar/transcripts/briefings/voting history scraping), `polygon_mcp` (quotes + IV term structure + options chain + unusual options + gamma + news), `internal_rag_mcp` (hybrid search + rerank + citation graph + chunk fetch over the four PGVector corpora). Plus a previously-shipped `compute_mcp` (D-114). All servers ship with degraded-mode handlers — when an API key is absent, tools return a structured error instead of crashing the dispatcher.
+- `conan-fda-orchestrator-plugin/.mcp.json` updated to register all 8 servers (1 from D-114 + 7 new).
+- `conan-fda-orchestrator-plugin/skills/{ic_memo_polish,sub_agent_options_microstructure}.md` — completes the 5-skill set spec'd in the original plan. `ic_memo_polish.md` is a Phase 3A starter; the runner that consumes it is not yet wired.
+- `conan-fda-orchestrator-plugin/hooks/hooks.json` + `scripts/{budget_check,log_observability}.py` — PreToolUse / PostToolUse hooks that enforce per-call cost ceilings ($0.60 soft / $1.20 hard per sub-agent invocation) and log every external MCP call to `sub_agent_calls`.
+
+**Decision (D-109 first half).**
+
+- `modal_workers/scripts/seed_eval_harness_from_export.py` — ticker resolution + verdict join from D-116 ledger. Outputs a staging file (no DB write) until Phase 4B unblocks `document_set` + `asset_id` resolution. Closes the ETL half of D-109; the DB-insert half remains queued until the documents corpus has the matching primary documents from the export's 1502 events.
+
+**Anthropic SDK feature wiring.**
+
+- `orchestrator_runtime/client.py` — auto-injects `anthropic-beta: interleaved-thinking-2025-05-14` for Opus calls; merges user-passed `extra_headers` over the default. Cost accumulator + hard-kill ceiling co-resident (Stream 6 dependency — see D-125).
+- `modal_workers/shared/document_writer.py` — replaces D-110's stub `_upload_to_anthropic` with real `client.files.create()` and persists `anthropic_file_id`. `modal_workers/scripts/backfill_anthropic_files.py` walks existing PDFs and uploads them, populating the column for prior rows.
+- Mixed-TTL prompt caching scaffold lives in the shared static-prefix builder (`build_static_prefix`); Stage 1/2/3/7 share the byte-identical prefix for the 1h-cached part.
+- `orchestrator_runtime/memory.py` — hierarchical loader/writer for asset / indication / reviewer_panel / sub_agent scopes against the `memory_files` Storage bucket (Stream 2's substrate). Stage 0 reads in parallel via `asyncio.gather`; Stage 10 writes the per-asset summary section per Contract C5.
+- `orchestrator_runtime/constitutional.py` — Stage 7 walks Anthropic Citations API metadata when present, regex-resolves `[F:short]/[D:short]` tokens otherwise (transitional). Cost-ceiling gate hook added.
+
+**Tests.** 1,190 green at commit time; 1,202 after the small post-commit polish landed. Coverage spans every new module: chunker / RRF / citation graph / RAG protocols / MCP servers / sub-agent runners / sub-agent dispatcher / Stage 1 dispatch helper / memory store / pricing / cost budget / cache-TTL / Citations walk / client headers / Files upload / pubmed E-utils / seed_eval_harness / asset_linker pass-2 / orchestrator drain budget.
+
+**Consequences.**
+
+- Phase 4.5 / Phase 4.7 / Phase 5 substrate is on disk, tested, and importable. The system needs three configuration steps before the substrate becomes meaningfully active in production:
+  1. Apply `20260510000000_v3_rag_infrastructure.sql` (not yet applied).
+  2. Create a Modal secret bundle for the chosen RAG provider (Voyage AI vs OpenAI+Cohere; their code already supports both via Protocol).
+  3. Run `backfill_rag_corpus.py` to populate `chunk_embeddings_*` from the existing 3,149 documents (~$15 in Haiku contextual augmentation cost; ~30 min wallclock).
+- Sub-agents stay dormant until `ORCH_ENABLE_SUB_AGENTS=1` is set. Stage 1 ramp gate is a deliberate live-observation step, not a code merge.
+- `anthropic-orchestrator` Modal secret remains unmade. `orchestrator_app.py` deploy fails today on the secret check; once the secret is created, deploy unlocks. (Stream 2's feedback loop wires through `scanner-secrets` as a temporary fallback per D-123.)
+- D-109 second half (DB-insert ETL) stays queued until document_set + asset_id resolution lands; the staging output is sufficient for offline review of the labeled outcomes.
+
+---
+
+## D-125 — Stream 6: production safety + cost-ceiling enforcement (2026-05-07)
+
+**Context.** Tier 0 audit (this session) flagged unenforced cost ceilings as a P1 production-safety gap: `orchestrator_run_one` and `orchestrator_drain_queue` accepted `budget_usd` as a parameter default but never queried the accumulator; one bad prompt could burn $1,000s before manual stop. Audit also flagged: asset linker is single-pass (`verified_by_pass2` always false), 15 non-FDA scanners still have `status='operational'/'paused'` despite the FDA-depth pivot (memory `strategic_pivot_fda_depth.md`), `dashboard_signal_rows` has a reserved `tier` column but no underlying value, and `fda_agent_reviews.agent_kind` enum doesn't accept the three new sub-agent kinds (`literature`, `competitive`, `ic_memo`) introduced by D-107.
+
+**Decision.** Bundled into commit `53258e0` alongside D-124 because runtime imports cross-cut.
+
+- Migration `20260510000010_v3_stream6_safety_and_cleanup.sql` — six related deltas:
+  1. UPDATE 15 non-FDA scanners to `status='deprecated'`.
+  2. CREATE OR REPLACE `dashboard_signal_rows` view with a `LATERAL JOIN` against `orchestrator_runs` to expose `tier` (latest completed run per entity).
+  3. Extend `fda_agent_reviews.agent_kind` CHECK to include `literature`, `competitive`, `ic_memo`. Update inline guard in `fda_event_request_specialist_refresh` RPC to accept the new kinds without breaking the existing return shape.
+  4. Extend `operator_flags.source` CHECK with `'orchestrator_cost'` (the soft-alert channel for cost ceilings).
+  5. ADD COLUMN `pass2_verdict` (`kept`/`demoted`/`rejected`) + `pass2_confidence` numeric(3,2) + `pass2_at` timestamptz to `asset_documents`. Partial index `asset_documents_pass2_pending_idx` on `(extraction_confidence) WHERE verified_by_pass2=false AND extraction_method='agent_pass1'` so the verifier reads only the backlog rows it needs.
+  6. Extend `orchestrator_runs.status` CHECK with `'killed_budget'`. Distinct from `'skipped_budget'` (pre-flight skip when budget already exhausted) — `killed_budget` is mid-flight hard kill when per-run cost ceiling breached during execution. Dashboards can separate budget kills from genuine `failed`.
+- `orchestrator_runtime/client.py` — cost accumulator + hard-kill ceiling. Tracks per-call USD against the per-run budget; raises `BudgetExceededError` when threshold breached.
+- `orchestrator_runtime/pricing.py` — model→price map for Sonnet 4.5 / Haiku 4.5 / Opus 4.7 (input + output rates per 1M tokens).
+- `modal_workers/shared/cost_budget.py` — 24h-window threshold checker + soft-alert path through `operator_flags(source='orchestrator_cost')`.
+- `modal_workers/extractor/asset_linker.py` — pass-2 Haiku verifier. Walks `asset_documents WHERE verified_by_pass2=false AND extraction_method='agent_pass1' AND extraction_confidence < 0.80`, asks Haiku to verify the link against the cited spans, writes verdict + confidence + timestamp. `rejected` verdict flips `is_material=false` (no DELETE — preserves the link for audit). Surfaces via `asset_linker_pass2_run` Modal function.
+- `modal_workers/orchestrator_app.py` — adds `asset_linker_pass2_run` function, BudgetExceededError catch in `orchestrator_drain_queue` (transitions row to `killed_budget` and continues to next), end-of-run 24h threshold check, and RAG provider deps in the image (`voyageai`, `openai`, `cohere`, `mcp[cli]`).
+- `conan-fda-orchestrator-plugin/hooks/` — PreToolUse `budget_check.py` enforces per-sub-agent caps; PostToolUse `log_observability.py` writes the call to `sub_agent_calls`. Both hook scripts are wired in `hooks.json` and fire on the dispatcher tool surface + every external MCP call.
+
+**Tests.** Every new module + the migration's downstream effects are tested: `test_cost_budget` (24h threshold, soft alerts), `test_asset_linker_pass2` (verifier verdict matrix, demote-not-delete invariant), `test_orchestrator_drain_budget` (BudgetExceededError → killed_budget transition, drain continues to next pending row), `test_pricing` (model rate table), `test_files_upload` (Files API integration). All green; total suite at 1,202 / 1,202.
+
+**Applied to production 2026-05-07** via `apply_migration("v3_stream6_safety_and_cleanup")`. Pre-flight verification: 0 scanners had `status='deprecated'`, `agent_kind` enum did NOT include the new kinds, `orchestrator_runs.status` did NOT include `'killed_budget'`, `asset_documents` lacked the three pass-2 columns. Post-flight verification: 15 scanners deprecated, all CHECK extensions in place, all 3 columns present + partial index built. Idempotent guards (`DROP CONSTRAINT IF EXISTS / ADD CONSTRAINT`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) mean re-application is a no-op.
+
+**Consequences.**
+
+- Production safety floor in place: a misbehaving prompt at any stage now burns a maximum of $15/run before hard kill, with daily/per-asset soft alerts surfacing earlier through `operator_flags`. This is required before `ORCH_ENABLE_SUB_AGENTS` flips in Phase 2C — sub-agents fan out tool calls and need the same ceiling discipline.
+- 15 non-FDA scanners (`asx`, `bse_nse`, `bmv`, `congressional_trading`, `courtlistener`, `cvm`, `delaware_chancery`, `esma_short`, `hkex`, `kind`, `lse_rns`, `sec_enforcement`, `sedar_plus`, `takeover_candidate`, `tdnet`) now report `status='deprecated'` in the registry. Operationally already paused since the FDA-depth pivot; the migration just makes intent explicit.
+- Dashboard `/fda` list can render the `tier` filter that Stream 8 reserves a column for; once the dashboard is wired (Stream 8), the v3 components consume `dashboard_signal_rows.tier` directly.
+- `fda_agent_reviews` rows can now record `literature`/`competitive`/`ic_memo` reviews from sub-agent dispatches without RPC rejection. The `<SubAgentPanels />` component in the dashboard reads those rows; once Stream 3's runtime starts populating them, the panel stops being decoration.
+- Orchestrator `conan-v3-orchestrator` Modal app deploy is unblocked from the schema side. Still blocked on creating the `anthropic-orchestrator` secret in the Modal workspace before `modal deploy` succeeds. Once deployed, `asset_linker_pass2_run` becomes operator-callable for backfilling pass-2 verdicts on the 35 existing pass-1 links.
+- Rollback path: revert the migration's CHECK extensions (drop+add to the prior allow-list), DROP the three pass-2 columns, restore prior view definition, set the 15 scanners back to their prior status (was `paused`). Code-side: feature-flag `ENABLE_COST_BUDGET` gates the new client.py accumulator if needed.
