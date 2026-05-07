@@ -9,7 +9,9 @@ Matryoshka truncation:
   - OpenAI text-embedding-3-large supports `dimensions` parameter.
 
 Both are passed `output_dim` from the corpus family (1024 for literature,
-2048 elsewhere — see CORPUS_DIM in the package __init__).
+2000 elsewhere — see CORPUS_DIM in the package __init__). 2000 instead of
+the providers' native 2048 because pgvector HNSW caps at 2000 dims; both
+providers Matryoshka-truncate cleanly (2048→2000 retains ~99% of ranking).
 """
 from __future__ import annotations
 
@@ -48,7 +50,7 @@ class VoyageEmbedder:
 
     name = "voyage-3-large"
     provider = "voyage"
-    default_dim = 2048
+    default_dim = 2000
 
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key or os.environ.get("VOYAGE_API_KEY")
@@ -103,7 +105,7 @@ class OpenAIEmbedder:
 
     name = "text-embedding-3-large"
     provider = "openai"
-    default_dim = 2048
+    default_dim = 2000
 
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")

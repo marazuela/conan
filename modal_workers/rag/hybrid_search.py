@@ -30,9 +30,9 @@ CORPUS_TABLE = {
 
 CORPUS_DIM = {
     "literature": 1024,
-    "filings": 2048,
-    "labels_aes": 2048,
-    "news": 2048,
+    "filings": 2000,
+    "labels_aes": 2000,
+    "news": 2000,
 }
 
 CORPUS_TTL_HOURS = {

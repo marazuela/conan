@@ -27,7 +27,7 @@ def test_voyage_embedder_implements_protocol():
     assert isinstance(e, Embedder)
     assert e.name == "voyage-3-large"
     assert e.provider == "voyage"
-    assert e.default_dim == 2048
+    assert e.default_dim == 2000
 
 
 def test_openai_embedder_implements_protocol():
@@ -35,7 +35,7 @@ def test_openai_embedder_implements_protocol():
     assert isinstance(e, Embedder)
     assert e.name == "text-embedding-3-large"
     assert e.provider == "openai"
-    assert e.default_dim == 2048
+    assert e.default_dim == 2000
 
 
 def test_voyage_embedder_lazy_client_init():
@@ -114,9 +114,9 @@ def test_get_embedder_openai_fallback():
 def test_corpus_dim_lookup():
     from modal_workers.rag import CORPUS_DIM
     assert CORPUS_DIM["literature"] == 1024
-    assert CORPUS_DIM["filings"] == 2048
-    assert CORPUS_DIM["labels_aes"] == 2048
-    assert CORPUS_DIM["news"] == 2048
+    assert CORPUS_DIM["filings"] == 2000
+    assert CORPUS_DIM["labels_aes"] == 2000
+    assert CORPUS_DIM["news"] == 2000
 
 
 def test_source_to_corpus_mapping_complete():
