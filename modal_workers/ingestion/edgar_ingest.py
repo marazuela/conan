@@ -96,15 +96,27 @@ def ingest_keyword_search(
         return result
 
     result.documents_seen = len(hits)
-    for h in hits:
-        outcome = _ingest_one_hit(h, dw, ua)
-        _accumulate(result, outcome)
-
-    logger.info(
-        "edgar ingest summary query=%r seen=%d wrote=%d dedup=%d "
-        "no_text=%d errors=%d",
-        query, result.documents_seen, result.documents_written,
-        result.documents_dedup_hit, result.documents_skipped_no_text, result.errors)
+    try:
+        for h in hits:
+            try:
+                outcome = _ingest_one_hit(h, dw, ua)
+            except Exception as exc:  # noqa: BLE001 — D-110a: defense in depth
+                # _ingest_one_hit already catches its own exceptions and returns
+                # _IngestOutcome(error=True). This outer guard exists for the
+                # truly unexpected (programming errors, OOM, _accumulate bugs)
+                # so a single bad hit never aborts the whole batch.
+                logger.exception(
+                    "edgar ingest: unexpected exception on hit %r: %s",
+                    (h or {}).get("_id"), exc)
+                outcome = _IngestOutcome(error=True)
+            _accumulate(result, outcome)
+    finally:
+        # D-110a: emit summary even on abnormal exit so partial work is visible.
+        logger.info(
+            "edgar ingest summary query=%r seen=%d wrote=%d dedup=%d "
+            "no_text=%d errors=%d",
+            query, result.documents_seen, result.documents_written,
+            result.documents_dedup_hit, result.documents_skipped_no_text, result.errors)
     return result
 
 
@@ -135,15 +147,22 @@ def ingest_form_sweep(
         return result
 
     result.documents_seen = len(hits)
-    for h in hits:
-        outcome = _ingest_one_hit(h, dw, ua)
-        _accumulate(result, outcome)
-
-    logger.info(
-        "edgar form sweep forms=%s since=%s seen=%d wrote=%d dedup=%d "
-        "no_text=%d errors=%d",
-        forms, since, result.documents_seen, result.documents_written,
-        result.documents_dedup_hit, result.documents_skipped_no_text, result.errors)
+    try:
+        for h in hits:
+            try:
+                outcome = _ingest_one_hit(h, dw, ua)
+            except Exception as exc:  # noqa: BLE001 — D-110a: defense in depth
+                logger.exception(
+                    "edgar sweep: unexpected exception on hit %r: %s",
+                    (h or {}).get("_id"), exc)
+                outcome = _IngestOutcome(error=True)
+            _accumulate(result, outcome)
+    finally:
+        logger.info(
+            "edgar form sweep forms=%s since=%s seen=%d wrote=%d dedup=%d "
+            "no_text=%d errors=%d",
+            forms, since, result.documents_seen, result.documents_written,
+            result.documents_dedup_hit, result.documents_skipped_no_text, result.errors)
     return result
 
 

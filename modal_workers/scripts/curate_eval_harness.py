@@ -201,130 +201,28 @@ def _candidates_from_record(
 # ---------------------------------------------------------------------------
 # Sponsor → ticker matching via entities table
 # ---------------------------------------------------------------------------
+# Normalization helpers + fuzzy match consolidated into shared module D-110b.
+# This module re-exports them under their original names so the rest of the
+# script's logic (and any external callers) keep working unchanged.
 
-# Strip only legal-form suffixes / punctuation. KEEP biotech-distinguishing
-# words ("pharmaceuticals", "therapeutics", "biosciences", etc.) — they're
-# what distinguishes "Catalyst Pharmaceuticals" from "General Catalyst".
-_NORM_STRIP = re.compile(
-    r"\b(inc|llc|ltd|corp|corporation|company|co|holdings|holding|group|"
-    r"international|usa|us|s\.?a\.?|s\.?p\.?a\.?|n\.?v\.?|the|a|an)\b\.?",
-    re.IGNORECASE,
+from modal_workers.shared.sponsor_resolver import (
+    _NORM_STRIP,           # noqa: F401  re-exported for backward compat
+    _NORM_PUNCT,           # noqa: F401
+    _GENERIC_TOKENS,       # noqa: F401
+    _NON_SPONSOR_PATTERNS, # noqa: F401
+    _normalize_sponsor,    # noqa: F401
+    _distinctive_tokens,   # noqa: F401
+    match_sponsor_to_ticker as _shared_match_sponsor_to_ticker,
 )
-_NORM_PUNCT = re.compile(r"[^\w\s]")
-# Words too generic to match on alone.
-_GENERIC_TOKENS = {
-    "pharma", "pharmaceuticals", "pharmaceutical", "therapeutics", "therapeutic",
-    "biotechnology", "biosciences", "biotech", "sciences", "science",
-    "labs", "laboratories", "lab", "research", "development",
-    "medical", "medicines", "medicine", "health", "healthcare", "bio",
-}
-# Patterns that mark an entity as definitively NOT a drug sponsor (SPACs, REITs,
-# merger vehicles, mining/energy/tech companies that share generic tokens with
-# biotech sponsors). Used to filter entities-table candidates.
-_NON_SPONSOR_PATTERNS = re.compile(
-    r"(merger\s*corp|acquisition\s*corp|spac|holdings?\s*ltd|"
-    r"rare\s*earth|mining|energy|capital|ventures?|partners|trust|"
-    r"reit|technology|software|fintech|crypto|blockchain|ai\s*inc)",
-    re.IGNORECASE,
-)
-
-
-def _normalize_sponsor(name: str) -> str:
-    s = name.lower()
-    s = _NORM_PUNCT.sub(" ", s)
-    s = _NORM_STRIP.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def _distinctive_tokens(norm: str) -> List[str]:
-    """Tokens long enough + non-generic enough to anchor a match."""
-    return [t for t in norm.split()
-            if len(t) >= 4 and t not in _GENERIC_TOKENS]
 
 
 def match_sponsor_to_ticker(
     sponsor_name: str,
     client: SupabaseClient,
 ) -> Optional[Dict[str, Any]]:
-    """Fuzzy-match a sponsor name to an entities row. Returns the entities row
-    (with ticker) on success, None on no match.
-
-    Matching rules (in order of strictness):
-      1. Search entities by ILIKE on the sponsor's longest distinctive token
-      2. Score each candidate by:
-         - +5 if all distinctive sponsor tokens appear as whole words in entity
-         - +3 if the longest sponsor token == longest entity token
-         - +1 per shared distinctive token
-      3. Require score >= 3 OR (sponsor has only 1 distinctive token AND that
-         token appears as a whole word in entity)
-    """
-    norm = _normalize_sponsor(sponsor_name)
-    if not norm:
-        return None
-
-    sponsor_dist = _distinctive_tokens(norm)
-    if not sponsor_dist:
-        return None
-    sponsor_tokens = set(norm.split())
-    longest = max(sponsor_dist, key=len)
-
-    rows = client._rest(
-        "GET", "entities",
-        params={
-            "select": "id,name,primary_ticker,primary_mic,issuer_figi",
-            "name": f"ilike.*{longest}*",
-            "primary_ticker": "not.is.null",
-            "limit": "20",
-        },
-    ) or []
-    if not rows:
-        return None
-
-    longest_re = re.compile(rf"\b{re.escape(longest)}\b", re.IGNORECASE)
-
-    best: Optional[Dict[str, Any]] = None
-    best_score = -1
-    for row in rows:
-        ent_name = row.get("name") or ""
-        # Filter obvious non-sponsor entities (SPACs, merger corps, etc.)
-        if _NON_SPONSOR_PATTERNS.search(ent_name):
-            continue
-        ent_norm = _normalize_sponsor(ent_name)
-        ent_tokens = set(ent_norm.split())
-        ent_dist = _distinctive_tokens(ent_norm)
-
-        # Whole-word match check on longest sponsor token
-        whole_word_match = bool(longest_re.search(ent_name))
-
-        score = 0
-        if whole_word_match:
-            score += 2
-        if ent_dist and longest == max(ent_dist, key=len):
-            score += 3
-        # Distinctive-token overlap
-        score += len(set(sponsor_dist) & set(ent_dist)) * 1
-        # Total token overlap (less weighted, but signal-bearing)
-        score += len(sponsor_tokens & ent_tokens) * 0  # weighted at 0; rely on distinctive
-
-        # All distinctive sponsor tokens must appear in entity for high
-        # confidence
-        if sponsor_dist and all(t in ent_tokens for t in sponsor_dist):
-            score += 5
-
-        if score > best_score:
-            best_score = score
-            best = row
-
-    # Acceptance threshold:
-    #   - score >= 3 (covers "all distinctive tokens match" or "longest token
-    #     is the longest entity token")
-    #   - OR sponsor has only 1 distinctive token AND it whole-word-matches
-    if best_score >= 3:
-        return best
-    if best and len(sponsor_dist) == 1 and longest_re.search(best.get("name") or ""):
-        return best
-    return None
+    """Fuzzy-match sponsor → entities row (with ticker). Delegates to the shared
+    module so the resolver lives in one place (D-110b)."""
+    return _shared_match_sponsor_to_ticker(sponsor_name, client)
 
 
 # ---------------------------------------------------------------------------

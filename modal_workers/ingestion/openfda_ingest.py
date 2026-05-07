@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from modal_workers.shared.document_writer import DocumentWriter, WriteResult
+from modal_workers.shared.sponsor_resolver import resolve_sponsor
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +195,24 @@ def _ingest_drugsfda_record(app: Dict[str, Any], writer: DocumentWriter) -> "_In
     products = app.get("products") or []
     drug_names = [p.get("brand_name") for p in products if p.get("brand_name")]
 
+    # D-110b: resolve sponsor → ticker via curated map (Pass 1 only at ingest;
+    # the Jaccard fallback round-trips to Supabase and is reserved for a later
+    # batch-resolve pass to keep ingest hot-path fast). Curated misses persist
+    # nullable ticker + match_method='unresolved'; an offline batch can re-run
+    # resolve_sponsor with skip_jaccard=False to fill the tail.
+    resolution = resolve_sponsor(sponsor, client=None, skip_jaccard=True)
+
     extensions = {
         "application_number": application_number,
         "sponsor_name": sponsor,
+        "sponsor_resolution": {
+            "ticker": resolution.ticker,
+            "mic": resolution.mic,
+            "country": resolution.country,
+            "match_method": resolution.match_method,
+            "confidence": resolution.confidence,
+            "tradeable": resolution.tradeable,
+        },
         "drug_names": drug_names,
         "submissions_count": len(submissions),
         "most_recent_submission_status": most_recent.get("submission_status"),
