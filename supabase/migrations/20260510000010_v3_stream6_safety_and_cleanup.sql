@@ -189,6 +189,8 @@ ALTER TABLE public.operator_flags
     'reporting_weekly',
     'litigation_baselines',
     'edgar_runtime_health',
+    'scanner_failure_streak',
+    'rollback_monitor',
     'orchestrator_cost',
     'manual'
   ));
