@@ -301,3 +301,5 @@ Profiles are: `merger_arb`, `activist_governance`, `binary_catalyst`, `short_pos
 - The pre_phase3_readout scanner (added alongside) uses the `binary_catalyst` profile, not a new 7th profile.
 - Any future reference to D-002's "five profile" language should be read in the context of this amendment. Spec.md §12 and PRD §6 are already correct; no other docs require edits.
 - DECISIONS.md remains append-only per the register convention; D-002 is not edited in place.
+
+<!-- v3 dashboard design decision moved to top-level /DECISIONS.md as D-111 (2026-05-07). Legacy register stops here. -->

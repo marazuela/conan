@@ -1,0 +1,8 @@
+{
+  "name": "conan-fda-orchestrator",
+  "version": "0.1.0-phase0",
+  "description": "Conan v3 — FDA + EDGAR signal orchestrator. Bundles 4 sub-agent skills (literature, competitive landscape, regulatory history, options microstructure) and 8 MCP servers (pubmed, biorxiv, clinicaltrials, openfda, fda-adcomm, polygon, internal-rag, compute) used by the Anthropic API SDK orchestrator runtime and the Cowork bulk path.",
+  "author": "Conan",
+  "tags": ["fda", "edgar", "biotech", "orchestrator", "mcp", "skills"],
+  "min_claude_version": "4.7"
+}

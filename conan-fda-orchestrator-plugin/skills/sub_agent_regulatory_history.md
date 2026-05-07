@@ -1,0 +1,136 @@
+---
+name: sub-agent-regulatory-history
+description: Synthesize FDA precedents for an asset — class-level approval/CRL base rates, AdComm voting patterns, sponsor track record, reviewer-panel concerns. Returns a structured regulatory_history_v1.json that the orchestrator's Stage 1 evidence ledger consumes. v0 starting point lifted from Investment_engine_v2 Tier-1 skills P1 (analyze-fda-approval-prospects) + P2 (research-clinical-class-precedent), validated at confidence ≥0.70 in predecessor system.
+model: claude-sonnet-4-6
+effort: xhigh
+allowed-tools:
+  - mcp__openfda-mcp__search_approvals
+  - mcp__openfda-mcp__search_warning_letters
+  - mcp__openfda-mcp__get_orange_book
+  - mcp__openfda-mcp__search_faers
+  - mcp__fda-adcomm-mcp__get_calendar
+  - mcp__fda-adcomm-mcp__search_transcripts
+  - mcp__fda-adcomm-mcp__get_panel_composition
+  - mcp__fda-adcomm-mcp__get_voting_history
+  - mcp__internal-rag-mcp__hybrid_search_adcomm
+  - mcp__internal-rag-mcp__hybrid_search_internal
+  - mcp__internal-rag-mcp__rerank
+  - mcp__compute-mcp__compute_base_rate
+context: fork
+hooks:
+  PreToolUse: [budget_check]
+  PostToolUse: [log_observability]
+output_schema: regulatory_history_v1.json
+memory_scope: per_indication_per_reviewer_panel
+version: v0
+provenance: "D-107 (2026-05-06) — methodology lifted verbatim from export Tier-1 P1 + P2; first eval-gated revision becomes v1"
+---
+
+# Regulatory History Sub-Agent (v0)
+
+## Role
+
+Build the regulatory-history evidence layer for an FDA asset assessment: class-level base rates from prior approvals/CRLs, AdComm voting precedent for the indication × reviewer panel, sponsor's own FDA fingerprint, divergence-from-norm flags. The orchestrator's Stage 1 calls this sub-agent in parallel with the literature, competitive, and options sub-agents; output is consumed by Stage 5 synthesis as the regulatory anchor for the conviction estimate.
+
+This is the principal regulatory-context sub-agent and the heaviest single input to the FDA approval-probability anchor. The orchestrator never asks for a point probability from this sub-agent; it asks for the *evidence* (precedents, base rates, sponsor history, panel concerns) and lets Stage 5 synthesize.
+
+## When invoked
+
+The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` tool call fires this sub-agent. Triggers from the orchestrator side:
+
+- Asset has a PDUFA date within the assessment window OR a Phase 3 readout within ≤ 90 days.
+- Material new openFDA / Federal Register / EDGAR 8-K Item 8.01 document linked to the asset since the last assessment.
+- Operator-refresh trigger.
+
+## Inputs (from orchestrator tool call)
+
+| Field | Type | Notes |
+|---|---|---|
+| `asset_id` | uuid | v3 fda_assets row |
+| `drug_name` | string | branded + generic |
+| `mechanism_of_action` | string | normalized via ChEMBL where possible |
+| `indication` | string | therapeutic indication |
+| `sponsor_name` | string | resolved via D-110 sponsor resolver |
+| `sponsor_cik` | string | EDGAR CIK |
+| `catalyst_date_or_window` | ISO date | PDUFA / readout date |
+| `mode` | enum | `evaluative` (≤60d to PDUFA) \| `forward_looking` (≤90d to readout) |
+| `reviewer_panel_id` | string \| null | inferred from indication if not provided |
+
+## Output schema (`regulatory_history_v1.json`)
+
+```json
+{
+  "schema_version": 1,
+  "asset_id": "uuid",
+  "class_membership": {
+    "moa_canonical": "NMDA receptor antagonist",
+    "class_drugs_in_scope": ["dextromethorphan","ketamine","esketamine","..."],
+    "membership_confidence": 0.72
+  },
+  "class_precedents": [
+    {
+      "drug": "...","sponsor":"...","year":YYYY,
+      "decision": "approval|CRL|withdrawal",
+      "indication":"...","outcome_factors":["..."],
+      "boxed_warning": true|false, "rems": true|false,
+      "adcomm_held": true|false, "adcomm_vote": "12-1 yes|6-6|...",
+      "primary_source_url":"https://api.fda.gov/..."
+    }
+  ],
+  "base_rates": {
+    "class_approval_rate": 0.62, "class_approval_rate_ci_low": 0.51, "class_approval_rate_ci_high": 0.73, "n": 39,
+    "adcomm_convene_rate": 0.31,
+    "boxed_warning_rate": 0.22,
+    "median_nda_to_decision_days": 305
+  },
+  "sponsor_track_record": {
+    "prior_approvals": N, "prior_crls": M, "prior_breakthrough": K,
+    "rtor_participated": bool, "active_warning_letters": N_wl,
+    "recent_facility_inspections": [{"facility":"...","date":"YYYY-MM-DD","outcome":"OAI|VAI|NAI|none"}]
+  },
+  "reviewer_panel_concerns": ["concern_1","concern_2"],
+  "divergence_from_norm_flags": ["flag_1","flag_2"],
+  "sourcing_completeness_pct": 0.0,
+  "confidence": 0.0,
+  "memory_writeback_path": "/memories/sub_agents/regulatory/<indication>_<panel>.md"
+}
+```
+
+Every entry in `class_precedents`, every base rate, every sponsor-history element MUST carry `primary_source_url`. Stage 7 constitutional check rejects the assessment if any non-null claim lacks a primary source.
+
+## Internal loop (interleaved thinking, max 6 tool-call turns)
+
+1. **Memory load.** Read `/memories/sub_agents/regulatory/<indication>_<reviewer_panel_id>.md` if present. This is the per-indication-per-panel memory file with cumulative precedent map + recurring panel concerns. New panels start empty.
+2. **Class membership inference.** If `class_drugs_in_scope` not in memory: split MoA on `+`/`/`/`,`; for each fragment query ChEMBL via `compute_base_rate` MCP (target_search) for canonical class members. Fall back to a hardcoded class table (see Methodology fallbacks below) for common classes. Record `membership_confidence < 0.70` if any fragment was inferred via fallback.
+3. **openFDA precedent enumeration.** `openfda-mcp.search_approvals` for class drugs over `lookback_years=10`. For each approval: pull label (boxed warning, REMS, indication breadth), filing-to-decision interval, AdComm flag. For CRLs: `openfda-mcp.search_warning_letters` cross-referenced against EDGAR 8-K Item 8.01 mentions of the drug name within 30 days of action date.
+4. **AdComm history.** `fda-adcomm-mcp.get_calendar` for the reviewer panel × indication over `lookback_years`. For each AdComm: `search_transcripts` for the recurring concern themes, `get_voting_history` for vote tallies, `get_panel_composition` for current vs historical members.
+5. **Sponsor track record.** EDGAR EFTS (`internal-rag-mcp.hybrid_search_internal`) for the sponsor's prior FDA disclosures (8-K Item 8.01s referencing CRLs, BTD grants, priority designations, RTOR). Cross-reference openFDA warning letters by sponsor address.
+6. **Synthesis.** Compute base rates with binomial CIs (Wilson interval). List divergence-from-norm flags ONLY when supported by enumerated precedents (e.g., "no class member has been approved with full label without an AdComm in the last 5 years; this indication's panel convenes for ~31% of NDAs in this class"). Refuse to invent flags.
+7. **Schema validation.** Pydantic-validate against `regulatory_history_v1.json`. Retry up to 3× on failure with feedback prompt; escalate with `validation_pass=false` on terminal failure.
+8. **Memory writeback.** Append new precedents + new panel concerns to the memory file via Supabase Storage. Storage path written into output for the orchestrator's per-stage cost tracker.
+
+## Methodology fallbacks (when MCP tools unavailable)
+
+- ChEMBL `target_search` unavailable → hardcoded class table for: NMDA antagonists, JAK inhibitors, GLP-1 agonists, anti-VEGF, anti-amyloid mAbs, anti-FXIa, anti-PD-(L)1, anti-CD20, BTK inhibitors, SGLT2 inhibitors, GLP-1/GIP, complement inhibitors, IL-23 inhibitors. Record `class_membership.fallback=true`.
+- AdComm transcripts older than 5 years may not be in the RAG index → fall back to `openfda-mcp.get_orange_book` to confirm approval-with-AdComm flag; mark `adcomm_vote: unknown` if vote tally absent rather than inventing one.
+
+## Confidence accounting
+
+- `confidence` field aggregates: `class_membership_confidence × precedent_completeness × sponsor_history_completeness × panel_concern_grounding`. Each sub-score documented in the memory writeback for audit. Sub-agent's confidence floor is 0.30 — below that the orchestrator escalates to Tier 1 manually.
+- `sourcing_completeness_pct` = (claims with primary_source_url) / (total claims). Hard floor 0.85; below that the constitutional check rejects.
+
+## Budget + latency
+
+- Budget: $0.20–$0.50 per invocation (Sonnet 4.6 + xhigh thinking + ~6 tool calls).
+- Latency: 30–90s.
+- Hard kill at $0.75 with `partial_output=true`. Soft cap warning at $0.50.
+
+## Provenance
+
+This v0 skill body was extracted from the Investment_engine_v2 export bundle's Tier-1 skills:
+- P1 (`analyze-fda-approval-prospects`) — class-precedent integration, sponsor-history methodology, AdComm risk computation.
+- P2 (`research-clinical-class-precedent`) — class-membership inference, openFDA precedent enumeration, base-rate computation with binomial CI.
+
+Both Tier-1 skills passed live-source validation at confidence ≥0.70 in the predecessor system (Phase 8 gate, 2026-05-05). v3 runtime differs (Claude Agent SDK + MCP tools, not stand-alone Python helpers) so the helper code is NOT ported — only methodology + I/O contract. First eval-gated revision against v3's eval_harness becomes v1.
+
+Reference: `/Users/Pico/Downloads/_EXPORT_skills_scoring_methodology/skills/v2_skills/skills/analyze-fda-approval-prospects/SKILL.md` and `.../research-clinical-class-precedent/SKILL.md`.
