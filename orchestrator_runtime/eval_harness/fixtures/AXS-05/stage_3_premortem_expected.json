@@ -1,0 +1,77 @@
+{
+  "_doc": "Hand-curated expected Stage 3 pre-mortem verdict for the AXS-05 fixture, paired with stage_2_hypothesis_expected.json. The bear hypothesis (H3) is expected to be 'weakened' (CRL is plausible but the convergent positive trial data narrows it) rather than 'falsified' — pre-mortem captures the residual tail risk. Overall verdict 'partial' is the expected shape. Short ids match the hex shorts in stage_2_hypothesis_expected.json so Stage 7's CITE_FACT_RE resolves them.",
+  "verdicts": [
+    {
+      "hypothesis_id": "H1",
+      "verdict": "survives",
+      "failure_modes": [
+        {
+          "description": "Late-cycle FDA AdComm could raise unanticipated safety concerns specific to the geriatric ADA population.",
+          "severity": "tail",
+          "evidence_fact_ids": [],
+          "speculative": true
+        },
+        {
+          "description": "CMC inspection issue at the contract manufacturer could trigger a CRL despite efficacy data.",
+          "severity": "tail",
+          "evidence_fact_ids": [],
+          "speculative": true
+        }
+      ],
+      "disconfirming_searches": [
+        "FDA OND late-cycle meeting minutes for AXS-05 (NDA #218016)",
+        "Axsome contract manufacturer FDA inspection history 2024-2026"
+      ],
+      "update_triggers": [
+        "FDA AdComm scheduled for Q2 2026",
+        "Axsome 8-K disclosure of late-cycle FDA correspondence"
+      ]
+    },
+    {
+      "hypothesis_id": "H2",
+      "verdict": "weakened",
+      "failure_modes": [
+        {
+          "description": "Existing class-level boxed warning on bupropion may already cover the suicidality risk without further label restriction.",
+          "severity": "weaken",
+          "evidence_fact_ids": ["f0a1b234"],
+          "speculative": false
+        }
+      ],
+      "disconfirming_searches": [
+        "FDA approved labels for first-in-indication agitation drugs over last decade"
+      ],
+      "update_triggers": [
+        "FDA-Axsome label negotiation 8-K disclosure"
+      ]
+    },
+    {
+      "hypothesis_id": "H3",
+      "verdict": "weakened",
+      "failure_modes": [
+        {
+          "description": "Two convergent positive Phase 3 trials reduce CRL probability below the 22% reference-class base rate for novel-indication neuropsych submissions.",
+          "severity": "weaken",
+          "evidence_fact_ids": ["a0c1d4f1", "b2e3f456"],
+          "speculative": false
+        },
+        {
+          "description": "Breakthrough Therapy Designation pre-application history suggests FDA-Axsome alignment on key review issues.",
+          "severity": "weaken",
+          "evidence_fact_ids": ["e8f9a012"],
+          "speculative": false
+        }
+      ],
+      "disconfirming_searches": [
+        "FDA late-cycle safety signal review for AXS-05",
+        "CMAI endpoint validation history for FDA registration"
+      ],
+      "update_triggers": [
+        "FDA AdComm announcement",
+        "Axsome 10-K disclosure of FDA review division feedback"
+      ]
+    }
+  ],
+  "overall_verdict": "partial",
+  "surviving_hypothesis_ids": ["H1"]
+}

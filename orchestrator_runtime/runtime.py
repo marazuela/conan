@@ -3,23 +3,29 @@
 Reads (asset, extracted_facts, key documents, market context, prior memory)
 and emits one `convergence_assessments` row.
 
-This is a SIMPLIFIED v0.2 implementation of the plan's 10-stage pipeline. The
-fully-built pipeline (Stages 0-10 with ensemble + critique + isotonic
-calibration + memory tool + interleaved thinking + Citations API) is the
-next-iteration deliverable. v0.2 demonstrates the core synthesis loop
-end-to-end on the VRDN MVP.
+This is a SIMPLIFIED v0.3 implementation of the plan's 10-stage pipeline. The
+fully-built pipeline (Stages 0-10 with sub-agent dispatch + Citations API +
+memory tool + isotonic calibration) is the next-iteration deliverable. v0.3
+demonstrates the core synthesis loop with hypothesis-grounded reasoning
+end-to-end on the VRDN / AXS-05 MVP.
 
-What v0.2 includes:
+What v0.3 includes:
   Stage 0  — load asset metadata + extracted_facts (no full memory hierarchy)
   Stage 1  — Sonnet synthesis (cited prose, fact_id-anchored)
+  Stage 2  — hypothesis enumeration ({bull, base, bear} + kill_conditions)
+  Stage 3  — adversarial pre-mortem (per-hypothesis verdict, cap on all_falsified)
   Stage 4  — reference-class anchoring (base rate + similar resolved cases)
   Stage 6  — Batch / streaming ensemble + dispersion (when ensemble_n > 1)
   Stage 7  — Sonnet constitutional pass with citation-resolution check
+             (extended in v0.3 to walk Stage 2/3 citations)
   Stage 9  — Sonnet structured-output extraction → schema-validated JSON
-  Stage 10 — write convergence_assessments row + post_mortem_queue stub
+             (post-hoc cap: conviction_pct ≤ 30 when Stage 3 returns all_falsified)
+  Stage 10 — write convergence_assessments row + hypothesis_enumeration +
+             premortem_assessments + post_mortem_queue stub
 
-What v0.2 skips (next iteration):
-  Stage 2-3 — hypothesis enumeration + adversarial pre-mortem
+What v0.3 skips (next iteration):
+  Stage 5   — Phase 5 sub-agents (literature / competitive / regulatory_history /
+              options_microstructure) dispatched from Stage 1
   Stage 8   — isotonic calibration (curve-fitting math lives in
               modal_workers.shared.compute; no curve fitted yet —
               conviction_pct_calibrated == raw_conviction_pct until refit)
@@ -63,13 +69,41 @@ from orchestrator_runtime.ensemble import (
     run_streaming_ensemble,
 )
 from orchestrator_runtime.constitutional import (
+    SEMANTIC_SYSTEM_PROMPT,
     ConstitutionalResult,
     run_constitutional_check,
+)
+from orchestrator_runtime.hypothesis import (
+    STAGE_2_SYSTEM,
+    HypothesisResult,
+    renormalize_priors,
+    run_hypothesis_enumeration,
+)
+from orchestrator_runtime.premortem import (
+    STAGE_3_SYSTEM,
+    PreMortemResult,
+    run_premortem,
 )
 
 logger = logging.getLogger(__name__)
 
-ORCHESTRATOR_VERSION = "orch-v0.2.0-mvp"
+ORCHESTRATOR_VERSION = "orch-v0.4.0-mvp"
+
+# D-119: shared system prefix lifted from per-stage user content. All stages
+# in one assessment send the same asset preamble + anchor + fact layer as the
+# FIRST system block with cache_control: ephemeral. Subsequent calls within
+# the 5-minute TTL hit cache at 10% input cost. Per-stage instructions go in
+# the SECOND system block (after the cache marker), so they don't invalidate.
+CACHEABLE_PREFIX_HEADER = (
+    "# Shared assessment context (cached prefix)\n\n"
+    "The blocks below are identical across every stage of this assessment. "
+    "Treat them as fixed reference; per-stage instructions follow in the "
+    "next system block.\n"
+)
+
+# Stage 9 post-hoc cap: when Stage 3 returns all_falsified, conviction_pct
+# is forced to ≤ this ceiling. Plan §"D2: All-falsified handling".
+ALL_FALSIFIED_CONVICTION_CEILING = 30.0
 
 # Per-asset doc-buffer construction caps (keep below Tier-1 rate limit
 # of 30k input tokens/min on the new API key)
@@ -301,8 +335,10 @@ def stage_1_synthesize(
     user_content = _build_stage_1_user_content(ctx)
     facts = ctx["facts"]
     docs = ctx["documents"]
+    system_blocks = build_system_blocks(
+        build_shared_system_prefix(ctx), STAGE_1_SYSTEM)
     result = a_client.call(
-        system=STAGE_1_SYSTEM,
+        system=system_blocks,
         messages=[{"role": "user", "content": user_content}],
         model=model,
         max_tokens=4096,
@@ -408,6 +444,8 @@ def stage_10_persist(
     extractor_model: str,
     ensemble_payload: Optional[Dict[str, Any]] = None,
     constitutional_result: Optional[ConstitutionalResult] = None,
+    hypothesis_result: Optional[HypothesisResult] = None,
+    premortem_result: Optional[PreMortemResult] = None,
 ) -> str:
     fact_ids = [f["id"] for f in ctx["facts"]]
     document_ids = [d["id"] for d in ctx["documents"]]
@@ -440,6 +478,16 @@ def stage_10_persist(
 
     conviction = float(parsed.get("conviction_pct") or 50.0)
     conviction = max(0.0, min(100.0, conviction))
+    # D-117: when Stage 3 capped the conviction, raw_conviction_pct should
+    # record the pre-cap (Stage 5/6) value, not the capped one.
+    pre_cap_conviction = ctx.get("pre_premortem_conviction")
+    if pre_cap_conviction is not None:
+        try:
+            raw_conviction = max(0.0, min(100.0, float(pre_cap_conviction)))
+        except (TypeError, ValueError):
+            raw_conviction = conviction
+    else:
+        raw_conviction = conviction
     direction = parsed.get("thesis_direction") or "neutral"
     if direction not in {"long", "short", "neutral", "straddle"}:
         direction = "neutral"
@@ -482,6 +530,56 @@ def stage_10_persist(
     total_cost = sum(m.cost_usd for m in run.stage_metrics)
     total_latency = sum(m.latency_ms for m in run.stage_metrics)
 
+    # Stage 2/3 denormalized payloads for the convergence_assessments row
+    # (structured per-hypothesis rows live in hypothesis_enumeration +
+    # premortem_assessments).
+    hypotheses_summary: Optional[List[Dict[str, Any]]] = None
+    pre_mortem_summary: Optional[str] = None
+    adversarial_summary: Optional[List[Dict[str, Any]]] = None
+    pre_mortem_verdict_value: Optional[str] = None
+    surviving_ids_value: List[str] = []
+    if hypothesis_result is not None:
+        hypotheses_summary = [
+            {
+                "hypothesis_id": h.hypothesis_id,
+                "label": h.label,
+                "claim": h.claim,
+                "direction": h.direction,
+                "kill_conditions": h.kill_conditions,
+                "prior_estimate_pct": h.prior_estimate_pct,
+            }
+            for h in hypothesis_result.hypotheses
+        ]
+    if premortem_result is not None:
+        pre_mortem_verdict_value = premortem_result.overall_verdict
+        surviving_ids_value = list(premortem_result.surviving_hypothesis_ids)
+        adversarial_summary = [
+            {
+                "hypothesis_id": v.hypothesis_id,
+                "verdict": v.verdict,
+                "n_failure_modes": len(v.failure_modes),
+                "kill_count": sum(1 for fm in v.failure_modes if fm.severity == "kill"),
+                "weaken_count": sum(1 for fm in v.failure_modes if fm.severity == "weaken"),
+                "tail_count": sum(1 for fm in v.failure_modes if fm.severity == "tail"),
+            }
+            for v in premortem_result.verdicts
+        ]
+        # Plain-text pre_mortem narrative for dashboard rendering.
+        # D-120: cap each failure-mode line at 500 chars and the total at
+        # 8000 to avoid pathological "1MB pre_mortem text" rows.
+        lines: List[str] = [f"Overall verdict: {premortem_result.overall_verdict}"]
+        if surviving_ids_value:
+            lines.append(f"Surviving: {', '.join(surviving_ids_value)}")
+        for v in premortem_result.verdicts:
+            lines.append(f"\n[{v.hypothesis_id}] {v.verdict}")
+            for fm in v.failure_modes:
+                tag = "[spec]" if fm.speculative else ""
+                line = f"  - ({fm.severity}){tag} {fm.description}"
+                lines.append(line[:500])
+        pre_mortem_summary = "\n".join(lines)[:8000]
+    elif hypothesis_result is not None:
+        pre_mortem_verdict_value = "skipped"
+
     row = {
         "asset_id": asset_id,
         "orchestrator_version": ORCHESTRATOR_VERSION,
@@ -496,12 +594,14 @@ def stage_10_persist(
             "n_facts": len(fact_ids),
             "n_documents": len(document_ids),
             "fact_types_covered": sorted(set(f["fact_type"] for f in ctx["facts"])),
+            "conviction_capped_by_premortem": bool(
+                ctx.get("conviction_capped_by_premortem", False)),
         },
         "reasoning_trace": cited_prose,
         "cited_prose_blocks": hydrated_blocks,
         "key_facts": hydrated_key_facts,
         "uncertainties": parsed.get("uncertainties") or [],
-        "raw_conviction_pct": conviction,
+        "raw_conviction_pct": raw_conviction,
         "thesis_direction": direction,
         "thesis_summary": parsed.get("thesis_summary") or "",
         "ensemble_n": (ensemble_payload or {}).get("n", 1),
@@ -516,6 +616,11 @@ def stage_10_persist(
               "affected_id": f.affected_id}
              for f in constitutional_result.findings]
             if constitutional_result else None),
+        "hypotheses": hypotheses_summary,
+        "pre_mortem": pre_mortem_summary,
+        "adversarial_challenges": adversarial_summary,
+        "pre_mortem_verdict": pre_mortem_verdict_value,
+        "surviving_hypothesis_ids": surviving_ids_value,
         "reference_class": reference_class_value,
         "reference_class_base_rate": (
             round(base_rate_value, 3) if base_rate_value is not None else None),
@@ -563,6 +668,63 @@ def stage_10_persist(
             },
             prefer="return=minimal",
         )
+
+    # Stage 2: hypothesis_enumeration rows (one per hypothesis). The model
+    # cites by 8-char short id; resolve to full UUIDs for the uuid[] columns.
+    if hypothesis_result is not None and hypothesis_result.hypotheses:
+        for h in hypothesis_result.hypotheses:
+            supporting_uuids = [
+                short_to_full[s.lower()]
+                for s in h.supporting_fact_ids
+                if s.lower() in short_to_full
+            ]
+            contradicting_uuids = [
+                short_to_full[s.lower()]
+                for s in h.contradicting_fact_ids
+                if s.lower() in short_to_full
+            ]
+            sb._rest(
+                "POST", "hypothesis_enumeration",
+                json_body={
+                    "assessment_id": assessment_id,
+                    "hypothesis_id": h.hypothesis_id,
+                    "label": h.label,
+                    "claim": h.claim,
+                    "mechanism": h.mechanism,
+                    "direction": h.direction,
+                    "supporting_fact_ids": supporting_uuids,
+                    "contradicting_fact_ids": contradicting_uuids,
+                    "kill_conditions": h.kill_conditions,
+                    "prior_estimate_pct": h.prior_estimate_pct,
+                    "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
+                },
+                prefer="return=minimal",
+            )
+
+    # Stage 3: premortem_assessments rows (one per hypothesis verdict).
+    if premortem_result is not None and premortem_result.verdicts:
+        for v in premortem_result.verdicts:
+            failure_modes_jsonb = [
+                {
+                    "description": fm.description,
+                    "severity": fm.severity,
+                    "evidence_fact_ids": fm.evidence_fact_ids,
+                    "speculative": fm.speculative,
+                }
+                for fm in v.failure_modes
+            ]
+            sb._rest(
+                "POST", "premortem_assessments",
+                json_body={
+                    "assessment_id": assessment_id,
+                    "hypothesis_id": v.hypothesis_id,
+                    "verdict": v.verdict,
+                    "failure_modes": failure_modes_jsonb,
+                    "disconfirming_searches": v.disconfirming_searches,
+                    "update_triggers": v.update_triggers,
+                },
+                prefer="return=minimal",
+            )
 
     # Post-mortem queue stub — outcome resolves at PDUFA date.
     # For VRDN MVP, PDUFA is 2026-06-30. We pull from the asset's pending FDA
@@ -615,19 +777,76 @@ def _direction_to_outcome(direction: str) -> str:
 # Main
 # ===========================================================================
 
-def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
-    """Reused by single-shot Stage 1 + ensemble."""
+def build_shared_system_prefix(ctx: Dict[str, Any]) -> str:
+    """D-119: cacheable shared content sent as the first system block of every
+    stage in an assessment. Identical bytes across Stage 1/2/3/7 so the prefix
+    cache hits on calls 2..N within the 5-minute TTL.
+
+    Contains: asset metadata, Stage 4 anchor (when present), and the full
+    structured fact layer. Per-stage instructions (STAGE_X_SYSTEM strings) go
+    in the second system block AFTER the cache marker, so they can differ
+    without invalidating the cached prefix.
+    """
     asset = ctx["asset"]
     facts = ctx["facts"]
-    docs = ctx["documents"]
-    memory_text = ctx["memory_text"]
-
     facts_section = "\n".join(
         f"- F:{f['id'][:8]} ({f['fact_type']}, conf={f.get('confidence')}, "
         f"doc=D:{f['document_id'][:8]}): {f['fact_text']}\n"
         f"  evidence: \"{f['evidence_quote'][:300]}\""
         for f in facts
     )
+    anchor = ctx.get("reference_class_anchor")
+    anchor_block = format_anchor_for_prompt(anchor) if anchor is not None else None
+    anchor_section = (f"\n## Reference-class anchor\n\n{anchor_block}\n\n"
+                      if anchor_block else "")
+    return f"""{CACHEABLE_PREFIX_HEADER}
+## Tracked asset
+
+  asset_id: {asset['id']}
+  ticker: {asset.get('ticker')}
+  drug_name: {asset.get('drug_name')}
+  generic_name: {asset.get('generic_name') or '(unknown)'}
+  sponsor_name: {asset.get('sponsor_name')}
+  indication: {asset.get('indication')}
+  indication_normalized: {asset.get('indication_normalized') or '(unknown)'}
+  reference_class: {asset.get('reference_class_signature') or '(unknown)'}
+  application_number: {asset.get('application_number') or '(unknown)'}
+  program_status: {asset.get('program_status') or '(unknown)'}
+{anchor_section}
+## Structured fact layer ({len(facts)} facts, ranked by confidence then \
+recency)
+
+{facts_section}"""
+
+
+def build_system_blocks(
+    shared_prefix: str,
+    stage_system: str,
+) -> List[Dict[str, Any]]:
+    """Construct system as [{shared_prefix, cache_control}, {stage_system}].
+
+    The cache_control marker on block 0 caches everything from start of system
+    up to and including block 0 (i.e. the shared prefix). Block 1 follows
+    after the marker and is per-stage; it does NOT invalidate the cached
+    prefix.
+    """
+    return [
+        {"type": "text", "text": shared_prefix,
+         "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": stage_system},
+    ]
+
+
+def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
+    """Stage 1 user content — the dynamic part only (docs + memory + produce
+    instruction). The asset preamble, anchor, and structured fact layer have
+    moved to the cached system prefix per D-119.
+
+    Reused by single-shot Stage 1 + ensemble.
+    """
+    docs = ctx["documents"]
+    memory_text = ctx["memory_text"]
+
     docs_section_parts = []
     for d in docs:
         text = d.get("raw_text") or ""
@@ -642,30 +861,8 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     memory_section = (f"\n\n## Prior assessment memory\n\n{memory_text}\n"
                       if memory_text else "")
 
-    anchor = ctx.get("reference_class_anchor")
-    anchor_block = format_anchor_for_prompt(anchor) if anchor is not None else None
-    anchor_section = (f"\n## Reference-class anchor\n\n{anchor_block}\n\n"
-                      if anchor_block else "")
-
-    return f"""Tracked asset:
-  asset_id: {asset['id']}
-  ticker: {asset.get('ticker')}
-  drug_name: {asset.get('drug_name')}
-  generic_name: {asset.get('generic_name') or '(unknown)'}
-  sponsor_name: {asset.get('sponsor_name')}
-  indication: {asset.get('indication')}
-  indication_normalized: {asset.get('indication_normalized') or '(unknown)'}
-  reference_class: {asset.get('reference_class_signature') or '(unknown)'}
-  application_number: {asset.get('application_number') or '(unknown)'}
-  program_status: {asset.get('program_status') or '(unknown)'}
-
-Document window: last 180 days (most recent {len(docs)} material documents \
-shown below; full set has more)
-{anchor_section}
-## Structured fact layer ({len(facts)} facts, ranked by confidence then \
-recency)
-
-{facts_section}
+    return f"""Document window: last 180 days (most recent {len(docs)} material \
+documents shown below; full set has more)
 
 ## Document excerpts ({len(docs)} documents, head-only excerpts)
 
@@ -683,6 +880,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             ensemble_mode: str = "streaming",     # streaming | batch
             run_constitutional: bool = True,
             constitutional_skip_semantic: bool = False,
+            enable_premortem: bool = True,
             dry_run: bool = False) -> Optional[str]:
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
@@ -711,13 +909,17 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                     anchor.reference_class or "(unknown)")
 
     user_content = _build_stage_1_user_content(ctx)
+    # D-119: shared system prefix is built once per assessment and reused as
+    # the cached first system block across Stage 1 ensemble + Stage 2/3/7.
+    shared_prefix = build_shared_system_prefix(ctx)
+    stage_1_system_blocks = build_system_blocks(shared_prefix, STAGE_1_SYSTEM)
 
     if ensemble_n > 1:
         logger.info("=== Stage 1+9 ensemble (%s, n=%d) ===", ensemble_mode, ensemble_n)
         if ensemble_mode == "batch":
             ensemble = run_batch_ensemble(
                 a_client,
-                stage_1_system=STAGE_1_SYSTEM,
+                stage_1_system=stage_1_system_blocks,
                 stage_1_user_content=user_content,
                 stage_9_system=STAGE_9_SYSTEM,
                 n=ensemble_n,
@@ -727,7 +929,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
         else:
             ensemble = run_streaming_ensemble(
                 a_client,
-                stage_1_system=STAGE_1_SYSTEM,
+                stage_1_system=stage_1_system_blocks,
                 stage_1_user_content=user_content,
                 stage_9_system=STAGE_9_SYSTEM,
                 n=ensemble_n,
@@ -806,6 +1008,125 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                     parsed.get("thesis_direction"), parsed.get("conviction_pct"))
         run_ensemble_payload = None
 
+    # ===========================================================================
+    # Stage 2 — hypothesis enumeration (post-Stage 1 / Stage 6 winner)
+    # Stage 3 — adversarial pre-mortem
+    # ===========================================================================
+    hypothesis_result: Optional[HypothesisResult] = None
+    premortem_result: Optional[PreMortemResult] = None
+    if enable_premortem:
+        logger.info("=== Stage 2: hypothesis enumeration (%s) ===", model)
+        hypothesis_result = run_hypothesis_enumeration(
+            a_client,
+            cited_prose=cited_prose,
+            parsed_json=parsed,
+            ctx=ctx,
+            model=model,
+            system_blocks=build_system_blocks(shared_prefix, STAGE_2_SYSTEM),
+        )
+        # D-118: post-Stage-2 prior renormalization. Blend model priors toward
+        # the empirical base rate from Stage 4, weighted by (1 - evidence_quality).
+        try:
+            eq_for_anchor = parsed.get("evidence_quality")
+            eq_for_anchor = float(eq_for_anchor) if eq_for_anchor is not None else None
+        except (TypeError, ValueError):
+            eq_for_anchor = None
+        _, renorm_debug = renormalize_priors(
+            hypothesis_result.hypotheses, anchor, eq_for_anchor,
+        )
+        run.stage_metrics.append(StageMetric(
+            stage_name="stage_2_hypothesis_enumeration",
+            model=model,
+            input_tokens=hypothesis_result.input_tokens,
+            output_tokens=hypothesis_result.output_tokens,
+            cost_usd=hypothesis_result.cost_usd,
+            latency_ms=hypothesis_result.latency_ms,
+            status="completed" if hypothesis_result.pass_ else "failed",
+            notes={
+                "pass": hypothesis_result.pass_,
+                "n_hypotheses": len(hypothesis_result.hypotheses),
+                "labels": [h.label for h in hypothesis_result.hypotheses],
+                "n_findings": len(hypothesis_result.findings),
+                "renormalize": renorm_debug,
+                # D-120: persist a head of the raw model response for audit;
+                # full text is lost otherwise (no separate raw_response store).
+                "raw_response_head": (hypothesis_result.raw_response or "")[:4000],
+                "findings": [
+                    {"severity": f.severity, "check": f.check,
+                     "detail": f.detail[:200]}
+                    for f in hypothesis_result.findings
+                ],
+            },
+        ))
+        logger.info(
+            "Stage 2: pass=%s n_hypotheses=%d labels=%s findings=%d cost=$%.3f "
+            "renorm=%s",
+            hypothesis_result.pass_, len(hypothesis_result.hypotheses),
+            [h.label for h in hypothesis_result.hypotheses],
+            len(hypothesis_result.findings), hypothesis_result.cost_usd,
+            renorm_debug.get("applied"),
+        )
+
+        if hypothesis_result.hypotheses:
+            logger.info("=== Stage 3: pre-mortem (%s) ===", model)
+            premortem_result = run_premortem(
+                a_client,
+                hypothesis_result=hypothesis_result,
+                ctx=ctx,
+                model=model,
+                system_blocks=build_system_blocks(shared_prefix, STAGE_3_SYSTEM),
+            )
+            run.stage_metrics.append(StageMetric(
+                stage_name="stage_3_premortem",
+                model=model,
+                input_tokens=premortem_result.input_tokens,
+                output_tokens=premortem_result.output_tokens,
+                cost_usd=premortem_result.cost_usd,
+                latency_ms=premortem_result.latency_ms,
+                status="completed" if premortem_result.pass_ else "failed",
+                notes={
+                    "pass": premortem_result.pass_,
+                    "overall_verdict": premortem_result.overall_verdict,
+                    "surviving": premortem_result.surviving_hypothesis_ids,
+                    "n_findings": len(premortem_result.findings),
+                    # D-120: persist head of raw model response for audit.
+                    "raw_response_head": (premortem_result.raw_response or "")[:4000],
+                    "findings": [
+                        {"severity": f.severity, "check": f.check,
+                         "detail": f.detail[:200]}
+                        for f in premortem_result.findings
+                    ],
+                },
+            ))
+            logger.info(
+                "Stage 3: overall=%s surviving=%s findings=%d cost=$%.3f",
+                premortem_result.overall_verdict,
+                premortem_result.surviving_hypothesis_ids,
+                len(premortem_result.findings), premortem_result.cost_usd,
+            )
+
+            # Apply Stage 9 post-hoc cap on all_falsified.
+            # IMPORTANT: stash the pre-cap value so Stage 10 records the
+            # genuine raw_conviction_pct (per schema comment "Stage 5/6
+            # output"). The cap flows into conviction_pct_calibrated /
+            # conviction_pct only. D-117.
+            if premortem_result.overall_verdict == "all_falsified":
+                try:
+                    raw_conv = float(parsed.get("conviction_pct") or 0.0)
+                except (TypeError, ValueError):
+                    raw_conv = 0.0
+                capped = min(raw_conv, ALL_FALSIFIED_CONVICTION_CEILING)
+                if capped < raw_conv:
+                    logger.warning(
+                        "Stage 3 all_falsified: capping conviction_pct %.1f -> %.1f",
+                        raw_conv, capped,
+                    )
+                    ctx["pre_premortem_conviction"] = raw_conv
+                    ctx["conviction_capped_by_premortem"] = True
+                parsed["conviction_pct"] = capped
+        else:
+            logger.warning("Stage 2 emitted no hypotheses; skipping Stage 3.")
+
     # Stage 7 constitutional check
     constitutional_result: Optional[ConstitutionalResult] = None
     if run_constitutional:
@@ -826,6 +1147,10 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                 anchor.base_rate.approval_rate if anchor.base_rate else None),
             model=extractor_model,
             skip_semantic=constitutional_skip_semantic,
+            hypothesis_result=hypothesis_result,
+            premortem_result=premortem_result,
+            semantic_system_blocks=build_system_blocks(
+                shared_prefix, SEMANTIC_SYSTEM_PROMPT),
         )
         run.stage_metrics.append(StageMetric(
             stage_name="stage_7_constitutional",
@@ -860,6 +1185,14 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
         logger.info("  evidence_quality: %s", parsed.get("evidence_quality"))
         logger.info("  thesis_summary: %s", parsed.get("thesis_summary"))
         logger.info("  band: %s", derive_band(float(parsed.get("conviction_pct") or 50.0)))
+        if hypothesis_result:
+            logger.info("  hypotheses: %d (%s)",
+                        len(hypothesis_result.hypotheses),
+                        [h.label for h in hypothesis_result.hypotheses])
+        if premortem_result:
+            logger.info("  pre_mortem_verdict: %s surviving: %s",
+                        premortem_result.overall_verdict,
+                        premortem_result.surviving_hypothesis_ids)
         if constitutional_result:
             logger.info("  constitutional_pass: %s", constitutional_result.pass_)
         return None
@@ -869,6 +1202,8 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
         sb, asset_id, run, cited_prose, parsed, ctx, model, extractor_model,
         ensemble_payload=run_ensemble_payload,
         constitutional_result=constitutional_result,
+        hypothesis_result=hypothesis_result,
+        premortem_result=premortem_result,
     )
     logger.info("Persisted assessment: %s", assessment_id)
     return assessment_id
@@ -888,12 +1223,16 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--ensemble-mode", default="streaming",
                    choices=["streaming", "batch"],
                    help="streaming = N concurrent live calls (rate-limit risk); "
-                        "batch = Messages Batches API (50% cost, ~1h latency)")
+                        "batch = Messages Batches API (50%% cost, ~1h latency)")
     p.add_argument("--no-constitutional", action="store_true",
                    help="Skip Stage 7 constitutional check entirely")
     p.add_argument("--constitutional-deterministic-only", action="store_true",
                    help="Run only the deterministic citation-resolution checks "
                         "(no Sonnet adversarial pass)")
+    p.add_argument("--no-premortem", action="store_true",
+                   help="Skip Stage 2 (hypothesis enumeration) + Stage 3 "
+                        "(pre-mortem). Useful for cost-bounded backtests or "
+                        "if a regression is found in either stage.")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
 
@@ -917,6 +1256,7 @@ def main(argv: List[str] | None = None) -> int:
         ensemble_mode=args.ensemble_mode,
         run_constitutional=not args.no_constitutional,
         constitutional_skip_semantic=args.constitutional_deterministic_only,
+        enable_premortem=not args.no_premortem,
         dry_run=args.dry_run,
     )
     return 0 if (aid is not None or args.dry_run) else 1

@@ -119,12 +119,16 @@ def orchestrator_run_one(
     ensemble_mode: str = "streaming",
     constitutional: bool = True,
     constitutional_deterministic_only: bool = False,
+    enable_premortem: bool = True,
 ) -> Dict[str, Any]:
     """Produce one convergence_assessment for the given asset.
 
     ensemble_n=1: single-shot synthesis
     ensemble_n=3+ + ensemble_mode=streaming: N concurrent live calls
     ensemble_n=3+ + ensemble_mode=batch: N via Messages Batches API
+    enable_premortem: run Stage 2 (hypothesis enumeration) + Stage 3
+        (adversarial pre-mortem). Default True. Disable to fall back to
+        v0.2 behavior (Stage 1 + 9 + 7 + 10) if a regression is found.
     """
     from modal_workers.shared.supabase_client import SupabaseClient
     from orchestrator_runtime.client import (
@@ -144,6 +148,7 @@ def orchestrator_run_one(
         ensemble_mode=ensemble_mode,
         run_constitutional=constitutional,
         constitutional_skip_semantic=constitutional_deterministic_only,
+        enable_premortem=enable_premortem,
     )
     return {"assessment_id": aid}
 

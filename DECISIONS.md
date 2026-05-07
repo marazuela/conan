@@ -349,3 +349,78 @@ Mechanics:
 - Edge cases per export methodology: ticker delisted before window completes → status='invalidated' (an upstream pass can re-classify involuntary delists as -100%); halted >30 days → invalidated; M&A close → invalidated (an upstream deal-terms pass handles cash/stock-deal labeling).
 
 **Consequences.** Closes the labeling-pass half of D-109. Smoke battery (9 cases via injected synthetic closes — BC HIT, BC MISS, AG HIT, AG MISS, no_price_data, no_spy, unsupported profile, sentinel routing, unparseable date) all pass. yfinance is a declared dependency in `modal_workers/requirements.txt` (>=0.2,<0.3) so production runs through Polygon-or-yfinance like the rest of the price stack. The CLI is ready to chew the export's 1502-event binary_catalyst.json and emit a labels ledger; running it does not modify production state and is safe to schedule independently of D-109's eval_harness ingestion (which still waits on Phase 1 documents).
+
+---
+
+## D-117 — Stage 2/3 gate correctness: pre-cap raw_conviction + structural-error gate + safer base-direction default (2026-05-07)
+
+**Context.** Audit of the Stage 2/3 implementation (commits landing alongside D-115) surfaced three semantic gaps. (1) The all_falsified cap mutated `parsed["conviction_pct"]` in place at runtime; `stage_10_persist` then read the post-cap value into `raw_conviction_pct`, contaminating the column whose schema comment is "pre-calibration (Stage 5/6 output)". The original ensemble conviction was lost from the row, only visible inside `stage_3_premortem` metric notes. (2) Stage 2/3 emit severity=`error` findings (missing required label, <2 kill_conditions, missing verdict, parse failure, etc.) that flow into `stage_metrics.notes` but were NOT propagated into `constitutional_result.pass_` — Stage 7 walked citations only, so a Stage 2 with a missing required label or zero kill_conditions could still mark `constitutional_pass=true`. (3) When a `label='base'` hypothesis arrived with no valid `direction`, the validator silently coerced it to `'bullish'` — biasing downstream EV math.
+
+**Decision.** Three local fixes:
+- **Pre-cap raw_conviction:** before mutating `parsed["conviction_pct"]` on `all_falsified`, stash the pre-cap float on `ctx["pre_premortem_conviction"]` and set `ctx["conviction_capped_by_premortem"]=True`. `stage_10_persist` now reads this and writes the pre-cap value as `raw_conviction_pct` (the cap flows into `conviction_pct_calibrated` and `conviction_pct` only). Adds an audit boolean `evidence_ledger.conviction_capped_by_premortem` to the row's jsonb so the dashboard can surface "cap fired" without parsing stage metrics.
+- **Structural-error gate:** `run_constitutional_check` now merges Stage 2/3 severity=`error` findings into its own `findings` list (renamed `stage_2_<check>` / `stage_3_<check>`) and includes them in the `pass_` computation. Warnings/info still don't gate.
+- **Base-direction default:** for `label='base'` with invalid `direction`, default to `'event_specific'` (NOT `'bullish'`) and emit a `missing_direction_for_base` warning finding.
+
+**Consequences.** Closes #1, #4, #9 of the Stage-2/3 review. `raw_conviction_pct` is now genuinely the Stage 5/6 output for every row; observers can tell from `evidence_ledger.conviction_capped_by_premortem` whether Stage 3 fired. Constitutional pass_ now reflects the assessment's actual deliverability — a Stage 2 that omitted `bear` or a Stage 3 that omitted a verdict cannot ship as `constitutional_pass=true`. Test coverage for these in D-121.
+
+---
+
+## D-118 — Stage 4 anchor → Stage 2 + post-output prior renormalization (2026-05-07)
+
+**Context.** Stage 4 (D-114) populated the reference-class anchor and rendered it into the Stage 1 prompt, but Stage 2 was blind to it. The Stage 2 system prompt said `prior_estimate_pct` values would be "renormalized by Stage 4" — an unmet promise, since Stage 4 had already run by the time Stage 2 fired and no code touched priors after Stage 2. So the model picked priors with no empirical anchor.
+
+**Decision.** Two-part:
+- **Thread anchor into Stage 2 user content** — `_build_stage_2_user_content` now takes `anchor` (read from `ctx["reference_class_anchor"]`) and renders the same `format_anchor_for_prompt` block that Stage 1 sees. (Subsequently moved to the cached system prefix in D-119, but the threading lands here.)
+- **Implement actual renormalization** — new module-scope `renormalize_priors(hypotheses, anchor, evidence_quality)` in `orchestrator_runtime/hypothesis.py`. Linear blend `final = (1 - w) * raw + w * target` where `w = max(MIN_ANCHOR_WEIGHT, 1.0 - evidence_quality)` (floor 0.20 so even high-evidence assets get some pull). `target` is `base_rate * 100` for bull, `(1 - base_rate) * 100` for bear, raw value for base/event_specific. Rescale post-blend so sum ≈ 100. Called from `run_one` immediately after Stage 2 returns; per-hypothesis pre/post values stashed in `stage_2` metric notes for observability.
+
+**Schema:** new migration `20260509000000_v3_d118_hypothesis_prior_pre_anchor.sql` adds `hypothesis_enumeration.prior_estimate_pct_pre_anchor int` (nullable, CHECK 0..100). `Hypothesis` dataclass gains a matching field; the parser snapshots the model-emitted value into it during validation. The post-anchor value continues to live in `prior_estimate_pct`. A/B-able by reading `prior_estimate_pct_pre_anchor` instead.
+
+**Consequences.** Closes #2, #3 of the Stage-2/3 review. Bull priors now anchor to base_rate × 100 weighted by `(1 - evidence_quality)`, bear priors to `(1 - base_rate) × 100`, base/event_specific to model output rescaled. Smoke: bull=70/base=20/bear=10 with rate=0.30 / eq=0.5 produces post-blend bull=45/base=18/bear=36 (sum=99). Cold start (no anchor / no base rate / empty hypotheses) is identity. Migration is additive + idempotent; safe to apply against live Phase 0/1 schema.
+
+---
+
+## D-119 — Cross-stage prompt caching via shared system prefix (2026-05-07)
+
+**Context.** A single assessment with `ensemble_n=7` makes ~9 Sonnet calls (7× Stage 1 + 1× Stage 2 + 1× Stage 3 + 1× Stage 7 semantic), each sending the same ~10-30k tokens of asset preamble + Stage 4 anchor + structured fact layer. No prompt caching was wired, so input tokens were paid in full on every call.
+
+**Decision.** Lift the asset preamble + anchor + fact layer into a **shared system prefix** sent as the FIRST system block of every stage in the assessment, with `cache_control: {type: "ephemeral"}`. Per-stage instructions (`STAGE_1_SYSTEM`, `STAGE_2_SYSTEM`, `STAGE_3_SYSTEM`, `SEMANTIC_SYSTEM_PROMPT`) become the SECOND system block — they differ across stages but come AFTER the cache marker, so they don't invalidate the cached prefix.
+
+Implementation:
+- New `runtime.build_shared_system_prefix(ctx) -> str` builds the cacheable content once per assessment.
+- New `runtime.build_system_blocks(prefix, stage_system) -> List[Dict]` constructs the two-block system list with the cache marker.
+- `_build_stage_1_user_content` no longer renders asset/anchor/facts (now in system); user content is docs + memory + "produce" instruction only.
+- `_build_stage_2_user_content` and `_build_stage_3_user_content` similarly stripped of duplicated facts.
+- `run_hypothesis_enumeration`, `run_premortem`, and `check_semantics` accept `system_blocks`/`semantic_system_blocks` kwargs; when provided, used as system; when None, fall back to the original string for backward compat.
+- `ensemble.py` widens `stage_1_system: Any` so the same blocks list flows through the streaming + batch ensemble runners (the SDK accepts list-of-blocks anywhere it accepts a string).
+- Orchestrator version bumped `0.3.0` → `0.4.0`.
+
+**Consequences.** Closes #5. Within an assessment all stages run within ~1-2 minutes — well under the 5-minute cache TTL. Stage 1 ensemble run 1 pays cache-creation; runs 2-7 hit cache on system-prefix at 10% input cost. Stage 2/3/7 also cache-hit because their first system block is byte-identical. Expected savings on a typical 15k-token shared prefix: ~80% input-token reduction across the assessment. Backward compatible: omit `system_blocks` and behavior is unchanged. Test `test_shared_prefix_is_byte_identical_across_stages` locks the cache invariant — any drift in the prefix builder fails CI.
+
+---
+
+## D-120 — Stage 2/3 polish: raw_response audit head + pre_mortem text caps (2026-05-07)
+
+**Context.** Two minor polish items from the Stage 2/3 review: (#6) Stage 2's `_build_stage_2_user_content` accepted `docs` but never used it (stale parameter); (#7) `HypothesisResult.raw_response` and `PreMortemResult.raw_response` captured the full model text but were never persisted, so when validators rejected parts of the response the raw text was lost; (#8) `pre_mortem_summary` text rendered into `convergence_assessments.pre_mortem` was not bounded — a verbose Sonnet response could produce a multi-MB row.
+
+**Decision.**
+- (#6 — already eliminated as a side effect of D-119; the unused `docs` param disappeared when user content was simplified.)
+- (#7) Stash `raw_response[:4000]` onto `stage_2.notes.raw_response_head` and `stage_3.notes.raw_response_head`. No schema change — `assessment_stage_metrics.notes` is jsonb. 4kb is enough to debug parser disagreements without bloating the metrics table.
+- (#8) Cap each pre_mortem failure-mode line at 500 chars and the total `pre_mortem_summary` at 8000 chars before insertion.
+
+**Consequences.** Closes #6, #7, #8. Audit/debug paths now have model-output context for failed Stage 2/3 calls without unbounded row sizes. No row format change; existing dashboard reads are unaffected.
+
+---
+
+## D-121 — Stage 2/3 test coverage: validators + renormalizer + cache-prefix invariants (2026-05-07)
+
+**Context.** Stage 2/3 are heuristic-heavy (JSON validators, label coercion, citation walking, local rollup) and prompt-design-sensitive (cache invariants depend on byte-identical shared prefix). Without tests, regressions land silently — especially the local-rollup discipline at premortem.py:298-327 (the model is observed, not trusted) and the cache-prefix invariant from D-119.
+
+**Decision.** Three new test files under `orchestrator_runtime/tests/`:
+
+- `test_hypothesis.py` — 19 tests for `_validate_and_parse_hypotheses` (parse failures, missing required labels, <2 kill_conditions, OOB priors clamped, D-117 base→event_specific coercion, unresolved fact_id warning, 5-cap, pre-anchor prior snapshot) and `renormalize_priors` (pulls bull down on low base rate, pulls bull up on high base rate, sum stays near 100, MIN_ANCHOR_WEIGHT floor, no-anchor identity, no-base-rate identity, evidence_quality None default, evidence_quality invalid fallback, empty-hypotheses safe).
+
+- `test_premortem.py` — 11 tests for `_validate_and_parse_verdicts` (parse failures, model-claimed `all_survive` overridden by local rollup when one verdict is falsified, surviving_ids mismatch emits info finding, non-speculative failure mode without evidence is severity=error, speculative-without-evidence is allowed, unresolved evidence_fact_id warns, missing verdict for known hypothesis raises error, unknown hypothesis_id skipped, invalid verdict defaults to weakened).
+
+- `test_runtime_stage_2_3.py` — 9 integration tests: cache-prefix byte-identity across Stage 1/2/3/7 system blocks (the D-119 invariant); cache prefix contains facts/anchor/asset; Stage 1/2/3 user content omits facts; D-117 Stage 2/3 structural errors flip `constitutional_pass_` to False; D-117 warnings don't gate; constitutional walks hypothesis mechanism citations.
+
+**Consequences.** 39 tests, all passing. Locks the structural invariants behind regressions: any future drift in the renormalize formula, the local-rollup discipline, the structural-error gate, or the cached prefix's byte-shape will fail in CI before it ships. Tests are self-contained — no DB / API calls — and run in <1 second.

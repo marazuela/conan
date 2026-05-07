@@ -109,6 +109,111 @@ def check_citations_resolve(
     return findings, n_total, n_resolved
 
 
+def check_hypothesis_premortem_citations(
+    *,
+    hypothesis_result: Optional[Any],   # orchestrator_runtime.hypothesis.HypothesisResult
+    premortem_result: Optional[Any],    # orchestrator_runtime.premortem.PreMortemResult
+    fact_ids: List[str],
+    document_ids: List[str],
+) -> tuple[List[ConstitutionalFinding], int, int]:
+    """Walk Stage 2 hypothesis mechanisms + Stage 3 failure_modes for citation
+    resolution. Mirrors check_citations_resolve but applied to the new stages.
+
+    Returns (findings, n_citations_checked, n_citations_resolved). Findings are
+    severity=error for unresolved or missing-on-non-speculative."""
+    findings: List[ConstitutionalFinding] = []
+    fact_short_set: Set[str] = {f[:8].lower() for f in fact_ids}
+    doc_short_set: Set[str] = {d[:8].lower() for d in document_ids}
+    n_total = 0
+    n_resolved = 0
+
+    if hypothesis_result is not None:
+        for h in getattr(hypothesis_result, "hypotheses", []) or []:
+            mechanism = getattr(h, "mechanism", "") or ""
+            cited_facts = {m.group(1).lower() for m in CITE_FACT_RE.finditer(mechanism)}
+            cited_docs = {m.group(1).lower() for m in CITE_DOC_RE.finditer(mechanism)}
+            n_total += len(cited_facts) + len(cited_docs)
+            for short in cited_facts:
+                if short in fact_short_set:
+                    n_resolved += 1
+                else:
+                    findings.append(ConstitutionalFinding(
+                        severity="error",
+                        check="hypothesis_unresolved_fact_id",
+                        detail=f"hypothesis {h.hypothesis_id} mechanism cites "
+                               f"[F:{short}], which does not resolve.",
+                        affected_id=short,
+                    ))
+            for short in cited_docs:
+                if short in doc_short_set:
+                    n_resolved += 1
+                else:
+                    findings.append(ConstitutionalFinding(
+                        severity="error",
+                        check="hypothesis_unresolved_doc_id",
+                        detail=f"hypothesis {h.hypothesis_id} mechanism cites "
+                               f"[D:{short}], which does not resolve.",
+                        affected_id=short,
+                    ))
+            # Walk supporting/contradicting fact_id arrays too
+            for short in (getattr(h, "supporting_fact_ids", []) or []):
+                short_l = short.lower()
+                n_total += 1
+                if short_l in fact_short_set:
+                    n_resolved += 1
+                else:
+                    findings.append(ConstitutionalFinding(
+                        severity="error",
+                        check="hypothesis_unresolved_fact_id",
+                        detail=f"hypothesis {h.hypothesis_id} supporting_fact_id "
+                               f"{short!r} does not resolve.",
+                        affected_id=short,
+                    ))
+            for short in (getattr(h, "contradicting_fact_ids", []) or []):
+                short_l = short.lower()
+                n_total += 1
+                if short_l in fact_short_set:
+                    n_resolved += 1
+                else:
+                    findings.append(ConstitutionalFinding(
+                        severity="error",
+                        check="hypothesis_unresolved_fact_id",
+                        detail=f"hypothesis {h.hypothesis_id} contradicting_fact_id "
+                               f"{short!r} does not resolve.",
+                        affected_id=short,
+                    ))
+
+    if premortem_result is not None:
+        for v in getattr(premortem_result, "verdicts", []) or []:
+            for fm in getattr(v, "failure_modes", []) or []:
+                speculative = bool(getattr(fm, "speculative", False))
+                ev_ids = getattr(fm, "evidence_fact_ids", []) or []
+                if not speculative and not ev_ids:
+                    findings.append(ConstitutionalFinding(
+                        severity="error",
+                        check="premortem_missing_citation_non_speculative",
+                        detail=f"verdict {v.hypothesis_id} failure_mode "
+                               f"{fm.description[:80]!r} is non-speculative "
+                               f"but has no evidence_fact_ids.",
+                        affected_id=v.hypothesis_id,
+                    ))
+                for short in ev_ids:
+                    short_l = short.lower()
+                    n_total += 1
+                    if short_l in fact_short_set:
+                        n_resolved += 1
+                    else:
+                        findings.append(ConstitutionalFinding(
+                            severity="error",
+                            check="premortem_unresolved_fact_id",
+                            detail=f"verdict {v.hypothesis_id} failure_mode "
+                                   f"evidence_fact_id {short!r} does not resolve.",
+                            affected_id=short,
+                        ))
+
+    return findings, n_total, n_resolved
+
+
 # ---------------------------------------------------------------------------
 # Semantic check (Sonnet)
 # ---------------------------------------------------------------------------
@@ -165,17 +270,16 @@ def check_semantics(
     reference_class_base_rate: Optional[float],
     model: str,
     max_tokens: int = 1024,
+    system_blocks: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[List[ConstitutionalFinding], int, int, float, int, bool]:
     """Run the semantic adversarial check via Sonnet. Returns (findings,
-    in_tokens, out_tokens, cost, latency_ms, overall_pass)."""
-    facts_summary_lines: List[str] = []
-    for f in facts[:60]:  # keep context tight
-        facts_summary_lines.append(
-            f"- F:{f['id'][:8]} ({f['fact_type']}, conf={f.get('confidence')}): "
-            f"{f['fact_text']}"
-        )
-    facts_summary = "\n".join(facts_summary_lines)
+    in_tokens, out_tokens, cost, latency_ms, overall_pass).
 
+    D-119: when `system_blocks` is provided (typically the same shared prefix
+    as Stage 1/2/3 + SEMANTIC_SYSTEM_PROMPT), the structured fact layer is
+    omitted from user content because it lives in the cached system prefix.
+    Cache reads at 10% input cost. When None, falls back to inline-facts mode.
+    """
     base_rate_line = (
         f"reference_class: {reference_class}\n"
         f"reference_class_base_rate: {reference_class_base_rate}"
@@ -183,7 +287,28 @@ def check_semantics(
         else "reference_class: (unknown)\nreference_class_base_rate: (none provided)"
     )
 
-    user_content = f"""Thesis under review:
+    if system_blocks is not None:
+        # Facts are in the cached system prefix; don't duplicate.
+        user_content = f"""Thesis under review:
+
+  thesis_direction: {thesis_direction}
+  conviction_pct: {conviction_pct}
+  {base_rate_line}
+
+## Cited prose thesis
+
+{cited_prose}
+"""
+        system_arg: Any = system_blocks
+    else:
+        facts_summary_lines: List[str] = []
+        for f in facts[:60]:
+            facts_summary_lines.append(
+                f"- F:{f['id'][:8]} ({f['fact_type']}, conf={f.get('confidence')}): "
+                f"{f['fact_text']}"
+            )
+        facts_summary = "\n".join(facts_summary_lines)
+        user_content = f"""Thesis under review:
 
   thesis_direction: {thesis_direction}
   conviction_pct: {conviction_pct}
@@ -197,13 +322,14 @@ def check_semantics(
 
 {cited_prose}
 """
+        system_arg = SEMANTIC_SYSTEM_PROMPT
 
     import time
     t0 = time.time()
     resp = a_client._client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=SEMANTIC_SYSTEM_PROMPT,
+        system=system_arg,
         messages=[{"role": "user", "content": user_content}],
     )
     latency_ms = int((time.time() - t0) * 1000)
@@ -280,13 +406,55 @@ def run_constitutional_check(
     reference_class_base_rate: Optional[float] = None,
     model: str,
     skip_semantic: bool = False,
+    hypothesis_result: Optional[Any] = None,    # HypothesisResult from Stage 2
+    premortem_result: Optional[Any] = None,     # PreMortemResult from Stage 3
+    semantic_system_blocks: Optional[List[Dict[str, Any]]] = None,  # D-119
 ) -> ConstitutionalResult:
     """Run deterministic citation-resolution checks + (unless skipped) the
-    semantic Sonnet adversarial check."""
+    semantic Sonnet adversarial check.
+
+    When `hypothesis_result` and/or `premortem_result` are provided, the
+    deterministic citation-resolution pass also walks their cited fact_ids
+    and emits severity=error findings on unresolved short-ids or missing
+    citations on non-speculative pre-mortem failure modes.
+    """
     fact_ids = [f["id"] for f in facts]
     findings, n_total, n_resolved = check_citations_resolve(
         cited_prose, fact_ids, document_ids,
     )
+    if hypothesis_result is not None or premortem_result is not None:
+        h_findings, h_total, h_resolved = check_hypothesis_premortem_citations(
+            hypothesis_result=hypothesis_result,
+            premortem_result=premortem_result,
+            fact_ids=fact_ids,
+            document_ids=document_ids,
+        )
+        findings.extend(h_findings)
+        n_total += h_total
+        n_resolved += h_resolved
+    # D-117: structural errors from Stage 2/3 (missing required label, too few
+    # hypotheses, missing kill_conditions, parse failure, missing verdicts)
+    # MUST gate the assessment, not just live in stage_metrics.notes. Promote
+    # them into the constitutional findings list as 'stage_2_structural_error'
+    # / 'stage_3_structural_error' so the deliverability gate sees them.
+    if hypothesis_result is not None:
+        for hf in getattr(hypothesis_result, "findings", []) or []:
+            if hf.severity == "error":
+                findings.append(ConstitutionalFinding(
+                    severity="error",
+                    check=f"stage_2_{hf.check}",
+                    detail=hf.detail,
+                    affected_id=hf.affected_id,
+                ))
+    if premortem_result is not None:
+        for pf in getattr(premortem_result, "findings", []) or []:
+            if pf.severity == "error":
+                findings.append(ConstitutionalFinding(
+                    severity="error",
+                    check=f"stage_3_{pf.check}",
+                    detail=pf.detail,
+                    affected_id=pf.affected_id,
+                ))
     pass_ = all(f.severity != "error" for f in findings)
 
     sem_in = sem_out = 0
@@ -304,6 +472,7 @@ def run_constitutional_check(
             reference_class=reference_class,
             reference_class_base_rate=reference_class_base_rate,
             model=model,
+            system_blocks=semantic_system_blocks,
         )
         findings.extend(sem_findings)
         if not sem_pass:

@@ -100,7 +100,7 @@ SHRINKAGE_FACTOR_LAMBDA = 0.5
 def run_streaming_ensemble(
     a_client: OrchestratorClient,
     *,
-    stage_1_system: str,
+    stage_1_system: Any,                  # str | List[Dict[str, Any]]
     stage_1_user_content: str,
     stage_9_system: str,
     n: int,
@@ -138,7 +138,7 @@ def run_streaming_ensemble(
 
 def _run_one_streaming(
     a_client: OrchestratorClient,
-    stage_1_system: str,
+    stage_1_system: Any,                  # str | List[Dict[str, Any]]; forwarded as-is
     stage_1_user_content: str,
     stage_9_system: str,
     model: str,
@@ -223,7 +223,7 @@ def _run_one_streaming(
 def run_batch_ensemble(
     a_client: OrchestratorClient,
     *,
-    stage_1_system: str,
+    stage_1_system: Any,                  # str | List[Dict[str, Any]]
     stage_1_user_content: str,
     stage_9_system: str,
     n: int,
