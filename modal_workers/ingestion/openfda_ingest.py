@@ -41,6 +41,15 @@ DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_PAGE_LIMIT = 100  # openFDA caps at 1000 per request, but smaller pages
                           # play better with the rate limit + give incremental progress
 
+# Safety ceiling for the page-until-empty loop. 100 × 100 = 10k records per
+# feed per run, well above any realistic openFDA bulk-publish batch. If a paging
+# bug ever made the API return full pages indefinitely this caps the blast radius.
+MAX_PAGES_HARD_CAP = 100
+
+# Wider lookback used by deep_sweep_openfda to catch corrections / backfills
+# that the default 30d window slid past.
+DEEP_SWEEP_DAYS = 180
+
 
 class OpenFDAError(RuntimeError):
     def __init__(self, status: int, body: str):
@@ -109,7 +118,7 @@ def ingest_drugsfda_approvals(
     sponsor_search: Optional[str] = None,
     application_search: Optional[str] = None,
     page_limit: int = DEFAULT_PAGE_LIMIT,
-    max_pages: int = 5,
+    max_pages: Optional[int] = None,
     writer: Optional[DocumentWriter] = None,
 ) -> IngestRunResult:
     """Pull NDA/BLA approval records from openFDA drug/drugsfda.
@@ -117,6 +126,10 @@ def ingest_drugsfda_approvals(
     Each application_number → one document. raw_text is a JSON-formatted summary
     of the application's submission history (Sonnet extractor handles structuring
     downstream). source_doc_id = application_number.
+
+    Pagination: defaults to page-until-empty (a short page or no results ends
+    the loop) bounded by MAX_PAGES_HARD_CAP. Pass `max_pages` to cap a backfill
+    where you only want the first N pages.
     """
     today = date.today()
     since = since or (today - timedelta(days=30))
@@ -134,12 +147,15 @@ def ingest_drugsfda_approvals(
     dw = writer or DocumentWriter()
     result = IngestRunResult()
     skip = 0
+    page_cap = max_pages if max_pages is not None else MAX_PAGES_HARD_CAP
 
-    for page_idx in range(max_pages):
+    pages_fetched = 0
+    for page_idx in range(page_cap):
         body = _openfda_get(
             "/drug/drugsfda.json",
             params={"search": search, "limit": page_limit, "skip": skip},
         )
+        pages_fetched = page_idx + 1
         if not body:
             break
         results = body.get("results") or []
@@ -155,11 +171,19 @@ def ingest_drugsfda_approvals(
             break
         skip += page_limit
 
+    if max_pages is None and pages_fetched >= MAX_PAGES_HARD_CAP:
+        logger.warning(
+            "openfda drugsfda hit MAX_PAGES_HARD_CAP=%d on search=%r — "
+            "possible bulk-publish batch larger than the safety ceiling; "
+            "investigate before widening the cap",
+            MAX_PAGES_HARD_CAP, search)
+
     logger.info(
         "openfda drugsfda summary search=%r seen=%d wrote=%d dedup=%d "
-        "skipped=%d errors=%d",
+        "skipped=%d errors=%d pages=%d",
         search, result.documents_seen, result.documents_written,
-        result.documents_dedup_hit, result.documents_skipped, result.errors)
+        result.documents_dedup_hit, result.documents_skipped, result.errors,
+        pages_fetched)
     return result
 
 
@@ -293,14 +317,17 @@ def ingest_drug_label_recent(
     since: Optional[date] = None,
     until: Optional[date] = None,
     page_limit: int = DEFAULT_PAGE_LIMIT,
-    max_pages: int = 10,
+    max_pages: Optional[int] = None,
     writer: Optional[DocumentWriter] = None,
 ) -> IngestRunResult:
     """Pull recent drug-label changes (effective_time within window). Each
     setid (label revision) becomes one document.
 
     Source field is 'dailymed' (canonical home of structured product labels)
-    to keep the source taxonomy aligned with the orchestrator's expectations."""
+    to keep the source taxonomy aligned with the orchestrator's expectations.
+
+    Pagination: defaults to page-until-empty bounded by MAX_PAGES_HARD_CAP.
+    """
     today = date.today()
     since = since or (today - timedelta(days=30))
     until = until or today
@@ -310,12 +337,15 @@ def ingest_drug_label_recent(
     dw = writer or DocumentWriter()
     result = IngestRunResult()
     skip = 0
+    page_cap = max_pages if max_pages is not None else MAX_PAGES_HARD_CAP
 
-    for page_idx in range(max_pages):
+    pages_fetched = 0
+    for page_idx in range(page_cap):
         body = _openfda_get(
             "/drug/label.json",
             params={"search": search, "limit": page_limit, "skip": skip},
         )
+        pages_fetched = page_idx + 1
         if not body:
             break
         labels = body.get("results") or []
@@ -331,11 +361,19 @@ def ingest_drug_label_recent(
             break
         skip += page_limit
 
+    if max_pages is None and pages_fetched >= MAX_PAGES_HARD_CAP:
+        logger.warning(
+            "openfda label hit MAX_PAGES_HARD_CAP=%d on since=%s — "
+            "possible bulk-publish batch larger than the safety ceiling; "
+            "investigate before widening the cap",
+            MAX_PAGES_HARD_CAP, since)
+
     logger.info(
         "openfda label summary since=%s seen=%d wrote=%d dedup=%d "
-        "skipped=%d errors=%d",
+        "skipped=%d errors=%d pages=%d",
         since, result.documents_seen, result.documents_written,
-        result.documents_dedup_hit, result.documents_skipped, result.errors)
+        result.documents_dedup_hit, result.documents_skipped, result.errors,
+        pages_fetched)
     return result
 
 
@@ -444,3 +482,40 @@ def _accumulate(result: IngestRunResult, outcome: _IngestOutcome) -> None:
             result.written_ids.append(outcome.document_id)
     if outcome.dedup_hit:
         result.documents_dedup_hit += 1
+
+
+# ---------------------------------------------------------------------------
+# Deep sweep — wider-window catch-up for backfills and corrections that the
+# default 30d sliding window cannot see.
+# ---------------------------------------------------------------------------
+
+def deep_sweep_openfda(
+    *,
+    days: int = DEEP_SWEEP_DAYS,
+    writer: Optional[DocumentWriter] = None,
+) -> Dict[str, IngestRunResult]:
+    """Wider-window catch-up across drugsfda + dailymed labels.
+
+    openFDA emits corrections to old records (visible via `_meta.last_updated`
+    on the API side). The default 30d sliding window in the daily ingest path
+    cannot see corrections older than 30d, leaving stale fact extractions in
+    the RAG corpus. This helper runs the same ingest with `since = today - 180d`
+    and `max_pages=None` so any corrected records re-flow through DocumentWriter,
+    where idempotent content_hash dedupe makes already-seen rows cheap no-ops.
+
+    Returns a dict keyed by feed name so the caller can log per-feed counts.
+    """
+    today = date.today()
+    since = today - timedelta(days=days)
+    dw = writer or DocumentWriter()
+    drugsfda = ingest_drugsfda_approvals(since=since, until=today, writer=dw)
+    label = ingest_drug_label_recent(since=since, until=today, writer=dw)
+    logger.info(
+        "openfda deep_sweep days=%d drugsfda(seen=%d wrote=%d dedup=%d) "
+        "label(seen=%d wrote=%d dedup=%d)",
+        days,
+        drugsfda.documents_seen, drugsfda.documents_written,
+        drugsfda.documents_dedup_hit,
+        label.documents_seen, label.documents_written,
+        label.documents_dedup_hit)
+    return {"drugsfda": drugsfda, "label": label}

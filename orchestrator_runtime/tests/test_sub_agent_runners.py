@@ -98,6 +98,38 @@ def test_options_handler_routes_polygon_straddle():
     assert out["straddle_implied_move_pct"] == 18.5
 
 
+def test_options_handler_degraded_when_polygon_key_missing(monkeypatch):
+    """Without POLYGON_API_KEY, every tool returns status='degraded' instead
+    of raising. Mirrors the polygon_mcp degraded-mode contract for the
+    in-process runner path used by the Tier 1 orchestrator."""
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    # Reset module-level lazy state so the missing-key check fires fresh.
+    import modal_workers.sub_agents.options_microstructure as opt_mod
+    monkeypatch.setattr(opt_mod, "_provider", None)
+    monkeypatch.setattr(opt_mod, "_init_error", None)
+
+    runner = OptionsMicrostructureRunner()
+    handler = runner.build_handler()
+
+    out_chain = handler("polygon_get_chain", {"ticker": "AXSM"})
+    assert out_chain["status"] == "degraded"
+    assert "POLYGON_API_KEY" in out_chain["reason"]
+    assert out_chain["count"] == 0
+    assert out_chain["chain"] == []
+
+    out_straddle = handler("polygon_straddle_implied_move", {
+        "ticker": "AXSM", "event_date": "2026-09-15",
+    })
+    assert out_straddle["status"] == "degraded"
+    assert out_straddle["straddle_implied_move_pct"] is None
+
+    out_liq = handler("polygon_event_window_liquidity", {
+        "ticker": "AXSM", "event_date": "2026-09-15",
+    })
+    assert out_liq["status"] == "degraded"
+    assert out_liq["score"] == 0
+
+
 # ---------- end-to-end run() with mocked Anthropic client ----------
 
 

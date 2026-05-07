@@ -36,6 +36,7 @@ providers, mode). Tests can drive it without a database.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -263,4 +264,245 @@ def upsert_feature_snapshot(
         "fda_event_features?on_conflict=event_id",
         json_body=[body],
         prefer="resolution=merge-duplicates,return=minimal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scanner entrypoint — drives the bridge over pending fda_regulatory_events.
+# ---------------------------------------------------------------------------
+
+
+def _build_polygon_providers() -> tuple[Optional[MarketDataProvider], Optional[OptionsDataProvider], Optional[str]]:
+    """Construct Polygon market+options providers if POLYGON_API_KEY is set.
+    Returns (market, options, warning). Missing key is not fatal — build_features
+    degrades gracefully when providers are None (market_cap/adv/straddle stay
+    None, market_implied_probability ends up None, gate 2 demotes Immediate).
+    """
+    try:
+        from modal_workers.providers.polygon.base import PolygonClient
+        from modal_workers.providers.polygon.market_data import PolygonMarketData
+        from modal_workers.providers.polygon.options_data import PolygonOptionsData
+        polygon_client = PolygonClient()
+    except RuntimeError as e:
+        return None, None, f"polygon disabled: {e}"
+    except Exception as e:  # noqa: BLE001
+        return None, None, f"polygon init failed: {type(e).__name__}: {e}"
+    return PolygonMarketData(polygon_client), PolygonOptionsData(client=polygon_client), None
+
+
+def _designations_from(asset: Mapping[str, Any], evidence_rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Pull designation flags from asset.extensions, with fallback to any
+    evidence row of evidence_type='designations'. Mirrors the pdufa pipeline's
+    raw_payload designation block layout."""
+    extensions = asset.get("extensions") or {}
+    flags = dict(extensions.get("designations") or {})
+    for row in evidence_rows or []:
+        if (row.get("evidence_type") or "") != "designations":
+            continue
+        if (row.get("evidence_status") or "active") != "active":
+            continue
+        payload = row.get("payload") or {}
+        for k, v in payload.items():
+            flags.setdefault(k, v)
+    return flags
+
+
+def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circulars
+    """Drive the bridge over pending `fda_regulatory_events` rows.
+
+    Mode is read from `cfg.config.mode` and defaults to 'shadow'. Per
+    write_flags_for_mode:
+      - shadow            → upsert shadow_* columns only, no signal emission.
+      - shadow_with_emit  → upsert canonical+shadow, emit signals.
+      - operational       → upsert canonical, emit signals.
+
+    Even in shadow mode the run is idempotent — fda_event_features is keyed on
+    event_id with on_conflict=merge-duplicates, so re-runs just refresh the
+    snapshot from the latest provider data + evidence.
+    """
+    from modal_workers.shared.biotech_base_rates import load_base_rates
+    from modal_workers.shared.scanner_base import ScannerResult, Signal
+    from modal_workers.shared.supabase_client import EntityHints, SupabaseClient
+
+    client = SupabaseClient()
+    started = time.time()
+    soft_budget_s = max(int(cfg.timeout_soft_s or 60), 30)
+    deadline = started + soft_budget_s
+
+    mode = (cfg.config or {}).get("mode") or MODE_SHADOW
+    if mode not in VALID_MODES:
+        return ScannerResult(
+            scanner=NAME, status="error",
+            error=f"invalid bridge mode: {mode!r} (expected one of {VALID_MODES})",
+        )
+
+    warnings: List[str] = []
+    market, options, polygon_warning = _build_polygon_providers()
+    if polygon_warning:
+        warnings.append(polygon_warning)
+
+    base_rates = load_base_rates(client)
+
+    # Pending events first — ordered by event_date ASC so near-term decisions
+    # get scored even when the budget runs out before the tail.
+    events = client._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "event_status": "eq.pending",
+            "asset_id": "not.is.null",
+            "select": "id,asset_id,event_type,event_date,event_status,source_content_hash,extensions",
+            "order": "event_date.asc.nullslast",
+        },
+    ) or []
+
+    fetched_records = len(events)
+    snapshot_at = datetime.now(timezone.utc)
+    signals: List[Signal] = []
+    processed = 0
+    skipped = 0
+
+    # Pre-fetch assets in one round-trip; events without an asset row get skipped.
+    asset_ids = sorted({e["asset_id"] for e in events if e.get("asset_id")})
+    assets_by_id: Dict[str, Dict[str, Any]] = {}
+    if asset_ids:
+        in_clause = ",".join(asset_ids)
+        asset_rows = client._rest(
+            "GET", "fda_assets",
+            params={
+                "id": f"in.({in_clause})",
+                "select": "id,ticker,mic,entity_id,drug_name,generic_name,application_number,indication,sponsor_name,extensions",
+            },
+        ) or []
+        assets_by_id = {row["id"]: row for row in asset_rows}
+
+    for event in events:
+        if time.time() > deadline:
+            warnings.append("wall-clock budget exceeded during signal build")
+            break
+
+        event_id = event.get("id")
+        asset_id = event.get("asset_id")
+        if not event_id or not asset_id:
+            skipped += 1
+            continue
+        asset = assets_by_id.get(asset_id)
+        if not asset:
+            skipped += 1
+            continue
+
+        evidence_rows = client._rest(
+            "GET", "fda_event_evidence",
+            params={
+                "event_id": f"eq.{event_id}",
+                "evidence_status": "eq.active",
+                "select": "source,evidence_type,payload,evidence_status",
+            },
+        ) or []
+
+        designations = _designations_from(asset, evidence_rows)
+
+        try:
+            outcome = process_event(
+                event=event,
+                asset=asset,
+                evidence_rows=evidence_rows,
+                base_rates=base_rates,
+                market=market,
+                options=options,
+                mode=mode,
+                snapshot_at=snapshot_at,
+                designations=designations,
+            )
+        except Exception as e:  # noqa: BLE001 — one bad event must not poison the run
+            warnings.append(f"process_event failed for {event_id}: {type(e).__name__}: {e}")
+            continue
+
+        if outcome.skipped_reason or outcome.feature_snapshot is None:
+            skipped += 1
+            continue
+
+        try:
+            upsert_feature_snapshot(
+                client, event_id, outcome.feature_snapshot,
+                write_canonical=outcome.write_canonical,
+                write_shadow=outcome.write_shadow,
+            )
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"upsert_feature_snapshot failed for {event_id}: {type(e).__name__}: {e}")
+            continue
+
+        processed += 1
+
+        if not outcome.emit_signal:
+            continue
+
+        # Emit signal — only reached in shadow_with_emit / operational modes.
+        snapshot = outcome.feature_snapshot
+        ticker = asset.get("ticker") or ""
+        drug = asset.get("drug_name") or asset.get("generic_name") or ""
+        event_type = event.get("event_type") or "fda_event"
+        event_date = event.get("event_date") or ""
+        try:
+            source_date = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            source_date = snapshot_at
+        source_content_hash = event.get("source_content_hash") or f"sha256:{snapshot.inputs_hash}"
+        signal_id = f"fda_event:{event_id}"[:128]
+
+        raw_payload: Dict[str, Any] = {
+            "event_id": event_id,
+            "asset_id": asset_id,
+            "ticker": ticker,
+            "drug_name": drug,
+            "indication": asset.get("indication"),
+            "event_type": event_type,
+            "event_date": str(event_date) if event_date else None,
+            "fair_probability": snapshot.fair_probability,
+            "market_implied_probability": snapshot.market_implied_probability,
+            "expected_value_pct": snapshot.expected_value_pct,
+            "pricing_edge": snapshot.pricing_edge,
+            "implied_move_pct": snapshot.implied_move_pct,
+            "evidence_confidence": snapshot.evidence_confidence,
+            "options_liquidity_score": snapshot.options_liquidity_score,
+            "market_cap_usd": snapshot.market_cap_usd,
+            "adv_usd": snapshot.adv_usd,
+            "score": snapshot.score,
+            "band": snapshot.band,
+            "immediate_demoted": outcome.immediate_demoted,
+        }
+
+        signals.append(Signal(
+            signal_id=signal_id,
+            source_content_hash=source_content_hash,
+            source_date=source_date,
+            scan_date=snapshot_at,
+            signal_type=event_type,
+            raw_payload=raw_payload,
+            entity_hints=EntityHints(
+                ticker=ticker or None,
+                mic=asset.get("mic") or None,
+                country="US",
+            ),
+        ))
+
+    status = "ok"
+    if warnings:
+        status = "partial"
+
+    run_metrics = {
+        "mode": mode,
+        "events_pending": fetched_records,
+        "events_processed": processed,
+        "events_skipped": skipped,
+        "polygon_market": market is not None,
+        "polygon_options": options is not None,
+    }
+
+    return ScannerResult(
+        scanner=NAME,
+        status=status,
+        signals=signals,
+        warnings=warnings,
+        fetched_records=fetched_records,
+        run_metrics=run_metrics,
     )
