@@ -122,6 +122,27 @@ Deno.test("classifyProvisionalHeuristic treats extensions=null as malformed when
   assert(result.malformed === true, "null extensions with heuristic provenance is malformed");
 });
 
+Deno.test("shouldProcessUpdate fires on score-value change after initial scoring", () => {
+  // Mode 3 fix: signal_resolver re-scores a row from 22 -> 38 without changing
+  // provenance. Without this branch, convergence is never re-evaluated and
+  // band_with_bonus stays stale.
+  assert(
+    shouldProcessUpdate(
+      {
+        score: 38,
+        dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+        extensions: { scoring_meta: { requires_resolution: false } },
+      },
+      {
+        score: 22,
+        dimensions: { approval_probability: 3, _provenance: "ai_resolved" },
+        extensions: { scoring_meta: { requires_resolution: false } },
+      },
+    ) === true,
+    "score-value change must re-enter convergence even when provenance is unchanged",
+  );
+});
+
 Deno.test("shouldProcessUpdate ignores reactor self-writes", () => {
   assert(
     shouldProcessUpdate(

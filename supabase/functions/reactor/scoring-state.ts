@@ -82,5 +82,13 @@ export function shouldProcessUpdate(
 
   const oldProv = scoringProvenance(previousRow);
   const newProv = scoringProvenance(nextRow);
-  return oldProv !== "ai_resolved" && newProv === "ai_resolved";
+  if (oldProv !== "ai_resolved" && newProv === "ai_resolved") return true;
+
+  const oldScore = previousRow?.score ?? null;
+  const newScore = nextRow?.score ?? null;
+  if (oldScore !== null && newScore !== null && oldScore !== newScore) {
+    return true;
+  }
+
+  return false;
 }

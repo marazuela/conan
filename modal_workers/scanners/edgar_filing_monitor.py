@@ -120,7 +120,12 @@ CATEGORY_FORM_WHITELIST: Dict[str, set] = {
     "activist":   {"8-K", "8-K/A", "SC 13D", "SC 13D/A", "SC 14D9", "PRER14A", "DFAN14A"},
     "mna":        {"8-K", "8-K/A", "SC 13D", "SC 13D/A", "SC TO-T", "SC TO-T/A",
                    "SC 13E3", "SC 13E3/A", "PREM14A"},
-    "governance": {"8-K", "8-K/A", "10-K", "10-K/A", "10-Q", "10-Q/A"},
+    # Governance keywords (poison pill / rights plan / auditor resignation /
+    # internal investigation) appear in every 10-K and 10-Q as standard risk-
+    # factor and disclosure-control boilerplate. Substantive governance events
+    # are 8-K-disclosable. Restricting to 8-K trades a small recall loss on
+    # buried-in-MD&A disclosures for a large precision win.
+    "governance": {"8-K", "8-K/A"},
 }
 
 SPAC_IPO_FORM_BLACKLIST = {

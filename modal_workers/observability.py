@@ -768,7 +768,7 @@ def litigation_baselines_refresh(client: Optional[SupabaseClient] = None) -> Dic
 import os as _os  # avoid shadowing observability module's `os` if any
 
 _ORPHAN_MIN_AGE_SECONDS = 300       # 5 min — give the live reactor time to land
-_ORPHAN_BATCH_LIMIT = 100           # per-sweep cap
+_ORPHAN_BATCH_LIMIT = 250           # per-sweep cap
 _ORPHAN_REACTOR_TIMEOUT_S = 30.0    # per-call wall clock
 
 
