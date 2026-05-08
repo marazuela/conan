@@ -51,8 +51,17 @@ image = (
         "openai>=1.50",
         "cohere>=5.10",
         "mcp[cli]>=1.20",
+        "jsonschema>=4.0",
     )
     .add_local_python_source("modal_workers", "orchestrator_runtime")
+    # Sub-agent JSON schemas live in the sibling conan-cowork-skills repo and
+    # are resolved at runtime via Path(__file__).resolve().parents[3] in
+    # modal_workers/sub_agents/runtime.py. Inside the container that resolves
+    # to /conan-cowork-skills/schemas/, so we mount the host path there.
+    .add_local_dir(
+        "../conan-cowork-skills/schemas",
+        "/conan-cowork-skills/schemas",
+    )
 )
 
 # Secrets
@@ -67,6 +76,86 @@ rag_secrets = modal.Secret.from_name("rag-providers")
 # Supabase internal_config.compute_secret. Required by the v3 multiplex
 # FastAPI endpoint (compute_v3_dispatch).
 compute_auth_secrets = modal.Secret.from_name("compute-auth")
+
+
+# ============================================================================
+# Targeted asset ingestion — pull primary docs for one asset on demand.
+# Used by Gate 1 to ground sub-agents against real ClinicalTrials.gov + OpenFDA
+# data instead of Sonnet's prior knowledge alone.
+# ============================================================================
+
+@app.function(
+    image=image,
+    timeout=3600,
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def ingest_asset_corpus(
+    ct_query: Optional[str] = None,
+    nct_ids: Optional[str] = None,             # comma-separated
+    fda_application_number: Optional[str] = None,
+    drug_label_search: Optional[str] = None,   # openfda label keyword
+) -> Dict[str, Any]:
+    """One-shot grounded-corpus ingest for a target asset.
+
+    Each parameter is independent — pass any subset. Outputs land in `documents`
+    (deduped by source_content_hash) and are picked up by `asset_linker_run` on
+    the next pass.
+    """
+    out: Dict[str, Any] = {}
+
+    if ct_query:
+        from modal_workers.ingestion.clinicaltrials_ingest import ingest_search
+        r = ingest_search(query_term=ct_query, max_pages=2)
+        out["ct_search"] = {
+            "query": ct_query,
+            "seen": r.documents_seen,
+            "written": r.documents_written,
+            "dedup": r.documents_dedup_hit,
+            "errors": r.errors,
+        }
+
+    if nct_ids:
+        from modal_workers.ingestion.clinicaltrials_ingest import ingest_by_nct
+        ids = [s.strip() for s in nct_ids.split(",") if s.strip()]
+        r = ingest_by_nct(nct_ids=ids)
+        out["ct_nct"] = {
+            "ids": ids,
+            "seen": r.documents_seen,
+            "written": r.documents_written,
+            "dedup": r.documents_dedup_hit,
+            "errors": r.errors,
+        }
+
+    if fda_application_number:
+        from modal_workers.ingestion.openfda_ingest import ingest_drugsfda_approvals
+        r = ingest_drugsfda_approvals(application_search=fda_application_number)
+        out["fda_drugsfda"] = {
+            "application_number": fda_application_number,
+            "seen": r.documents_seen,
+            "written": r.documents_written,
+            "dedup": r.documents_dedup_hit,
+            "errors": r.errors,
+        }
+
+    if drug_label_search:
+        # Reuse the recent-label sweep; the openfda search-string is keyword-based
+        # so passing a brand+generic narrows quickly without an explicit endpoint.
+        from modal_workers.ingestion.openfda_ingest import ingest_drug_label_recent
+        # Wider 365d window for a one-off targeted backfill.
+        from datetime import date, timedelta
+        until = date.today()
+        since = until - timedelta(days=365)
+        r = ingest_drug_label_recent(since=since, until=until)
+        out["fda_label"] = {
+            "window_days": 365,
+            "seen": r.documents_seen,
+            "written": r.documents_written,
+            "dedup": r.documents_dedup_hit,
+            "errors": r.errors,
+            "note": "openfda label sweep is window-scoped; filter happens at asset_linker stage",
+        }
+
+    return out
 
 
 # ============================================================================
@@ -167,6 +256,7 @@ def orchestrator_run_one(
     constitutional: bool = True,
     constitutional_deterministic_only: bool = False,
     enable_premortem: bool = True,
+    enable_sub_agents: bool = False,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Produce one convergence_assessment for the given asset.
@@ -177,6 +267,13 @@ def orchestrator_run_one(
     enable_premortem: run Stage 2 (hypothesis enumeration) + Stage 3
         (adversarial pre-mortem). Default True. Disable to fall back to
         v0.2 behavior (Stage 1 + 9 + 7 + 10) if a regression is found.
+    enable_sub_agents: when True, sets ORCH_ENABLE_SUB_AGENTS=1 in process
+        env BEFORE orchestrator_runtime imports, which flips the Stage 1
+        dispatch_sub_agent tool on. Sub-agents (literature, competitive,
+        regulatory_history, options_microstructure) are then called via the
+        in-process MCP equivalents and their outputs land in sub_agent_calls.
+        Default False (PRD §5: "ORCH_ENABLE_SUB_AGENTS=0 default; flips at
+        Phase 2C"). Operator opt-in only until prompt + schema lock.
     dry_run: if True, skip Stage 10 persist — runs the full pipeline
         (Anthropic costs incurred) but does NOT write convergence_assessments,
         hypothesis_enumeration, premortem_assessments, post_mortem_queue rows
@@ -184,6 +281,11 @@ def orchestrator_run_one(
         sub-agent changes without disturbing live state. Returns
         {"assessment_id": null, "dry_run": true}.
     """
+    # Stage 1 dispatch flag is read at orchestrator_runtime import time, so
+    # it must be set BEFORE the lazy imports below.
+    if enable_sub_agents:
+        os.environ["ORCH_ENABLE_SUB_AGENTS"] = "1"
+
     from modal_workers.shared.supabase_client import SupabaseClient
     from orchestrator_runtime.client import (
         DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL, OrchestratorClient,

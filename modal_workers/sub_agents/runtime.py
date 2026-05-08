@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,8 +31,25 @@ from orchestrator_runtime.client import OrchestratorClient, parse_json_or_none
 logger = logging.getLogger(__name__)
 
 SONNET_MODEL = "claude-sonnet-4-5-20250929"
-DEFAULT_MAX_TURNS = 6
+# Bumped from 6 → 12 (2026-05-08) after literature sub-agent hit
+# `max_turns=6 without end_turn` on a single AXS-05 dispatch. Tool-heavy
+# roles (literature, regulatory_history) regularly need 4-5 search turns +
+# 1-2 fetch turns + 1 synthesis turn, leaving zero headroom at 6.
+DEFAULT_MAX_TURNS = 12
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+# Per-tool-result content cap. Sonnet's context window is 200k tokens; with
+# 4 tool_uses × 60k+ chars each (PubMed full text, OpenFDA labels), a single
+# turn can blow past 200k input tokens on the NEXT call. Truncating each
+# tool_result to ~30k chars (~7-8k tokens) caps per-turn growth and lets
+# the loop run multiple search rounds without overflowing. Truncated content
+# carries an explicit marker so the model knows to drill in on a smaller slice.
+MAX_TOOL_RESULT_CHARS = int(os.environ.get("ORCH_SUB_AGENT_TOOL_RESULT_CHAR_CAP", "30000"))
+# Soft input-token cap for the tool-use loop. When accumulated input tokens
+# exceed this, the next call is sent WITHOUT tools (forcing the model to
+# synthesize from what it has). Set well below 200k to leave room for the
+# system prompt + assistant turn + the final user message.
+SOFT_INPUT_TOKEN_CAP = int(os.environ.get("ORCH_SUB_AGENT_SOFT_INPUT_CAP", "150000"))
 
 SCHEMA_DIR = (
     Path(__file__).resolve().parents[3]
@@ -228,12 +246,38 @@ class SubAgentRunner:
         partial = False
 
         for turn in range(self.max_turns):
+            # Soft input-token cap: once we cross SOFT_INPUT_TOKEN_CAP, drop
+            # `tools` from subsequent calls so the model is forced to synthesize
+            # final JSON from what it already has. Without this, sub-agents that
+            # accumulate large tool_results cross 200k on the next request and
+            # crash with `prompt is too long`.
+            tools_for_call = effective_tools or None
+            tools_dropped = False
+            if total_in >= SOFT_INPUT_TOKEN_CAP:
+                tools_for_call = None
+                tools_dropped = True
+                if turn > 0:
+                    # Nudge the model: replace last tool_result chain with a
+                    # synthesis instruction. Cheaper than appending a user turn
+                    # because we still send a single user message.
+                    messages.append({
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                "[context-cap] Tool budget exhausted. Return ONLY the final "
+                                f"JSON object matching {self.schema_filename}. Do not call any "
+                                "more tools."
+                            ),
+                        }],
+                    })
+
             res = self._client.call(
                 system=system,
                 messages=messages,
                 model=self.model,
                 max_tokens=self.max_output_tokens,
-                tools=effective_tools or None,
+                tools=tools_for_call,
             )
             total_in += res.input_tokens
             total_out += res.output_tokens
@@ -263,6 +307,18 @@ class SubAgentRunner:
                 final_text = res.text
                 break
 
+            # If we dropped tools but the model still emitted tool_use blocks
+            # (rare but possible if it ignored the synthesis instruction),
+            # bail with whatever text content it produced.
+            if tools_dropped:
+                logger.warning(
+                    "sub_agent[%s] emitted tool_use after context cap — bailing",
+                    self.role,
+                )
+                final_text = res.text
+                partial = True
+                break
+
             # Route tool calls
             tool_results: List[Dict[str, Any]] = []
             for block in msg.content:
@@ -284,6 +340,16 @@ class SubAgentRunner:
                     )
                     serialized = json.dumps({"error": str(exc)})
                     is_error = True
+                # Per-result cap: prevents a single oversized tool_result from
+                # blowing past the next call's input window. Truncated payloads
+                # carry an explicit marker so the model knows the slice is partial.
+                if len(serialized) > MAX_TOOL_RESULT_CHARS:
+                    truncated = serialized[: MAX_TOOL_RESULT_CHARS - 200]
+                    serialized = (
+                        truncated
+                        + f'... [truncated by orchestrator: original was {len(serialized)} chars,'
+                        f' kept {MAX_TOOL_RESULT_CHARS - 200}. Narrow the query to drill in.]'
+                    )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,

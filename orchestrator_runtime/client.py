@@ -163,14 +163,75 @@ class OrchestratorClient:
             headers.update(extra_headers)
 
         t0 = time.time()
-        try:
-            if headers:
-                resp = self._client.messages.create(extra_headers=headers, **kwargs)
-            else:
-                resp = self._client.messages.create(**kwargs)
-        except anthropic.APIError as exc:
-            logger.error("Anthropic API error: %s", exc)
-            raise
+        # Transient-error retry. 529 OverloadedError + 429 RateLimitError +
+        # APIConnectionError are upstream capacity / network blips and recover
+        # within seconds. Permanent errors (auth, bad-request) are NOT retried.
+        # Worst case: 2 + 4 + 8 = 14s extra wall-clock before giving up.
+        _RETRY_MAX_ATTEMPTS = int(os.environ.get("ORCH_RETRY_MAX_ATTEMPTS", "4"))
+        _RETRY_BASE_DELAY_S = float(os.environ.get("ORCH_RETRY_BASE_DELAY_S", "2.0"))
+        _TRANSIENT = (
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+        )
+        # OverloadedError exists only in newer SDKs; fall back to status check.
+        _OverloadedError = getattr(anthropic, "OverloadedError", None)
+        if _OverloadedError is not None:
+            _TRANSIENT = _TRANSIENT + (_OverloadedError,)
+
+        attempt = 0
+        last_exc: Optional[Exception] = None
+        while attempt < _RETRY_MAX_ATTEMPTS:
+            try:
+                if headers:
+                    resp = self._client.messages.create(extra_headers=headers, **kwargs)
+                else:
+                    resp = self._client.messages.create(**kwargs)
+                break
+            except _TRANSIENT as exc:
+                attempt += 1
+                last_exc = exc
+                if attempt >= _RETRY_MAX_ATTEMPTS:
+                    logger.error(
+                        "Anthropic transient error after %d attempts: %s",
+                        attempt, exc,
+                    )
+                    raise
+                delay = _RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                logger.warning(
+                    "Anthropic transient error (attempt %d/%d, sleeping %.1fs): %s",
+                    attempt, _RETRY_MAX_ATTEMPTS, delay, exc,
+                )
+                time.sleep(delay)
+            except anthropic.APIStatusError as exc:
+                # Some SDK versions surface 529 as APIStatusError instead of
+                # OverloadedError. Treat status_code 429/529/5xx as transient.
+                code = getattr(exc, "status_code", None)
+                if code in (429, 529) or (code is not None and 500 <= code < 600):
+                    attempt += 1
+                    last_exc = exc
+                    if attempt >= _RETRY_MAX_ATTEMPTS:
+                        logger.error(
+                            "Anthropic status %s after %d attempts: %s",
+                            code, attempt, exc,
+                        )
+                        raise
+                    delay = _RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Anthropic status %s (attempt %d/%d, sleeping %.1fs): %s",
+                        code, attempt, _RETRY_MAX_ATTEMPTS, delay, exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("Anthropic API error: %s", exc)
+                    raise
+            except anthropic.APIError as exc:
+                logger.error("Anthropic API error: %s", exc)
+                raise
+        else:
+            # _RETRY_MAX_ATTEMPTS exhausted with no break — re-raise last_exc.
+            if last_exc is not None:
+                raise last_exc
 
         latency_ms = int((time.time() - t0) * 1000)
         text = "".join(b.text for b in resp.content if b.type == "text")

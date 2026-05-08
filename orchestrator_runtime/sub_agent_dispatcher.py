@@ -119,7 +119,7 @@ def _log_to_dlq(role: str, errors: List[str], payload: Dict[str, Any]) -> None:
     try:
         _client()._rest(
             "POST", "failed_reactor_events",
-            json={
+            json_body={
                 "payload": {
                     "source": f"sub_agent.{role}",
                     "schema_filename": f"{role}_review_v1.json"
@@ -148,7 +148,7 @@ def _log_call(
     try:
         rows = _client()._rest(
             "POST", "sub_agent_calls",
-            json={
+            json_body={
                 "assessment_id": assessment_id,
                 "role": role,
                 "query": question[:8000],
@@ -159,7 +159,7 @@ def _log_call(
                 "cost_usd": round(cost_usd, 4),
                 "latency_ms": latency_ms,
             },
-            headers={"Prefer": "return=representation"},
+            prefer="return=representation",
         ) or []
         if rows and isinstance(rows, list):
             return rows[0].get("id")

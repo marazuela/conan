@@ -59,8 +59,12 @@ def upcoming(
     s = date.fromisoformat(start_date) if start_date else today
     e = date.fromisoformat(end_date) if end_date else today + timedelta(days=180)
 
+    # NOTE: catalyst_universe has no top-level `sponsor_name` column; sponsor /
+    # company name is exposed inside raw_payload (sponsor_name for FDA-derived
+    # rows, company_name for SEC-derived). Select raw_payload and let callers
+    # pull it from there.
     params: Dict[str, str] = {
-        "select": "id,profile,catalyst_type,catalyst_date,ticker,sponsor_name,raw_payload",
+        "select": "id,profile,catalyst_type,catalyst_date,ticker,raw_payload",
         "catalyst_date": f"gte.{s.isoformat()}",
         "and": f"(catalyst_date.lte.{e.isoformat()})",
         "order": "catalyst_date.asc",
@@ -83,32 +87,43 @@ def historical(
 ) -> Dict[str, Any]:
     """Resolved historical AdComm / PDUFA events (catalyst_date < today)."""
     today = date.today().isoformat()
+    # See note in `upcoming()` — sponsor_name lives inside raw_payload, not
+    # as a top-level column. We select raw_payload and post-filter in Python.
     params: Dict[str, str] = {
-        "select": "id,profile,catalyst_type,catalyst_date,ticker,sponsor_name,raw_payload,material_outcome",
+        "select": "id,profile,catalyst_type,catalyst_date,ticker,raw_payload,material_outcome",
         "catalyst_date": f"lt.{today}",
         "order": "catalyst_date.desc",
-        "limit": str(min(max(1, limit), 200)),
+        # Pull a wider page when a sponsor filter applies so post-filtering
+        # has enough rows to choose from (most rows have a sponsor in payload).
+        "limit": str(min(max(1, limit * (4 if sponsor_search else 1)), 800)),
     }
     if catalyst_type:
         params["catalyst_type"] = f"eq.{catalyst_type}"
-    if sponsor_search:
-        params["sponsor_name"] = f"ilike.*{sponsor_search}*"
 
     rows = _client()._rest("GET", "catalyst_universe", params=params) or []
 
-    if drug_name or indication:
+    if sponsor_search or drug_name or indication:
+        sponsor_lc = sponsor_search.lower() if sponsor_search else None
+        drug_lc = drug_name.lower() if drug_name else None
+        indication_lc = indication.lower() if indication else None
         filtered: List[Dict[str, Any]] = []
         for r in rows:
             payload = r.get("raw_payload") or {}
             blob = " ".join(
                 str(v) for v in payload.values() if isinstance(v, (str, int, float))
             ).lower()
-            if drug_name and drug_name.lower() not in blob:
+            if sponsor_lc:
+                payload_sponsor = (
+                    str(payload.get("sponsor_name") or payload.get("company_name") or "")
+                ).lower()
+                if sponsor_lc not in payload_sponsor and sponsor_lc not in blob:
+                    continue
+            if drug_lc and drug_lc not in blob:
                 continue
-            if indication and indication.lower() not in blob:
+            if indication_lc and indication_lc not in blob:
                 continue
             filtered.append(r)
-        rows = filtered
+        rows = filtered[:limit]
 
     return {"count": len(rows), "events": rows}
 

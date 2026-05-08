@@ -166,8 +166,12 @@ class RegulatoryHistoryRunner(SubAgentRunner):
                 today = date.today()
                 s = date.fromisoformat(inp["start_date"]) if inp.get("start_date") else today
                 e = date.fromisoformat(inp["end_date"]) if inp.get("end_date") else today + timedelta(days=180)
+                # NOTE: catalyst_universe has no top-level `sponsor_name` column;
+                # sponsor lives in raw_payload.sponsor_name (FDA rows) or
+                # raw_payload.company_name (SEC rows). Selecting raw_payload is
+                # sufficient — callers can pull it from there.
                 params: Dict[str, str] = {
-                    "select": "id,profile,catalyst_type,catalyst_date,ticker,sponsor_name,raw_payload",
+                    "select": "id,profile,catalyst_type,catalyst_date,ticker,raw_payload",
                     "catalyst_date": f"gte.{s.isoformat()}",
                     "and": f"(catalyst_date.lte.{e.isoformat()})",
                     "order": "catalyst_date.asc",
@@ -180,21 +184,25 @@ class RegulatoryHistoryRunner(SubAgentRunner):
 
             if name == "fda_adcomm_historical":
                 today = date.today().isoformat()
+                # See note above re: sponsor_name living inside raw_payload.
+                # Pull a wider page when sponsor_search is set so post-filtering
+                # has enough rows to choose from.
+                limit_arg = int(inp.get("limit", 50))
+                sponsor = inp.get("sponsor_search")
                 params: Dict[str, str] = {
-                    "select": "id,profile,catalyst_type,catalyst_date,ticker,sponsor_name,raw_payload,material_outcome",
+                    "select": "id,profile,catalyst_type,catalyst_date,ticker,raw_payload,material_outcome",
                     "catalyst_date": f"lt.{today}",
                     "order": "catalyst_date.desc",
-                    "limit": str(min(int(inp.get("limit", 50)), 200)),
+                    "limit": str(min(limit_arg * (4 if sponsor else 1), 800)),
                 }
                 if inp.get("catalyst_type"):
                     params["catalyst_type"] = f"eq.{inp['catalyst_type']}"
-                if inp.get("sponsor_search"):
-                    params["sponsor_name"] = f"ilike.*{inp['sponsor_search']}*"
                 rows = _client()._rest("GET", "catalyst_universe", params=params) or []
 
+                sponsor_lc = sponsor.lower() if sponsor else None
                 drug = (inp.get("drug_name") or "").lower()
                 indi = (inp.get("indication") or "").lower()
-                if drug or indi:
+                if sponsor_lc or drug or indi:
                     filtered: List[Dict[str, Any]] = []
                     for r in rows:
                         payload = r.get("raw_payload") or {}
@@ -202,12 +210,18 @@ class RegulatoryHistoryRunner(SubAgentRunner):
                             str(v) for v in payload.values()
                             if isinstance(v, (str, int, float))
                         ).lower()
+                        if sponsor_lc:
+                            payload_sponsor = (
+                                str(payload.get("sponsor_name") or payload.get("company_name") or "")
+                            ).lower()
+                            if sponsor_lc not in payload_sponsor and sponsor_lc not in blob:
+                                continue
                         if drug and drug not in blob:
                             continue
                         if indi and indi not in blob:
                             continue
                         filtered.append(r)
-                    rows = filtered
+                    rows = filtered[:limit_arg]
                 return {"count": len(rows), "events": rows}
 
             raise ValueError(f"unknown tool: {name}")
