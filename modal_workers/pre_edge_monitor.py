@@ -11,6 +11,11 @@ Current deterministic rules:
   - takeover_candidate -> delivered when a definitive merger is seen OR when a
     same-entity merger_arb signal appears in the recent window.
   - binary_catalyst -> delivered on approval, killed on CRL / rejection.
+  - binary_catalyst price-implied fallback (2026-05-08) -> when no resolution
+    signal exists but the candidate is past its next_catalyst_date by 3-30 days
+    AND a 1d signal_price_snapshot shows a directional move past the threshold,
+    transition based on price evidence. Always upserts an info-severity flag
+    `price_implied_resolution` so an operator can override.
 
 The monitor intentionally does NOT touch `last_aging_evaluated_at`; that remains
 owned by candidate_aging's once-per-day sweep.
@@ -18,7 +23,7 @@ owned by candidate_aging's once-per-day sweep.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from modal_workers.shared.supabase_client import SupabaseClient
@@ -30,6 +35,16 @@ _WINDOW_DAYS_LITIGATION = 30
 
 _POSITIVE_BINARY_STATUSES = {"approved"}
 _NEGATIVE_BINARY_STATUSES = {"rejected", "crl", "resolved_crl"}
+
+# Price-implied resolution thresholds (P0 #3). Asymmetric: biotech binary
+# downside is typically larger than upside, so the kill bar is wider.
+_PRICE_DELIVER_THRESHOLD_PCT = 15.0
+_PRICE_KILL_THRESHOLD_PCT = -20.0
+# Catalyst must be 3-30 days in the past. <3d the price hasn't fully digested
+# the news; >30d the move is too stale to attribute to the catalyst.
+_PRICE_LOOKBACK_DAYS_MIN = 3
+_PRICE_LOOKBACK_DAYS_MAX = 30
+_PRICE_HORIZON_DAYS = 1
 
 
 def _window_days(scoring_profile: Optional[str]) -> int:
@@ -110,13 +125,141 @@ def _load_candidates(client: SupabaseClient) -> List[Dict[str, Any]]:
         "GET",
         "candidates",
         params={
-            "select": "id,ticker,mic,entity_id,state,scoring_profile,current_score,current_band",
+            "select": "id,ticker,mic,entity_id,state,scoring_profile,current_score,current_band,next_catalyst_date,next_catalyst_window",
             "state": "in.(watch,active)",
             "order": "current_score.desc.nullslast,ticker.asc",
             "limit": "500",
         },
     )
     return rows or []
+
+
+def _load_price_snapshot(
+    client: SupabaseClient,
+    *,
+    candidate_id: str,
+    ticker: Optional[str],
+    horizon_days: int = _PRICE_HORIZON_DAYS,
+) -> Optional[Dict[str, Any]]:
+    """Most-recent price snapshot for the candidate at the given horizon.
+
+    Prefers `candidate_id`-keyed rows; falls back to `ticker` if needed (the
+    daily evaluator may key snapshots by either depending on the subject_kind).
+    Returns None if no snapshot exists or the most recent snapshot is older
+    than _PRICE_LOOKBACK_DAYS_MAX days (stale).
+    """
+    params: Dict[str, str] = {
+        "select": "id,signed_move_pct,raw_move_pct,horizon_days,anchor_date,fetch_status,captured_at,thesis_direction",
+        "horizon_days": f"eq.{horizon_days}",
+        "order": "captured_at.desc",
+        "limit": "1",
+        "fetch_status": "eq.ok",
+    }
+    rows = client._rest("GET", "signal_price_snapshots", params={**params, "candidate_id": f"eq.{candidate_id}"}) or []
+    if not rows and ticker:
+        rows = client._rest("GET", "signal_price_snapshots", params={**params, "ticker": f"eq.{ticker}"}) or []
+    return rows[0] if rows else None
+
+
+def _catalyst_elapsed_days(candidate: Dict[str, Any]) -> Optional[int]:
+    """Days elapsed since the candidate's catalyst, or None if no catalyst date.
+
+    Uses `next_catalyst_date` first; falls back to upper bound of
+    `next_catalyst_window`. Returns positive int if the catalyst is in the past,
+    negative if still future.
+    """
+    today = date.today()
+    raw_date = candidate.get("next_catalyst_date")
+    if raw_date:
+        try:
+            cat = datetime.strptime(str(raw_date)[:10], "%Y-%m-%d").date()
+            return (today - cat).days
+        except (ValueError, TypeError):
+            pass
+    raw_window = candidate.get("next_catalyst_window")
+    if raw_window and isinstance(raw_window, str):
+        # daterange shape: "[2026-04-01,2026-06-30)" — extract upper bound.
+        try:
+            inner = raw_window.strip("[]()")
+            parts = [p.strip() for p in inner.split(",")]
+            if len(parts) == 2 and parts[1]:
+                cat = datetime.strptime(parts[1][:10], "%Y-%m-%d").date()
+                return (today - cat).days
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _price_implied_resolution(
+    candidate: Dict[str, Any],
+    snapshot: Optional[Dict[str, Any]],
+    elapsed_days: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Decide deliver/kill purely from a price snapshot.
+
+    Guards:
+      - Catalyst must be _PRICE_LOOKBACK_DAYS_MIN to _PRICE_LOOKBACK_DAYS_MAX
+        days in the past. Outside this window we don't fire.
+      - Snapshot must exist and have a numeric signed_move_pct.
+    """
+    if elapsed_days is None:
+        return None
+    if not (_PRICE_LOOKBACK_DAYS_MIN <= elapsed_days <= _PRICE_LOOKBACK_DAYS_MAX):
+        return None
+    if snapshot is None:
+        return None
+    raw_move = snapshot.get("signed_move_pct")
+    if raw_move is None:
+        return None
+    try:
+        signed_move_pct = float(raw_move)
+    except (ValueError, TypeError):
+        return None
+
+    if signed_move_pct >= _PRICE_DELIVER_THRESHOLD_PCT:
+        decision = "deliver"
+        reason = "binary_catalyst_price_implied_resolution"
+        outcome_type = "delivered"
+        outcome_notes = (
+            f"Price-implied transition: signed_move_pct={signed_move_pct:.2f} "
+            f"≥ {_PRICE_DELIVER_THRESHOLD_PCT:.1f} at horizon=1d, "
+            f"catalyst elapsed {elapsed_days}d. No resolution signal observed."
+        )
+    elif signed_move_pct <= _PRICE_KILL_THRESHOLD_PCT:
+        decision = "kill"
+        reason = "binary_catalyst_price_implied_failure"
+        outcome_type = "killed"
+        outcome_notes = (
+            f"Price-implied transition: signed_move_pct={signed_move_pct:.2f} "
+            f"≤ {_PRICE_KILL_THRESHOLD_PCT:.1f} at horizon=1d, "
+            f"catalyst elapsed {elapsed_days}d. No resolution signal observed."
+        )
+    else:
+        return None
+
+    return {
+        "decision": decision,
+        "reason": reason,
+        "signal": {
+            "signal_id": None,
+            "signal_type": "price_implied",
+            "scoring_profile": candidate.get("scoring_profile"),
+            "source_url": None,
+            "snapshot_id": snapshot.get("id"),
+            "signed_move_pct": signed_move_pct,
+            "horizon_days": snapshot.get("horizon_days"),
+            "anchor_date": snapshot.get("anchor_date"),
+        },
+        "outcome_type": outcome_type,
+        "outcome_notes": outcome_notes,
+        "price_evidence": {
+            "snapshot_id": snapshot.get("id"),
+            "signed_move_pct": signed_move_pct,
+            "horizon_days": snapshot.get("horizon_days"),
+            "anchor_date": snapshot.get("anchor_date"),
+            "elapsed_days": elapsed_days,
+        },
+    }
 
 
 def _load_recent_signals(
@@ -210,10 +353,24 @@ def _takeover_resolution(signals: List[Dict[str, Any]]) -> Optional[Dict[str, An
     }
 
 
-def _evaluate_candidate(candidate: Dict[str, Any], signals: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _evaluate_candidate(
+    candidate: Dict[str, Any],
+    signals: List[Dict[str, Any]],
+    *,
+    price_snapshot: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     profile = candidate.get("scoring_profile")
     if profile == "binary_catalyst":
-        return _binary_resolution(signals)
+        signal_resolution = _binary_resolution(signals)
+        if signal_resolution is not None:
+            return signal_resolution
+        # Fallback: no signal-based resolution; try price-implied. Returns None
+        # if outside the [MIN, MAX] elapsed-day window or below thresholds.
+        return _price_implied_resolution(
+            candidate,
+            price_snapshot,
+            _catalyst_elapsed_days(candidate),
+        )
     if profile == "takeover_candidate":
         return _takeover_resolution(signals)
     return None
@@ -222,13 +379,18 @@ def _evaluate_candidate(candidate: Dict[str, Any], signals: List[Dict[str, Any]]
 def _apply_transition(client: SupabaseClient, candidate: Dict[str, Any], resolution: Dict[str, Any]) -> Dict[str, Any]:
     signal = resolution["signal"]
     new_state = "delivered" if resolution["decision"] == "deliver" else "killed"
-    payload = {
+    payload: Dict[str, Any] = {
         "stage": "deterministic",
         "resolution_signal_id": signal.get("signal_id"),
         "resolution_signal_type": signal.get("signal_type"),
         "resolution_scoring_profile": signal.get("scoring_profile"),
         "resolution_source_url": signal.get("source_url"),
     }
+    # Price-implied resolutions carry no signal_id; forward the snapshot
+    # evidence so the audit trail is reconstructible.
+    price_evidence = resolution.get("price_evidence")
+    if price_evidence is not None:
+        payload["price_evidence"] = price_evidence
     result = client._rest(
         "POST",
         "rpc/candidate_transition_apply",
@@ -288,7 +450,19 @@ def pre_edge_monitor(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
                 entity_id=entity_id,
                 scoring_profile=candidate.get("scoring_profile"),
             )
-            resolution = _evaluate_candidate(candidate, signals)
+            # Load a price snapshot only when we might fall back to price-implied
+            # resolution: binary_catalyst with the catalyst 3-30 days in the past.
+            price_snapshot: Optional[Dict[str, Any]] = None
+            if candidate.get("scoring_profile") == "binary_catalyst":
+                elapsed = _catalyst_elapsed_days(candidate)
+                if elapsed is not None and _PRICE_LOOKBACK_DAYS_MIN <= elapsed <= _PRICE_LOOKBACK_DAYS_MAX:
+                    price_snapshot = _load_price_snapshot(
+                        client,
+                        candidate_id=candidate_id,
+                        ticker=candidate.get("ticker"),
+                    )
+
+            resolution = _evaluate_candidate(candidate, signals, price_snapshot=price_snapshot)
             if resolution is None:
                 _resolve_flag(client, kind="review_required", candidate_id=candidate_id)
                 summary["skipped"].append({"candidate_id": candidate_id, "ticker": ticker, "reason": "no_clear_resolution"})
@@ -310,6 +484,28 @@ def pre_edge_monitor(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
                 )
                 summary["flagged"].append({"candidate_id": candidate_id, "ticker": ticker, "reason": resolution["reason"]})
                 continue
+
+            # Price-implied resolutions get an info-severity audit flag with the
+            # snapshot evidence so an operator can override before the next run
+            # if the move was a sympathy spike rather than a real resolution.
+            if resolution.get("price_evidence") is not None:
+                _upsert_flag(
+                    client,
+                    severity="info",
+                    kind="price_implied_resolution",
+                    candidate_id=candidate_id,
+                    title=(
+                        f"{ticker}: pre_edge_monitor transitioned via price evidence "
+                        f"({resolution['decision']}, {resolution['price_evidence']['signed_move_pct']:.1f}%)"
+                    ),
+                    evidence={
+                        "candidate_id": candidate_id,
+                        "ticker": ticker,
+                        "reason": resolution["reason"],
+                        "decision": resolution["decision"],
+                        **resolution["price_evidence"],
+                    },
+                )
 
             transition = _apply_transition(client, candidate, resolution)
             _resolve_flag(client, kind="review_required", candidate_id=candidate_id)

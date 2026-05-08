@@ -869,8 +869,20 @@ def _run_approval_crosscheck(watchlist: List[dict], user_agent: str,
                              client: SupabaseClient,
                              max_checks: int = 10,
                              budget_deadline: Optional[float] = None) -> List[str]:
-    """D-046: mark watchlist entries as 'approved' if openFDA shows an AP within 180d
-    before the PDUFA date. Returns list of tickers newly marked."""
+    """D-046: mark watchlist entries as 'approved' if openFDA shows an approval
+    in the window [PDUFA - 180d, PDUFA + 60d]. Returns list of tickers newly
+    marked.
+
+    P0 #1 (2026-05-08): widened the upper bound from `<= pdufa_dt` to
+    `<= pdufa_dt + 60d`. The original window only captured early approvals
+    (where FDA acted before the target). For approvals on or after the PDUFA
+    date — the typical case — `approval_dt > pdufa_dt`, so the original check
+    failed silently and the watchlist entry stayed `active`, never triggering
+    a fda_decision signal emission. AXSM (PDUFA 2026-04-30, approved 2026-05-04
+    -> not detected for 8d) is the canonical example. The 60d post-PDUFA buffer
+    covers FDA's typical PDUFA-extension and late-decision tail without picking
+    up the next cycle.
+    """
     newly_approved: List[str] = []
     check_count = 0
     active = sorted(
@@ -894,11 +906,18 @@ def _run_approval_crosscheck(watchlist: List[dict], user_agent: str,
         try:
             approval_dt = datetime.strptime(approval_date_str, "%Y%m%d")
             pdufa_dt = datetime.strptime(entry.get("pdufa_date", ""), "%Y-%m-%d")
-            if (pdufa_dt - timedelta(days=180)) <= approval_dt <= pdufa_dt:
+            window_lo = pdufa_dt - timedelta(days=180)
+            window_hi = pdufa_dt + timedelta(days=60)
+            if window_lo <= approval_dt <= window_hi:
                 entry["status"] = "approved"
+                offset_days = (approval_dt - pdufa_dt).days
+                offset_label = (
+                    f"{offset_days}d before PDUFA" if offset_days < 0
+                    else (f"on PDUFA" if offset_days == 0 else f"{offset_days}d after PDUFA")
+                )
                 entry["notes"] = (entry.get("notes", "") +
-                    f" | AUTO-DETECTED: Approved {approval_date_str} per openFDA. "
-                    f"App# {result.get('application_number', 'N/A')}.")
+                    f" | AUTO-DETECTED: Approved {approval_date_str} per openFDA "
+                    f"({offset_label}). App# {result.get('application_number', 'N/A')}.")
                 newly_approved.append(ticker)
         except (ValueError, TypeError):
             pass
@@ -1398,8 +1417,13 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         if days is None:
             continue
         date_change_kind = _recent_pdufa_date_change_kind(entry)
-        # Keep recent post-PDUFA decisions within 14d window for fda_decision signals.
-        if days < -14 or (days > WINDOW_WATCHLIST and date_change_kind is None):
+        # Post-PDUFA emission window. P0 #1 (2026-05-08): for resolved statuses
+        # (approved/crl/resolved_crl/presumed_crl) extend to T+60 to match the
+        # widened approval crosscheck. For 'active' watchlist entries keep the
+        # original T+14 cutoff — those get demoted by Stage A in candidate_aging
+        # if the catalyst is genuinely past without a decision.
+        post_pdufa_floor = -60 if status in ("approved", "crl", "resolved_crl", "presumed_crl") else -14
+        if days < post_pdufa_floor or (days > WINDOW_WATCHLIST and date_change_kind is None):
             continue
 
         ticker = entry.get("ticker", "")
