@@ -216,29 +216,38 @@ class TestScanMergerSuppression:
         assert any("suppressed" in w for w in result.warnings)
 
     def test_8k_without_sibling_produces_signal(self):
-        """No merger sibling → legitimate activist 8-K survives."""
+        """No merger sibling → legitimate activist 8-K survives. Post-2026-05-11
+        dedup, all activist-keyword hits on a single (adsh, ticker) collapse to
+        one signal; the merged keyword variants are preserved on
+        raw_payload.keyword_buckets."""
         result = _run_scan(
             _make_cfg(),
             keyword_hits=[_hit(form="8-K")],
             sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False))
-        # 8 activist keywords × 1 hit each = 8 signals (adsh|keyword unique per pair).
-        assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
-        assert all(s.signal_type == "activist_keyword" for s in result.signals)
+        assert len(result.signals) == 1
+        assert result.signals[0].signal_type == "activist_keyword"
+        buckets = result.signals[0].raw_payload.get("keyword_buckets") or []
+        assert len(buckets) == len(efm.SIGNAL_KEYWORDS["activist"])
+        assert {b["signal_type"] for b in buckets} == {"activist_keyword"}
 
     def test_prer14a_bypasses_sibling_check(self):
         """Activist-specific forms (PRER14A, DFAN14A, SC 13D, SC 14D9) never
-        invoke the sibling check — preserves RGR/Beretta-style legit hits."""
+        invoke the sibling check — preserves RGR/Beretta-style legit hits.
+        Post-dedup, 8 keyword hits on same (adsh, ticker) collapse to 1."""
         result = _run_scan(
             _make_cfg(),
             keyword_hits=[_hit(form="PRER14A")],
             sibling_patch=patch.object(
                 efm, "_has_merger_sibling",
                 side_effect=AssertionError("sibling check must not run for non-8-K forms")))
-        assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+        assert len(result.signals) == 1
+        buckets = result.signals[0].raw_payload.get("keyword_buckets") or []
+        assert len(buckets) == len(efm.SIGNAL_KEYWORDS["activist"])
 
     def test_suppression_disabled_via_config(self):
         """Feature flag: cfg.config.activist_merger_sibling_suppression=False
-        restores pre-fix behavior."""
+        restores pre-fix behavior. Post-dedup still collapses to 1 signal per
+        (adsh, ticker)."""
         cfg = _make_cfg()
         cfg.config["activist_merger_sibling_suppression"] = False
         result = _run_scan(
@@ -248,7 +257,9 @@ class TestScanMergerSuppression:
                 efm, "_has_merger_sibling",
                 side_effect=AssertionError(
                     "sibling check must not run when suppression is disabled")))
-        assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+        assert len(result.signals) == 1
+        buckets = result.signals[0].raw_payload.get("keyword_buckets") or []
+        assert len(buckets) == len(efm.SIGNAL_KEYWORDS["activist"])
 
 
 def test_efts_search_retries_transient_failure_then_succeeds():
@@ -375,7 +386,11 @@ def test_allowlist_ticker_escapes_name_pattern_filter():
         sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
         company_tickers=(["RPAY"], "NYSE"),
     )
-    assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+    # Post-dedup: all activist keyword hits on the same (adsh, ticker) collapse
+    # to one signal; the merged keyword list is on raw_payload.keyword_buckets.
+    assert len(result.signals) == 1
+    buckets = result.signals[0].raw_payload.get("keyword_buckets") or []
+    assert len(buckets) == len(efm.SIGNAL_KEYWORDS["activist"])
     assert result.run_metrics["issuer_filtered_total"] == 0
 
 
@@ -744,7 +759,12 @@ class TestPostScanMarketCapPass:
             sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
             market_cap_side_effect=lambda client, ticker, memo: None,
         )
-        assert len(result.signals) == len(efm.SIGNAL_KEYWORDS["activist"])
+        # Post-dedup: 8 activist keyword hits on one (adsh, ticker) collapse to
+        # 1 signal; market_cap_unknown_total still records the single unresolved
+        # cap.
+        assert len(result.signals) == 1
+        buckets = result.signals[0].raw_payload.get("keyword_buckets") or []
+        assert len(buckets) == len(efm.SIGNAL_KEYWORDS["activist"])
         assert result.run_metrics["market_cap_unknown_total"] >= 1
         assert result.run_metrics["market_cap_filtered_total"] == 0
 
@@ -972,6 +992,131 @@ class TestScanSurfacesBudgetExhaustionAsPartialReason:
 
         assert "market_cap_budget_exhausted" in result.run_metrics["partial_reasons"]
         assert result.status == "partial"
+
+
+class TestDedupeCandidates:
+    """`_dedupe_candidates` collapses N keyword-bucket hits on the same
+    (accession, ticker) into one signal. Driven by the 2026-05-11 incident
+    where a single EDGAR filing emitted 6 thesis_jobs (one per bucket), each
+    rejected by thesis_writer as "Duplicate keyword variants" — burning one
+    AI routine run per duplicate."""
+
+    @staticmethod
+    def _sig(adsh, signal_type, keyword, strength=4, cik="0000012345"):
+        from datetime import datetime, timezone
+        return efm.Signal(
+            signal_id=f"edgar_{adsh.replace('-', '')}_{signal_type}_stub",
+            source_content_hash="sha256:stub",
+            source_date=datetime(2026, 5, 11, tzinfo=timezone.utc),
+            scan_date=datetime(2026, 5, 11, tzinfo=timezone.utc),
+            signal_type=signal_type,
+            raw_payload={"adsh": adsh, "matched_keyword": keyword,
+                         "keyword": keyword, "cik": cik},
+            strength_estimate=strength,
+        )
+
+    def test_collapses_same_adsh_ticker_to_one(self):
+        adsh = "0001193125-26-215652"
+        candidates = [
+            (self._sig(adsh, "mna_keyword", "merger agreement", 5), "EEX", "h1"),
+            (self._sig(adsh, "mna_keyword", "tender offer", 5), "EEX", "h2"),
+            (self._sig(adsh, "distress_keyword", "going concern", 5), "EEX", "h3"),
+            (self._sig(adsh, "governance_keyword", "poison pill", 4), "EEX", "h4"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        assert len(result) == 1
+        assert dropped == 3
+        winner = result[0][0]
+        # Same strength → highest _SIGNAL_TYPE_PRIORITY wins (mna > distress > governance).
+        assert winner.signal_type == "mna_keyword"
+        buckets = winner.raw_payload["keyword_buckets"]
+        assert len(buckets) == 4
+        assert {b["signal_type"] for b in buckets} == {
+            "mna_keyword", "distress_keyword", "governance_keyword",
+        }
+        # signal_id is now deterministic per (adsh, ticker).
+        assert winner.signal_id == "edgar_000119312526215652_EEX"
+
+    def test_different_tickers_keep_separate(self):
+        adsh = "0001193125-26-215652"
+        candidates = [
+            (self._sig(adsh, "mna_keyword", "merger agreement"), "EEX", "h1"),
+            (self._sig(adsh, "mna_keyword", "merger agreement"), "OTHER", "h2"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        assert len(result) == 2
+        assert dropped == 0
+
+    def test_different_adsh_keep_separate(self):
+        candidates = [
+            (self._sig("0001193125-26-215652", "mna_keyword", "merger agreement"), "EEX", "h1"),
+            (self._sig("0001193125-26-215654", "mna_keyword", "merger agreement"), "EEX", "h2"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        assert len(result) == 2
+        assert dropped == 0
+
+    def test_fda_outcome_outranks_keyword_buckets(self):
+        """If the same filing produces both an fda_outcome_8k AND an
+        mna_keyword hit, fda_outcome must win — it routes to the v3 FDA
+        binary-catalyst pipeline."""
+        adsh = "0001234567-26-000001"
+        candidates = [
+            (self._sig(adsh, "mna_keyword", "merger agreement", strength=5), "BIIB", "h1"),
+            (self._sig(adsh, "fda_outcome_8k", "NDA approved", strength=5), "BIIB", "h2"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        assert len(result) == 1
+        assert dropped == 1
+        assert result[0][0].signal_type == "fda_outcome_8k"
+
+    def test_strength_beats_priority(self):
+        """A stronger keyword bucket wins over a higher-priority but weaker one."""
+        adsh = "0001234567-26-000002"
+        candidates = [
+            (self._sig(adsh, "mna_keyword", "received indication of interest", strength=3), "FOO", "h1"),
+            (self._sig(adsh, "distress_keyword", "going concern", strength=5), "FOO", "h2"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        assert len(result) == 1
+        assert dropped == 1
+        assert result[0][0].signal_type == "distress_keyword"
+
+    def test_missing_ticker_falls_back_to_cik(self):
+        adsh = "0001234567-26-000003"
+        candidates = [
+            (self._sig(adsh, "mna_keyword", "merger agreement"), None, "h1"),
+            (self._sig(adsh, "distress_keyword", "going concern"), None, "h2"),
+        ]
+        result, dropped = efm._dedupe_candidates(candidates)
+        # Same cik fallback → collapsed.
+        assert len(result) == 1
+        assert dropped == 1
+        # signal_id falls back to cik.
+        assert result[0][0].signal_id == "edgar_000123456726000003_0000012345"
+
+    def test_signal_id_stable_across_winner_shifts(self):
+        """The signal_id is keyed only on (adsh, ticker) — re-running with a
+        different winning bucket must produce the same id, so the signals
+        INSERT layer upserts to the same row instead of creating a duplicate."""
+        adsh = "0001234567-26-000004"
+        first_run = efm._dedupe_candidates([
+            (self._sig(adsh, "mna_keyword", "merger agreement", strength=5), "BAR", "h1"),
+        ])[0]
+        second_run = efm._dedupe_candidates([
+            (self._sig(adsh, "distress_keyword", "going concern", strength=5), "BAR", "h2"),
+        ])[0]
+        assert first_run[0][0].signal_id == second_run[0][0].signal_id
+
+    def test_metric_records_dropped_count(self):
+        """End-to-end: `adsh_ticker_dedup_dropped` lands in run_metrics."""
+        result = _run_scan(
+            _make_cfg(),
+            keyword_hits=[_hit(form="8-K")],
+            sibling_patch=patch.object(efm, "_has_merger_sibling", return_value=False),
+        )
+        # 8 activist keyword hits on one (adsh, ticker) → 7 dropped.
+        assert result.run_metrics["adsh_ticker_dedup_dropped"] == 7
 
 
 class TestHttpGetUsesSharedSession:

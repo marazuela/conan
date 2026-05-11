@@ -250,6 +250,27 @@ _CATEGORY_SIGNAL_TYPE: Dict[str, str] = {
     "fda_outcome": "fda_outcome_8k",
 }
 
+# Signal types produced by the keyword phase. These are the only ones that
+# get (adsh, ticker)-deduped together — filing-type signals (activist_ownership,
+# late_filings) come from a different code path that already dedupes by adsh
+# alone (`seen_adsh_filing`), and carry distinct semantics (the filing form
+# itself is the signal) that shouldn't collapse into a keyword bucket.
+_KEYWORD_PHASE_SIGNAL_TYPES: set = {
+    "activist_keyword", "mna_keyword", "distress_keyword",
+    "governance_keyword", "fda_outcome_8k",
+}
+
+# Tie-breaker priority for (adsh, ticker) dedup within the keyword phase.
+# Higher wins. fda_outcome_8k routes to the FDA binary-catalyst path in v3 →
+# never let a generic keyword bucket displace it on the same filing.
+_SIGNAL_TYPE_PRIORITY: Dict[str, int] = {
+    "fda_outcome_8k":     100,
+    "mna_keyword":         40,
+    "activist_keyword":    30,
+    "distress_keyword":    20,
+    "governance_keyword":  10,
+}
+
 # ---------------------------------------------------------------------------
 # Rate limiter (verbatim from v1)
 # ---------------------------------------------------------------------------
@@ -356,6 +377,7 @@ def _new_run_metrics(
         "efts_failures": 0,
         "efts_failure_details": [],
         "dedup_skipped": 0,
+        "adsh_ticker_dedup_dropped": 0,
         "issuer_filtered_total": 0,
         "issuer_filtered_by_reason": {},
         "issuer_filter_samples": [],
@@ -1327,6 +1349,98 @@ def _build_signal(
     )
 
 
+def _candidate_group_key(sig: Signal, ticker: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Group key for (adsh, ticker) dedup. Falls back to cik when ticker is
+    unresolved so unresolvable issuers still collapse correctly. Returns None
+    when no adsh is present OR the signal didn't come from the keyword phase
+    (filing-type signals are not part of this dedup — see
+    `_KEYWORD_PHASE_SIGNAL_TYPES`)."""
+    if sig.signal_type not in _KEYWORD_PHASE_SIGNAL_TYPES:
+        return None
+    adsh = str(sig.raw_payload.get("adsh") or "")
+    if not adsh:
+        return None
+    bucket_key = (ticker or "").upper() or str(sig.raw_payload.get("cik") or "")
+    return (adsh, bucket_key)
+
+
+def _dedupe_candidates(
+    candidates: List[Tuple[Signal, Optional[str], Optional[str]]],
+) -> Tuple[List[Tuple[Signal, Optional[str], Optional[str]]], int]:
+    """Collapse keyword-phase candidates with the same (accession_number,
+    ticker) into one signal.
+
+    Before this pass, a single EDGAR filing matching N keywords across multiple
+    buckets produced N signals → N thesis_jobs → N AI routine runs that the
+    thesis_writer rejected one-by-one with "Duplicate keyword variants". Now
+    the variants never enter the pipeline; their (signal_type, keyword) pairs
+    are merged into the winner's raw_payload["keyword_buckets"] so downstream
+    reporting still sees every bucket that matched.
+
+    Scope: keyword-phase signals only (activist/mna/distress/governance_keyword
+    + fda_outcome_8k). Filing-type signals (activist_ownership, late_filings)
+    are passed through unchanged — they carry distinct semantics (the form
+    being filed is the signal, not a keyword inside it) and have their own
+    `seen_adsh_filing` dedup upstream.
+
+    Winner per group:
+      1. highest strength_estimate
+      2. then highest _SIGNAL_TYPE_PRIORITY (preserves fda_outcome_8k over
+         bucket-keyword variants on the same filing)
+      3. then stable insertion order
+
+    The winner's signal_id is rewritten to a deterministic id keyed on
+    (adsh, ticker) so re-runs with a different bucket winner upsert to the
+    same row instead of producing a new signal.
+    """
+    groups: Dict[Tuple[str, str], List[int]] = {}
+    passthrough: List[int] = []
+    for idx, (sig, ticker, _) in enumerate(candidates):
+        key = _candidate_group_key(sig, ticker)
+        if key is None:
+            passthrough.append(idx)
+            continue
+        groups.setdefault(key, []).append(idx)
+
+    keep: List[int] = list(passthrough)
+    dropped = 0
+
+    def _priority(idx: int) -> Tuple[int, int, int]:
+        sig = candidates[idx][0]
+        return (
+            sig.strength_estimate or 0,
+            _SIGNAL_TYPE_PRIORITY.get(sig.signal_type, 0),
+            -idx,  # earlier insertion wins ties
+        )
+
+    for (adsh, bucket_key), idxs in groups.items():
+        winner_idx = max(idxs, key=_priority)
+        keep.append(winner_idx)
+
+        buckets: List[Dict[str, str]] = []
+        seen: set[Tuple[str, str]] = set()
+        # Preserve original encounter order for the merged bucket list.
+        for idx in sorted(idxs):
+            sig = candidates[idx][0]
+            kw = str(sig.raw_payload.get("matched_keyword") or "")
+            entry = (sig.signal_type, kw)
+            if entry in seen:
+                continue
+            seen.add(entry)
+            buckets.append({"signal_type": sig.signal_type, "keyword": kw})
+
+        winner_sig = candidates[winner_idx][0]
+        winner_sig.raw_payload["keyword_buckets"] = buckets
+        # Deterministic per-(adsh, ticker) signal_id so future scans of the
+        # same filing upsert to the same row even if the winning bucket shifts.
+        adsh_clean = adsh.replace("-", "")
+        winner_sig.signal_id = f"edgar_{adsh_clean}_{bucket_key}" if bucket_key else f"edgar_{adsh_clean}"
+        dropped += len(idxs) - 1
+
+    keep.sort()
+    return [candidates[i] for i in keep], dropped
+
+
 def _metric_warnings(metrics: Dict[str, Any]) -> List[str]:
     warnings: List[str] = []
     partial_reasons = metrics.get("partial_reasons") or []
@@ -1644,6 +1758,17 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             # dedup hash so the post-scan pass won't write a dedup row.
             candidates.append((sig, ticker, None))
         run_metrics["filing_types_completed"].append(form_type)
+
+    # --- (adsh, ticker) dedup ---
+    # A single EDGAR 8-K commonly trips multiple keyword buckets (e.g. the
+    # same merger 8-K hits "merger agreement" AND "definitive agreement" AND
+    # "change of control"), and pre-2026-05-11 each match emitted its own
+    # signal → its own thesis_job → its own AI routine run, with thesis_writer
+    # declining the duplicates one at a time. Collapse here so the redundant
+    # variants never enter the pipeline; the merged bucket list is preserved
+    # on `raw_payload.keyword_buckets`.
+    candidates, dedup_dropped = _dedupe_candidates(candidates)
+    run_metrics["adsh_ticker_dedup_dropped"] = dedup_dropped
 
     # --- Post-scan market-cap filter pass ---
     # yfinance lookups (unthrottled but 0.5–2s each cold) happen here, after
