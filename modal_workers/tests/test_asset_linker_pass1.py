@@ -168,15 +168,16 @@ def test_load_documents_does_not_query_asset_documents():
 
 
 # ---------------------------------------------------------------------------
-# _mark_classified — terminal-state PATCH
+# _mark_classified — terminal-state PATCH, returns bool for caller's stats
 # ---------------------------------------------------------------------------
 
 def test_mark_classified_patches_documents_with_result():
     sb = MagicMock()
     sb._rest = MagicMock(return_value=None)
 
-    _mark_classified(sb, "doc-xyz", "no_match")
+    ok = _mark_classified(sb, "doc-xyz", "no_match")
 
+    assert ok is True
     sb._rest.assert_called_once()
     call = sb._rest.call_args
     assert call.args[0] == "PATCH"
@@ -193,17 +194,21 @@ def test_mark_classified_patches_documents_with_result():
 def test_mark_classified_accepts_each_valid_result(result):
     sb = MagicMock()
     sb._rest = MagicMock(return_value=None)
-    _mark_classified(sb, "doc-1", result)
+    ok = _mark_classified(sb, "doc-1", result)
+    assert ok is True
     body = sb._rest.call_args.kwargs["json_body"]
     assert body["linker_classified_result"] == result
 
 
-def test_mark_classified_swallows_patch_failure():
-    """PATCH failure must not crash the run — observability is best-effort."""
+def test_mark_classified_returns_false_on_patch_failure():
+    """PATCH failure must NOT raise (observability is best-effort) AND must
+    return False so the caller can increment LinkerStats.marker_failures.
+    Silent True-returns here would silently regress the documents.linker_
+    classified_at mechanism — the very bug the marker prevents."""
     sb = MagicMock()
     sb._rest = MagicMock(side_effect=Exception("network blip"))
-    # Must not raise
-    _mark_classified(sb, "doc-1", "linked")
+    ok = _mark_classified(sb, "doc-1", "linked")
+    assert ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -269,28 +274,82 @@ def test_classify_document_parse_ok_true_on_valid_link():
 # _start_run_row / _finish_run_row — observability row lifecycle
 # ---------------------------------------------------------------------------
 
-def test_start_run_row_inserts_running_status():
+def test_start_run_row_reclaims_stale_then_inserts():
+    """Two-step protocol: PATCH any stale running row to 'failed', then POST
+    a fresh 'running' row. Both calls happen in order."""
     sb = MagicMock()
-    sb._rest = MagicMock(return_value=[{"id": "run-uuid"}])
+    sb._rest = MagicMock(side_effect=[None, [{"id": "run-uuid"}]])
 
-    run_id = _start_run_row(sb, "pass1", "claude-sonnet-4-5-20250929")
+    run_id, lock_held = _start_run_row(sb, "pass1", "claude-sonnet-4-5-20250929")
 
     assert run_id == "run-uuid"
-    sb._rest.assert_called_once()
-    call = sb._rest.call_args
-    assert call.args[0] == "POST"
-    assert call.args[1] == "asset_linker_runs"
-    body = call.kwargs["json_body"]
-    assert body["pass"] == "pass1"
-    assert body["model"] == "claude-sonnet-4-5-20250929"
-    assert body["status"] == "running"
+    assert lock_held is True
+    assert sb._rest.call_count == 2
+    # First call: PATCH reclaim of stale running rows
+    reclaim = sb._rest.call_args_list[0]
+    assert reclaim.args == ("PATCH", "asset_linker_runs")
+    assert reclaim.kwargs["params"]["pass"] == "eq.pass1"
+    assert reclaim.kwargs["params"]["status"] == "eq.running"
+    assert "lt." in reclaim.kwargs["params"]["started_at"]
+    assert reclaim.kwargs["json_body"]["status"] == "failed"
+    # Second call: POST a fresh running row
+    insert = sb._rest.call_args_list[1]
+    assert insert.args == ("POST", "asset_linker_runs")
+    assert insert.kwargs["json_body"]["pass"] == "pass1"
+    assert insert.kwargs["json_body"]["status"] == "running"
 
 
-def test_start_run_row_returns_none_on_failure():
-    """Observability is best-effort — a failed INSERT must not block the run."""
+def test_start_run_row_returns_false_lock_on_conflict():
+    """Concurrency guard: if another instance holds the lock (partial unique
+    index trips a 23505 / duplicate-key error), return (None, False) so the
+    caller exits cleanly without doing duplicate work."""
     sb = MagicMock()
-    sb._rest = MagicMock(side_effect=Exception("PostgREST down"))
-    assert _start_run_row(sb, "pass1", "m") is None
+
+    def _rest(method, path, **_kwargs):
+        if method == "PATCH":
+            return None  # stale reclaim is allowed to succeed
+        # Simulate Postgres unique-violation on INSERT
+        raise Exception(
+            "duplicate key value violates unique constraint "
+            "\"asset_linker_runs_one_running_per_pass\""
+        )
+    sb._rest = MagicMock(side_effect=_rest)
+
+    run_id, lock_held = _start_run_row(sb, "pass1", "m")
+
+    assert run_id is None
+    assert lock_held is False, "Concurrent-run conflict must signal NO lock"
+
+
+def test_start_run_row_non_conflict_insert_failure_still_runs():
+    """If the INSERT fails for a non-conflict reason (e.g. PostgREST 503),
+    caller should still proceed (lock_held=True with run_id=None) so the
+    Modal cron tick doesn't lose a 15-min slot to transient infra issues."""
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if method == "PATCH":
+            return None
+        raise Exception("503 Service Unavailable")
+    sb._rest = MagicMock(side_effect=_rest)
+
+    run_id, lock_held = _start_run_row(sb, "pass1", "m")
+    assert run_id is None
+    assert lock_held is True
+
+
+def test_start_run_row_reclaim_failure_does_not_block_insert():
+    """Stale-row reclaim is best-effort. If the PATCH fails for any reason,
+    INSERT must still be attempted — the unique index will reject if a real
+    conflict exists."""
+    sb = MagicMock()
+    sb._rest = MagicMock(side_effect=[
+        Exception("reclaim failed"),
+        [{"id": "run-uuid"}],
+    ])
+    run_id, lock_held = _start_run_row(sb, "pass1", "m")
+    assert run_id == "run-uuid"
+    assert lock_held is True
 
 
 def test_finish_run_row_patches_with_pass1_fields():
@@ -445,4 +504,115 @@ def test_main_marks_linked_after_successful_insert(patched_main_env):
     linked_marks = [r for _, r in marks if r == "linked"]
     assert len(linked_marks) >= 1, (
         "Successful link insert should mark 'linked' — got marks: %r" % marks
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hardening: silent marker failures, unexpected exceptions, lock conflicts
+# ---------------------------------------------------------------------------
+
+def test_main_skips_when_another_run_holds_the_lock():
+    """If _start_run_row reports lock_held=False (concurrent-run conflict),
+    main() must exit 0 WITHOUT loading assets, fetching docs, or calling
+    Sonnet — otherwise concurrent ticks still double the spend."""
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if method == "PATCH" and path == "asset_linker_runs":
+            return None  # reclaim succeeds (no stale rows)
+        if method == "POST" and path == "asset_linker_runs":
+            # Simulate the partial unique index rejecting a second running row
+            raise Exception(
+                "duplicate key value violates unique constraint "
+                "\"asset_linker_runs_one_running_per_pass\""
+            )
+        # If we reach any other table the test has FAILED — main proceeded
+        raise AssertionError(
+            f"main() called {method} {path} despite lock conflict — "
+            "concurrent-run guard regressed"
+        )
+    sb._rest = MagicMock(side_effect=_rest)
+    anth = MagicMock()
+
+    with patch("modal_workers.extractor.asset_linker.SupabaseClient",
+               return_value=sb), \
+         patch("modal_workers.extractor.asset_linker.anthropic.Anthropic",
+               return_value=anth):
+        from modal_workers.extractor.asset_linker import main
+        rc = main(["--max", "20", "--budget-usd", "5.00"])
+
+    assert rc == 0
+    # Sonnet must NOT have been called
+    anth.messages.create.assert_not_called()
+
+
+def test_main_increments_marker_failures_when_patch_fails(patched_main_env):
+    """Silent _mark_classified failures were the gap-3 regression vector:
+    if a PATCH fails (network blip, rate limit on the documents table), the
+    doc stays unmarked and re-Sonnets every cron tick. The new contract is
+    that LinkerStats.marker_failures counts these so a run summary surfaces
+    the silent regression."""
+    sb, anth, marks = patched_main_env
+    anth.messages.create = MagicMock(
+        return_value=_anthropic_response('{"links": []}')
+    )
+
+    # Override the PATCH-to-documents path to throw — simulate marker failure
+    original_rest = sb._rest.side_effect
+
+    def _rest_with_patch_fail(method, path, **kwargs):
+        if method == "PATCH" and path == "documents":
+            raise Exception("simulated PostgREST 5xx")
+        return original_rest(method, path, **kwargs)
+    sb._rest = MagicMock(side_effect=_rest_with_patch_fail)
+
+    # We need to inspect the LinkerStats — capture by spying on _finish_run_row.
+    captured: List[Any] = []
+    from modal_workers.extractor import asset_linker as al_module
+    original_finish = al_module._finish_run_row
+
+    def _spy_finish(client, run_id, status, stats):
+        captured.append((status, stats.marker_failures, stats.docs_classified))
+        return original_finish(client, run_id, status, stats)
+
+    with patch.object(al_module, "_finish_run_row", side_effect=_spy_finish):
+        rc = al_module.main(["--max", "5", "--budget-usd", "1.00"])
+
+    assert rc == 0
+    assert captured, "_finish_run_row was not called"
+    status, marker_failures, docs_classified = captured[-1]
+    assert status == "completed", f"expected completed, got {status}"
+    assert marker_failures > 0, (
+        "_mark_classified PATCH failures MUST increment LinkerStats.marker_failures "
+        f"— got {marker_failures} on a run where every PATCH failed"
+    )
+
+
+def test_main_unexpected_exception_in_classify_does_not_kill_run(patched_main_env):
+    """Broader exception handler around classify_document: a non-Anthropic
+    surprise (httpx error, malformed response shape, etc.) on ONE doc must
+    not kill the whole batch. Without this catch, the run row stays in
+    status='running' and blocks the next 15-min cron tick via the unique
+    partial index."""
+    sb, anth, marks = patched_main_env
+
+    # First call raises a non-Anthropic exception; subsequent calls succeed
+    counter = {"n": 0}
+
+    def _create(**_kwargs):
+        counter["n"] += 1
+        if counter["n"] == 1:
+            raise RuntimeError("simulated httpx.RemoteProtocolError")
+        return _anthropic_response('{"links": []}')
+
+    anth.messages.create = MagicMock(side_effect=_create)
+
+    from modal_workers.extractor.asset_linker import main
+    rc = main(["--max", "5", "--budget-usd", "1.00"])
+
+    # Run must complete cleanly with rc=0 (one doc errored, others marked)
+    assert rc == 0
+    # At least one doc must have been marked (the surviving classify calls)
+    assert any(r == "no_match" for _, r in marks), (
+        "Surviving docs must still be marked — got marks: %r" % marks
     )

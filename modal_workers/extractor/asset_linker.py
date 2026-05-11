@@ -81,6 +81,7 @@ class LinkerStats:
     output_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
+    marker_failures: int = 0   # _mark_classified PATCH failures (silent regression vector)
 
 
 # Sonnet 4.5 pricing (USD per 1M tokens, as of plan-time):
@@ -175,9 +176,15 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200) -> List[
     return rows
 
 
-def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> None:
+def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> bool:
     """Stamp documents.linker_classified_at + result for a terminal pass-1
-    outcome. `result` is one of: linked, no_match, parse_error."""
+    outcome. `result` is one of: linked, no_match, parse_error.
+
+    Returns True on success, False on PATCH failure. Caller MUST increment
+    `LinkerStats.marker_failures` on False — a silent failure here would
+    leave the doc unmarked and the next cron run re-Sonnets it, regressing
+    the very bug the marker mechanism was added to prevent.
+    """
     from datetime import datetime, timezone
     try:
         client._rest(
@@ -188,14 +195,57 @@ def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> None:
                 "linker_classified_result": result,
             },
         )
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("mark_classified PATCH failed for doc %s (%s): %s",
                        doc_id, result, exc)
+        return False
 
 
-def _start_run_row(client: SupabaseClient, pass_name: str, model: str) -> Optional[str]:
-    """Insert asset_linker_runs row with status='running'. Returns row id or
-    None if the insert failed (we keep running — observability is best-effort)."""
+STALE_RUNNING_AFTER_MINUTES = 30
+LOCK_CONFLICT = "asset_linker_runs_one_running_per_pass"
+
+
+def _start_run_row(client: SupabaseClient, pass_name: str, model: str) -> tuple[Optional[str], bool]:
+    """Acquire the per-pass concurrency lock by inserting a row with
+    status='running'. Returns (run_id, lock_held).
+
+    Steps:
+      1. Reclaim any 'running' row that started >30min ago (zombie from a
+         crashed previous run) by PATCHing its status to 'failed'.
+      2. INSERT a new 'running' row. The partial unique index
+         asset_linker_runs_one_running_per_pass enforces at most one running
+         row per pass — a 409 here means another instance is actively running
+         and this caller should skip cleanly.
+
+    lock_held=False means we did NOT acquire the lock — the caller should
+    return early without doing any work. lock_held=True with run_id=None
+    means the INSERT succeeded but the response didn't return a row (rare
+    PostgREST quirk); caller should proceed but observability is degraded.
+    """
+    from datetime import datetime, timedelta, timezone
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(minutes=STALE_RUNNING_AFTER_MINUTES)).isoformat()
+    try:
+        client._rest(
+            "PATCH", "asset_linker_runs",
+            params={
+                "pass": f"eq.{pass_name}",
+                "status": "eq.running",
+                "started_at": f"lt.{cutoff_iso}",
+            },
+            json_body={
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "notes": "reclaimed: stale running row exceeded "
+                         f"{STALE_RUNNING_AFTER_MINUTES}min threshold",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Reclaim failure is non-fatal — INSERT will still fail correctly if
+        # an active run holds the lock.
+        logger.warning("stale-row reclaim failed (continuing): %s", exc)
+
     try:
         res = client._rest(
             "POST", "asset_linker_runs",
@@ -203,11 +253,17 @@ def _start_run_row(client: SupabaseClient, pass_name: str, model: str) -> Option
             prefer="return=representation",
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("asset_linker_runs start INSERT failed: %s", exc)
-        return None
+        msg = str(exc)
+        if LOCK_CONFLICT in msg or "23505" in msg or "duplicate key" in msg.lower():
+            logger.info("asset_linker %s lock held by concurrent run — skipping",
+                        pass_name)
+            return None, False
+        logger.warning("asset_linker_runs INSERT failed (proceeding without "
+                       "observability row): %s", exc)
+        return None, True
     if res and isinstance(res, list) and res:
-        return res[0].get("id")
-    return None
+        return res[0].get("id"), True
+    return None, True
 
 
 def _finish_run_row(
@@ -216,10 +272,16 @@ def _finish_run_row(
     status: str,
     stats: "LinkerStats | Pass2Stats",
 ) -> None:
-    """PATCH the run row with terminal stats. Best-effort — silent on failure."""
+    """PATCH the run row with terminal stats. Best-effort — silent on failure.
+
+    marker_failures is surfaced in the notes column when non-zero so an
+    operator scanning asset_linker_runs can spot silent regression of the
+    documents.linker_classified_at mechanism (the original incident vector).
+    """
     if not run_id:
         return
     from datetime import datetime, timezone
+    marker_failures = getattr(stats, "marker_failures", 0)
     patch: Dict[str, Any] = {
         "status": status,
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -229,6 +291,10 @@ def _finish_run_row(
         "output_tokens": getattr(stats, "output_tokens", 0),
         "cost_usd": round(float(getattr(stats, "cost_usd", 0.0)), 4),
     }
+    if marker_failures > 0:
+        patch["notes"] = (f"marker_failures={marker_failures} — these docs "
+                          "were classified but NOT stamped; next run will "
+                          "re-Sonnet them")
     # Pass-1 only fields
     if isinstance(stats, LinkerStats):
         patch["docs_seen"] = stats.docs_seen
@@ -543,121 +609,151 @@ def main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = LinkerStats()
-    run_id = None if args.dry_run else _start_run_row(sb, "pass1", MODEL)
+    run_id: Optional[str] = None
+    lock_held = True  # dry-run path doesn't take the lock
+    if not args.dry_run:
+        run_id, lock_held = _start_run_row(sb, "pass1", MODEL)
+        if not lock_held:
+            logger.info("Another pass1 run is active — exiting without work.")
+            return 0
     budget_exceeded = False
+    crashed = False
 
-    assets = load_active_assets(sb, only_asset_id=args.asset_id)
-    if not assets:
-        logger.error("No active fda_assets found")
-        _finish_run_row(sb, run_id, "failed", stats)
-        return 1
-    logger.info("Loaded %d active asset(s)", len(assets))
+    try:
+        assets = load_active_assets(sb, only_asset_id=args.asset_id)
+        if not assets:
+            logger.error("No active fda_assets found")
+            return 1
+        logger.info("Loaded %d active asset(s)", len(assets))
 
-    keyword_index = build_keyword_index(assets)
-    logger.info("Built keyword index with %d unique keywords", len(keyword_index))
+        keyword_index = build_keyword_index(assets)
+        logger.info("Built keyword index with %d unique keywords", len(keyword_index))
 
-    docs = load_documents_to_link(sb, max_docs=args.max)
-    logger.info("Loaded %d unlinked document(s)", len(docs))
-    stats.docs_seen = len(docs)
+        docs = load_documents_to_link(sb, max_docs=args.max)
+        logger.info("Loaded %d unlinked document(s)", len(docs))
+        stats.docs_seen = len(docs)
 
-    for doc in docs:
-        if stats.cost_usd > args.budget_usd:
-            logger.warning("Budget exceeded ($%.2f > $%.2f); stopping early",
-                           stats.cost_usd, args.budget_usd)
-            budget_exceeded = True
-            break
+        for doc in docs:
+            if stats.cost_usd > args.budget_usd:
+                logger.warning("Budget exceeded ($%.2f > $%.2f); stopping early",
+                               stats.cost_usd, args.budget_usd)
+                budget_exceeded = True
+                break
 
-        text = _load_doc_text(doc, sb)
-        if not text:
-            logger.warning("doc %s has no text; skipping", doc["id"])
-            stats.errors += 1
-            continue
+            text = _load_doc_text(doc, sb)
+            if not text:
+                logger.warning("doc %s has no text; skipping", doc["id"])
+                stats.errors += 1
+                continue
 
-        candidates = prefilter_doc(text, keyword_index)
-        if not candidates:
-            stats.docs_prefilter_skipped += 1
-            # Prefilter is deterministic given the current active asset set —
-            # mark as no_match so the doc doesn't reappear next cron run. If
-            # new assets are added later, a separate trigger should reset
-            # linker_classified_at = NULL for docs needing re-evaluation.
-            if not args.dry_run:
-                _mark_classified(sb, doc["id"], "no_match")
-            continue
-        stats.docs_prefilter_passed += 1
+            candidates = prefilter_doc(text, keyword_index)
+            if not candidates:
+                stats.docs_prefilter_skipped += 1
+                # Prefilter is deterministic given the current active asset set —
+                # mark as no_match so the doc doesn't reappear next cron run. If
+                # new assets are added later, a separate trigger should reset
+                # linker_classified_at = NULL for docs needing re-evaluation.
+                if not args.dry_run and not _mark_classified(sb, doc["id"], "no_match"):
+                    stats.marker_failures += 1
+                continue
+            stats.docs_prefilter_passed += 1
 
-        # Collect distinct keywords that triggered the match (for trimming)
-        matched_kws: List[str] = []
-        text_lower = text.lower()
-        for kw in keyword_index:
-            if kw in text_lower:
-                matched_kws.append(kw)
+            # Collect distinct keywords that triggered the match (for trimming)
+            matched_kws: List[str] = []
+            text_lower = text.lower()
+            for kw in keyword_index:
+                if kw in text_lower:
+                    matched_kws.append(kw)
 
-        try:
-            links, in_tok, out_tok, parse_ok = classify_document(
-                a_client, doc, candidates, text, matched_kws,
-            )
-        except anthropic.APIError as exc:
-            # Transient — don't mark, let the next cron run retry.
-            logger.warning("API error for doc %s: %s", doc["id"], exc)
-            stats.errors += 1
-            time.sleep(2.0)
-            continue
-
-        stats.api_calls += 1
-        stats.input_tokens += in_tok
-        stats.output_tokens += out_tok
-        stats.cost_usd += _estimate_cost(in_tok, out_tok)
-        stats.docs_classified += 1
-
-        if not parse_ok:
-            # Sonnet returned malformed JSON. The call was paid for; retrying
-            # almost certainly produces the same garbage. Mark to stop the loop.
-            stats.errors += 1
-            if not args.dry_run:
-                _mark_classified(sb, doc["id"], "parse_error")
-            continue
-
-        if not links:
-            logger.info("doc %s [%s] %s — no links emitted (cost so far $%.3f)",
-                        doc["id"], doc.get("source"), doc.get("doc_type"),
-                        stats.cost_usd)
-            if not args.dry_run:
-                _mark_classified(sb, doc["id"], "no_match")
-            continue
-
-        if args.dry_run:
-            for l in links:
-                logger.info(
-                    "[dry-run] doc %s -> asset %s link_type=%s conf=%.2f material=%s",
-                    doc["id"], l.asset_id, l.link_type,
-                    l.extraction_confidence, l.is_material,
+            try:
+                links, in_tok, out_tok, parse_ok = classify_document(
+                    a_client, doc, candidates, text, matched_kws,
                 )
-            continue
+            except anthropic.APIError as exc:
+                # Transient — don't mark, let the next cron run retry.
+                logger.warning("API error for doc %s: %s", doc["id"], exc)
+                stats.errors += 1
+                time.sleep(2.0)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                # Catch-all for non-Anthropic surprises (httpx errors, malformed
+                # response shapes, etc.). Treat like a transient APIError: don't
+                # mark, don't let one bad doc kill the whole run. Without this
+                # broader catch, an uncaught exception leaves the run row in
+                # status='running' forever and breaks the next 15-min cron tick.
+                logger.exception("Unexpected error classifying doc %s: %s",
+                                 doc["id"], exc)
+                stats.errors += 1
+                continue
 
-        inserted, skipped = insert_links(sb, doc["id"], links)
-        stats.links_inserted += inserted
-        stats.links_dedup_skipped += skipped
-        _mark_classified(sb, doc["id"], "linked")
-        logger.info(
-            "doc %s [%s] %s -> %d link(s) inserted, %d skipped (cost $%.3f)",
-            doc["id"], doc.get("source"), doc.get("doc_type"),
-            inserted, skipped, stats.cost_usd,
-        )
+            stats.api_calls += 1
+            stats.input_tokens += in_tok
+            stats.output_tokens += out_tok
+            stats.cost_usd += _estimate_cost(in_tok, out_tok)
+            stats.docs_classified += 1
 
-    logger.info("=" * 60)
-    logger.info("Linker summary:")
-    logger.info("  docs_seen=%d  prefilter_passed=%d  prefilter_skipped=%d",
-                stats.docs_seen, stats.docs_prefilter_passed, stats.docs_prefilter_skipped)
-    logger.info("  docs_classified=%d  api_calls=%d  errors=%d",
-                stats.docs_classified, stats.api_calls, stats.errors)
-    logger.info("  links_inserted=%d  links_dedup_skipped=%d",
-                stats.links_inserted, stats.links_dedup_skipped)
-    logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
-                stats.input_tokens, stats.output_tokens, stats.cost_usd)
+            if not parse_ok:
+                # Sonnet returned malformed JSON. The call was paid for; retrying
+                # almost certainly produces the same garbage. Mark to stop the loop.
+                stats.errors += 1
+                if not args.dry_run and not _mark_classified(sb, doc["id"], "parse_error"):
+                    stats.marker_failures += 1
+                continue
 
-    final_status = "budget_exceeded" if budget_exceeded else "completed"
-    _finish_run_row(sb, run_id, final_status, stats)
-    return 0
+            if not links:
+                logger.info("doc %s [%s] %s — no links emitted (cost so far $%.3f)",
+                            doc["id"], doc.get("source"), doc.get("doc_type"),
+                            stats.cost_usd)
+                if not args.dry_run and not _mark_classified(sb, doc["id"], "no_match"):
+                    stats.marker_failures += 1
+                continue
+
+            if args.dry_run:
+                for l in links:
+                    logger.info(
+                        "[dry-run] doc %s -> asset %s link_type=%s conf=%.2f material=%s",
+                        doc["id"], l.asset_id, l.link_type,
+                        l.extraction_confidence, l.is_material,
+                    )
+                continue
+
+            inserted, skipped = insert_links(sb, doc["id"], links)
+            stats.links_inserted += inserted
+            stats.links_dedup_skipped += skipped
+            if not _mark_classified(sb, doc["id"], "linked"):
+                stats.marker_failures += 1
+            logger.info(
+                "doc %s [%s] %s -> %d link(s) inserted, %d skipped (cost $%.3f)",
+                doc["id"], doc.get("source"), doc.get("doc_type"),
+                inserted, skipped, stats.cost_usd,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Uncaught exception escaped the per-doc loop — finalize the run row
+        # with status='failed' so observability + the watchdog can see it,
+        # and we don't leave a zombie status='running' row blocking the next
+        # cron tick (via the partial unique index).
+        logger.exception("Unexpected exception in asset_linker main: %s", exc)
+        crashed = True
+    finally:
+        logger.info("=" * 60)
+        logger.info("Linker summary:")
+        logger.info("  docs_seen=%d  prefilter_passed=%d  prefilter_skipped=%d",
+                    stats.docs_seen, stats.docs_prefilter_passed, stats.docs_prefilter_skipped)
+        logger.info("  docs_classified=%d  api_calls=%d  errors=%d  marker_failures=%d",
+                    stats.docs_classified, stats.api_calls, stats.errors,
+                    stats.marker_failures)
+        logger.info("  links_inserted=%d  links_dedup_skipped=%d",
+                    stats.links_inserted, stats.links_dedup_skipped)
+        logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
+                    stats.input_tokens, stats.output_tokens, stats.cost_usd)
+        if crashed:
+            final_status = "failed"
+        elif budget_exceeded:
+            final_status = "budget_exceeded"
+        else:
+            final_status = "completed"
+        _finish_run_row(sb, run_id, final_status, stats)
+    return 1 if crashed else 0
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +792,7 @@ class Pass2Stats:
     demoted: int = 0
     rejected: int = 0
     errors: int = 0
+    marker_failures: int = 0   # PATCH failures on pass2_verdict writes
 
 
 PASS2_SYSTEM_PROMPT = """You are a verifier for a document → asset linker.
@@ -880,85 +977,105 @@ def pass2_main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = Pass2Stats()
-    run_id = None if args.dry_run else _start_run_row(sb, "pass2", PASS2_MODEL)
+    run_id: Optional[str] = None
+    lock_held = True
+    if not args.dry_run:
+        run_id, lock_held = _start_run_row(sb, "pass2", PASS2_MODEL)
+        if not lock_held:
+            logger.info("Another pass2 run is active — exiting without work.")
+            return 0
     budget_exceeded = False
+    crashed = False
 
-    pending = _fetch_pass2_pending(
-        sb,
-        asset_id=args.asset_id,
-        max_links=args.max_links,
-        threshold=args.threshold,
-    )
-    stats.rows_seen = len(pending)
-    if not pending:
-        logger.info("No pass-2 backlog (asset_id=%s threshold=%s)",
-                    args.asset_id, args.threshold)
-        _finish_run_row(sb, run_id, "completed", stats)
-        return 0
-    logger.info("Pass-2 backlog: %d row(s); batching %d/call",
-                len(pending), PASS2_BATCH_SIZE)
-
-    # Lazy import to avoid pulling pricing into the asset_linker import path
-    # for callers that only need pass-1.
-    from orchestrator_runtime.pricing import estimate_cost as _pricing
-
-    for i in range(0, len(pending), PASS2_BATCH_SIZE):
-        if stats.cost_usd > args.budget_usd:
-            logger.warning("Budget exceeded ($%.4f > $%.2f); stopping",
-                           stats.cost_usd, args.budget_usd)
-            budget_exceeded = True
-            break
-        batch = pending[i:i + PASS2_BATCH_SIZE]
-        try:
-            verdicts, in_tok, out_tok = verify_link_pass2_batch(a_client, batch)
-        except anthropic.APIError as exc:
-            logger.warning("Pass-2 API error on batch starting %s: %s",
-                           batch[0]["id"], exc)
-            stats.errors += 1
-            time.sleep(2.0)
-            continue
-
-        stats.batches_called += 1
-        stats.api_calls += 1
-        stats.input_tokens += in_tok
-        stats.output_tokens += out_tok
-        stats.cost_usd += _pricing(
-            PASS2_MODEL, input_tokens=in_tok, output_tokens=out_tok,
+    try:
+        pending = _fetch_pass2_pending(
+            sb,
+            asset_id=args.asset_id,
+            max_links=args.max_links,
+            threshold=args.threshold,
         )
+        stats.rows_seen = len(pending)
+        if not pending:
+            logger.info("No pass-2 backlog (asset_id=%s threshold=%s)",
+                        args.asset_id, args.threshold)
+            return 0
+        logger.info("Pass-2 backlog: %d row(s); batching %d/call",
+                    len(pending), PASS2_BATCH_SIZE)
 
-        for v in verdicts:
-            if v.verdict == "kept":
-                stats.kept += 1
-            elif v.verdict == "demoted":
-                stats.demoted += 1
-            else:
-                stats.rejected += 1
-            if not args.dry_run:
-                _apply_pass2_verdict(sb, v)
+        # Lazy import to avoid pulling pricing into the asset_linker import path
+        # for callers that only need pass-1.
+        from orchestrator_runtime.pricing import estimate_cost as _pricing
 
-        logger.info(
-            "batch %d (size=%d): %d verdicts (kept=%d demoted=%d rejected=%d) "
-            "tokens in=%d out=%d cum_cost=$%.4f",
-            stats.batches_called, len(batch), len(verdicts),
-            sum(1 for x in verdicts if x.verdict == "kept"),
-            sum(1 for x in verdicts if x.verdict == "demoted"),
-            sum(1 for x in verdicts if x.verdict == "rejected"),
-            in_tok, out_tok, stats.cost_usd,
-        )
+        for i in range(0, len(pending), PASS2_BATCH_SIZE):
+            if stats.cost_usd > args.budget_usd:
+                logger.warning("Budget exceeded ($%.4f > $%.2f); stopping",
+                               stats.cost_usd, args.budget_usd)
+                budget_exceeded = True
+                break
+            batch = pending[i:i + PASS2_BATCH_SIZE]
+            try:
+                verdicts, in_tok, out_tok = verify_link_pass2_batch(a_client, batch)
+            except anthropic.APIError as exc:
+                logger.warning("Pass-2 API error on batch starting %s: %s",
+                               batch[0]["id"], exc)
+                stats.errors += 1
+                time.sleep(2.0)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Pass-2 unexpected error on batch starting %s: %s",
+                                 batch[0]["id"], exc)
+                stats.errors += 1
+                continue
 
-    logger.info("=" * 60)
-    logger.info("Pass-2 summary:")
-    logger.info("  rows_seen=%d  batches_called=%d  api_calls=%d  errors=%d",
-                stats.rows_seen, stats.batches_called, stats.api_calls,
-                stats.errors)
-    logger.info("  verdicts: kept=%d demoted=%d rejected=%d",
-                stats.kept, stats.demoted, stats.rejected)
-    logger.info("  tokens: in=%d out=%d cost_usd=$%.4f",
-                stats.input_tokens, stats.output_tokens, stats.cost_usd)
+            stats.batches_called += 1
+            stats.api_calls += 1
+            stats.input_tokens += in_tok
+            stats.output_tokens += out_tok
+            stats.cost_usd += _pricing(
+                PASS2_MODEL, input_tokens=in_tok, output_tokens=out_tok,
+            )
 
-    final_status = "budget_exceeded" if budget_exceeded else "completed"
-    _finish_run_row(sb, run_id, final_status, stats)
-    return 0
+            for v in verdicts:
+                if v.verdict == "kept":
+                    stats.kept += 1
+                elif v.verdict == "demoted":
+                    stats.demoted += 1
+                else:
+                    stats.rejected += 1
+                if not args.dry_run:
+                    if not _apply_pass2_verdict(sb, v):
+                        stats.marker_failures += 1
+
+            logger.info(
+                "batch %d (size=%d): %d verdicts (kept=%d demoted=%d rejected=%d) "
+                "tokens in=%d out=%d cum_cost=$%.4f",
+                stats.batches_called, len(batch), len(verdicts),
+                sum(1 for x in verdicts if x.verdict == "kept"),
+                sum(1 for x in verdicts if x.verdict == "demoted"),
+                sum(1 for x in verdicts if x.verdict == "rejected"),
+                in_tok, out_tok, stats.cost_usd,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected exception in asset_linker pass2_main: %s", exc)
+        crashed = True
+    finally:
+        logger.info("=" * 60)
+        logger.info("Pass-2 summary:")
+        logger.info("  rows_seen=%d  batches_called=%d  api_calls=%d  errors=%d  marker_failures=%d",
+                    stats.rows_seen, stats.batches_called, stats.api_calls,
+                    stats.errors, stats.marker_failures)
+        logger.info("  verdicts: kept=%d demoted=%d rejected=%d",
+                    stats.kept, stats.demoted, stats.rejected)
+        logger.info("  tokens: in=%d out=%d cost_usd=$%.4f",
+                    stats.input_tokens, stats.output_tokens, stats.cost_usd)
+        if crashed:
+            final_status = "failed"
+        elif budget_exceeded:
+            final_status = "budget_exceeded"
+        else:
+            final_status = "completed"
+        _finish_run_row(sb, run_id, final_status, stats)
+    return 1 if crashed else 0
 
 
 if __name__ == "__main__":
