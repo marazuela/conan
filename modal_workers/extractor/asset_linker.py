@@ -79,6 +79,8 @@ class LinkerStats:
     api_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
     marker_failures: int = 0   # _mark_classified PATCH failures (silent regression vector)
@@ -87,10 +89,20 @@ class LinkerStats:
 # Sonnet 4.5 pricing (USD per 1M tokens, as of plan-time):
 COST_INPUT_PER_M = 3.0
 COST_OUTPUT_PER_M = 15.0
+# Prompt caching (5-min ephemeral): write = 1.25× base, read = 0.1× base.
+COST_CACHE_WRITE_PER_M = COST_INPUT_PER_M * 1.25  # 3.75
+COST_CACHE_READ_PER_M = COST_INPUT_PER_M * 0.10   # 0.30
 
 
-def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
-    return (input_tokens * COST_INPUT_PER_M + output_tokens * COST_OUTPUT_PER_M) / 1_000_000
+def _estimate_cost(input_tokens: int, output_tokens: int,
+                   cache_read_tokens: int = 0,
+                   cache_creation_tokens: int = 0) -> float:
+    return (
+        input_tokens * COST_INPUT_PER_M
+        + cache_creation_tokens * COST_CACHE_WRITE_PER_M
+        + cache_read_tokens * COST_CACHE_READ_PER_M
+        + output_tokens * COST_OUTPUT_PER_M
+    ) / 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +120,21 @@ def load_active_assets(client: SupabaseClient,
     return client._rest("GET", "fda_assets", params=params) or []
 
 
-def build_keyword_index(assets: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def build_keyword_index(assets: List[Dict[str, Any]]
+                        ) -> Dict[str, List[Dict[str, Any]]]:
     """Map keyword (drug_name / generic_name / sponsor_name tokens) →
-    list of assets that match. Used by the regex pre-filter.
+    list of {"asset": a, "field": fld} entries. Used by the regex pre-filter.
 
     `indication` was previously indexed but caused 61% of docs to pass the
     prefilter against a <3% true match rate — common-condition strings like
     "type 2 diabetes" or "thyroid eye disease" leak into unrelated drug
     labels. Sonnet correctly rejects them but the prefilter pays the input
-    bill. Dropped 2026-05-20 in response to the dailymed cost incident.
+    bill. Dropped in response to the dailymed cost incident.
+
+    The {"field": fld} tag is consumed by prefilter_doc to enforce
+    source-aware gates: drug-label / trial sources require a drug_name or
+    generic_name hit (sponsor-only hits are the 2026-05-11 leak vector that
+    burned ~$40 on ~2400 false-positive dailymed labels).
     """
     idx: Dict[str, List[Dict[str, Any]]] = {}
     for a in assets:
@@ -125,7 +143,7 @@ def build_keyword_index(assets: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
             if not val:
                 continue
             for kw in _keywords_from(val, fld):
-                idx.setdefault(kw.lower(), []).append(a)
+                idx.setdefault(kw.lower(), []).append({"asset": a, "field": fld})
     return idx
 
 
@@ -176,23 +194,39 @@ def _keywords_from(value: str, fld: str) -> List[str]:
 # Document loading
 # ---------------------------------------------------------------------------
 
-def load_documents_to_link(client: SupabaseClient, max_docs: int = 200) -> List[Dict[str, Any]]:
+def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
+                           doc_ids: Optional[List[str]] = None
+                           ) -> List[Dict[str, Any]]:
     """Pull documents that have not yet been classified by pass-1. Newest-first
     so the most recent material lands quickly during a backfill.
+
+    `doc_ids` is an operator-only override that bypasses the unclassified
+    filter and pulls the specified rows directly — used by the cache-validation
+    test path. The cron path never sets it.
 
     Uses documents.linker_classified_at IS NULL (backed by the partial index
     documents_linker_unclassified_idx). A terminal outcome — linked, no_match,
     or parse_error — sets linker_classified_at; transient API errors leave it
     NULL so the next run retries.
     """
+    select = ",".join([
+        "id", "source", "doc_type", "title", "url",
+        "raw_text", "raw_text_tokens", "storage_path",
+        "published_at", "extensions",
+    ])
+    if doc_ids:
+        rows = client._rest(
+            "GET", "documents",
+            params={
+                "select": select,
+                "id": f"in.({','.join(doc_ids)})",
+            },
+        ) or []
+        return rows
     rows = client._rest(
         "GET", "documents",
         params={
-            "select": ",".join([
-                "id", "source", "doc_type", "title", "url",
-                "raw_text", "raw_text_tokens", "storage_path",
-                "published_at", "extensions",
-            ]),
+            "select": select,
             "linker_classified_at": "is.null",
             "order": "published_at.desc",
             "limit": str(max_docs),
@@ -314,6 +348,8 @@ def _finish_run_row(
         "errors": getattr(stats, "errors", 0),
         "input_tokens": getattr(stats, "input_tokens", 0),
         "output_tokens": getattr(stats, "output_tokens", 0),
+        "cache_read_tokens": getattr(stats, "cache_read_tokens", 0),
+        "cache_creation_tokens": getattr(stats, "cache_creation_tokens", 0),
         "cost_usd": round(float(getattr(stats, "cost_usd", 0.0)), 4),
     }
     if marker_failures > 0:
@@ -361,19 +397,44 @@ def _load_doc_text(doc: Dict[str, Any], client: SupabaseClient) -> Optional[str]
 # Pre-filter
 # ---------------------------------------------------------------------------
 
-def prefilter_doc(text: str, keyword_index: Dict[str, List[Dict[str, Any]]]
-                  ) -> List[Dict[str, Any]]:
-    """Returns the assets whose keywords appear in `text`. Empty list = skip."""
+# Sources where sponsor-name matches alone are NOT sufficient to fire Sonnet —
+# drug labels, FDA-application records, and trial listings rarely mention a
+# sponsor without also naming the specific drug. Sponsor-only hits are the
+# dominant false-positive vector here (big-pharma sponsors like Pfizer/BMS/
+# AstraZeneca appear on hundreds of unrelated dailymed labels). For these
+# sources we require a drug_name or generic_name hit. SEC sources (10-K/Q/8-K,
+# 424B2) keep the full prefilter — sponsor-only matches in competitor filings
+# are valuable signal there.
+SPONSOR_ONLY_INSUFFICIENT_SOURCES = frozenset({
+    "dailymed", "openfda", "clinicaltrials",
+})
+
+
+def prefilter_doc(text: str, keyword_index: Dict[str, List[Dict[str, Any]]],
+                  source: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Returns the assets whose keywords appear in `text`. Empty list = skip.
+
+    For drug-label / FDA-app / trial sources, requires the asset to have at
+    least one drug_name or generic_name keyword hit (sponsor-only is dropped).
+    """
     text_lower = text.lower()
-    seen_asset_ids: set[str] = set()
-    matched: List[Dict[str, Any]] = []
-    for kw, assets in keyword_index.items():
-        if kw in text_lower:
-            for a in assets:
-                if a["id"] not in seen_asset_ids:
-                    seen_asset_ids.add(a["id"])
-                    matched.append(a)
-    return matched
+    matched_fields: Dict[str, set[str]] = {}
+    asset_by_id: Dict[str, Dict[str, Any]] = {}
+    for kw, entries in keyword_index.items():
+        if kw not in text_lower:
+            continue
+        for entry in entries:
+            a = entry["asset"]
+            asset_by_id[a["id"]] = a
+            matched_fields.setdefault(a["id"], set()).add(entry["field"])
+
+    sponsor_only_ok = source not in SPONSOR_ONLY_INSUFFICIENT_SOURCES
+    out: List[Dict[str, Any]] = []
+    for asset_id, fields in matched_fields.items():
+        if not sponsor_only_ok and fields == {"sponsor_name"}:
+            continue
+        out.append(asset_by_id[asset_id])
+    return out
 
 
 def trim_around_matches(text: str, keywords: List[str],
@@ -482,32 +543,37 @@ return {"links": []}.
 Output JSON only — no commentary, no markdown fences."""
 
 
-def classify_document(
-    client: anthropic.Anthropic,
-    doc: Dict[str, Any],
-    candidate_assets: List[Dict[str, Any]],
-    text: str,
-    matched_keywords: List[str],
-) -> tuple[List[LinkResult], int, int, bool]:
-    """Send a single document to Sonnet for classification. Returns
-    (links, input_tokens, output_tokens, parse_ok). parse_ok=False means
-    Sonnet returned malformed JSON — the call was paid for but no links can
-    be extracted; the caller should mark the doc as parse_error so it isn't
-    retried on the next cron run."""
-    trimmed = trim_around_matches(text, matched_keywords)
-
-    asset_card = "\n".join(
+def _build_asset_card(candidate_assets: List[Dict[str, Any]]) -> str:
+    return "\n".join(
         f"- asset_id={a['id']} | drug_name={a.get('drug_name', '?')} | "
         f"generic={a.get('generic_name', '?')} | sponsor={a.get('sponsor_name', '?')} | "
         f"indication={a.get('indication', '?')}"
         for a in candidate_assets
     )
 
-    user_content = f"""Tracked assets (identify which, if any, the document references):
 
-{asset_card}
+def classify_document(
+    client: anthropic.Anthropic,
+    doc: Dict[str, Any],
+    candidate_assets: List[Dict[str, Any]],
+    text: str,
+    matched_keywords: List[str],
+) -> tuple[List[LinkResult], int, int, int, int, bool]:
+    """Send a single document to Sonnet for classification. Returns
+    (links, input_tokens, output_tokens, cache_read_tokens,
+     cache_creation_tokens, parse_ok). parse_ok=False means Sonnet returned
+    malformed JSON — the call was paid for but no links can be extracted;
+    the caller should mark the doc as parse_error so it isn't retried on
+    the next cron run.
 
-Document metadata:
+    Uses prompt caching on the two stable prefix blocks (SYSTEM_PROMPT and
+    the asset_card) so cost amortizes across the ~100-200 docs in a single
+    cron tick. Doc text remains the un-cached tail.
+    """
+    trimmed = trim_around_matches(text, matched_keywords)
+    asset_card = _build_asset_card(candidate_assets)
+
+    user_content = f"""Document metadata:
 - source: {doc.get('source')}
 - doc_type: {doc.get('doc_type')}
 - title: {doc.get('title') or '(none)'}
@@ -519,14 +585,31 @@ Document text (possibly trimmed for length — sections separated by […trim…
 {trimmed}
 """
 
+    # Single cache breakpoint at the end of [SYSTEM_PROMPT + asset_card].
+    # Anthropic enforces a 1024-token minimum cached prefix for Sonnet. At the
+    # current ~34-asset watchlist the tokenized prefix is ~620 tokens, BELOW
+    # the threshold — the API silently returns cache_*_input_tokens=0 and we
+    # pay the full input rate. The cache_control is kept as a forward-looking
+    # no-op: once the watchlist grows past ~50 assets (≈1024 tokens of
+    # asset_card), caching engages automatically without code changes.
+    system_blocks = [
+        {"type": "text", "text": SYSTEM_PROMPT},
+        {"type": "text",
+         "text": "Tracked assets (identify which, if any, the document "
+                 f"references):\n\n{asset_card}",
+         "cache_control": {"type": "ephemeral"}},
+    ]
+
     resp = client.messages.create(
         model=MODEL,
         max_tokens=2048,
-        system=SYSTEM_PROMPT,
+        system=system_blocks,
         messages=[{"role": "user", "content": user_content}],
     )
     in_tokens = resp.usage.input_tokens
     out_tokens = resp.usage.output_tokens
+    cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+    cache_create = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
 
     # Parse JSON
     text_out = "".join(b.text for b in resp.content if b.type == "text")
@@ -541,7 +624,7 @@ Document text (possibly trimmed for length — sections separated by […trim…
     except json.JSONDecodeError as exc:
         logger.warning("JSON parse failed for doc %s: %s — output was: %s",
                        doc["id"], exc, text_out[:200])
-        return [], in_tokens, out_tokens, False
+        return [], in_tokens, out_tokens, cache_read, cache_create, False
 
     raw_links = parsed.get("links", [])
     out: List[LinkResult] = []
@@ -566,7 +649,7 @@ Document text (possibly trimmed for length — sections separated by […trim…
             is_material=bool(r.get("is_material", True)),
             reasoning=str(r.get("reasoning", ""))[:1000],
         ))
-    return out, in_tokens, out_tokens, True
+    return out, in_tokens, out_tokens, cache_read, cache_create, True
 
 
 # ---------------------------------------------------------------------------
@@ -616,12 +699,26 @@ def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="asset_linker")
     p.add_argument("--asset-id", default=None,
                    help="Restrict to one fda_asset (default: all is_active=true)")
-    p.add_argument("--max", type=int, default=200,
-                   help="Max documents to process this run")
+    p.add_argument("--max", type=int, default=100,
+                   help="Max documents to process this run (reduced from 200 "
+                        "on 2026-05-11 to bound Anthropic rate-limit exposure; "
+                        "the */15 cron tick can still drain a backlog at "
+                        "400 docs/hour)")
     p.add_argument("--dry-run", action="store_true",
                    help="Classify but do not insert asset_documents rows")
-    p.add_argument("--budget-usd", type=float, default=15.0,
-                   help="Stop early if cumulative cost exceeds this")
+    p.add_argument("--budget-usd", type=float, default=5.0,
+                   help="Stop early if cumulative cost exceeds this (reduced "
+                        "from $15 on 2026-05-11; with cache_control + max=100 "
+                        "a typical tick should cost <$1)")
+    p.add_argument("--ignore-24h-halt", action="store_true",
+                   help="Bypass the 24h global hard-halt check. Operator "
+                        "override for one-off test invocations; the cron "
+                        "should never set this.")
+    p.add_argument("--doc-ids", default=None,
+                   help="Comma-separated document IDs. Bypasses the "
+                        "unclassified-newest-first queue and runs against "
+                        "the specified docs. Operator override for the "
+                        "cache-validation test path.")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -632,6 +729,25 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     sb = SupabaseClient()
+
+    # 24h hard halt — check BEFORE acquiring lock or fetching docs. Skipped
+    # in dry-run because the user is explicitly invoking the tool offline,
+    # and skipped behind --ignore-24h-halt for operator-driven test runs.
+    if not args.dry_run and not args.ignore_24h_halt:
+        from modal_workers.shared.cost_budget import (
+            check_asset_linker_hard_halt,
+        )
+        halt_status = check_asset_linker_hard_halt(sb)
+        if halt_status["halt"]:
+            logger.error(
+                "asset_linker 24h spend $%.2f has reached the hard halt — "
+                "exiting without work. (See operator_flags for the breach.)",
+                halt_status["total_24h_usd"],
+            )
+            return 0
+    elif args.ignore_24h_halt:
+        logger.warning("--ignore-24h-halt active: 24h hard halt bypassed.")
+
     a_client = anthropic.Anthropic()
     stats = LinkerStats()
     run_id: Optional[str] = None
@@ -654,7 +770,9 @@ def main(argv: List[str] | None = None) -> int:
         keyword_index = build_keyword_index(assets)
         logger.info("Built keyword index with %d unique keywords", len(keyword_index))
 
-        docs = load_documents_to_link(sb, max_docs=args.max)
+        doc_ids = ([d.strip() for d in args.doc_ids.split(",") if d.strip()]
+                   if args.doc_ids else None)
+        docs = load_documents_to_link(sb, max_docs=args.max, doc_ids=doc_ids)
         logger.info("Loaded %d unlinked document(s)", len(docs))
         stats.docs_seen = len(docs)
 
@@ -671,7 +789,8 @@ def main(argv: List[str] | None = None) -> int:
                 stats.errors += 1
                 continue
 
-            candidates = prefilter_doc(text, keyword_index)
+            candidates = prefilter_doc(text, keyword_index,
+                                       source=doc.get("source"))
             if not candidates:
                 stats.docs_prefilter_skipped += 1
                 # Prefilter is deterministic given the current active asset set —
@@ -691,7 +810,8 @@ def main(argv: List[str] | None = None) -> int:
                     matched_kws.append(kw)
 
             try:
-                links, in_tok, out_tok, parse_ok = classify_document(
+                (links, in_tok, out_tok, cache_read_tok,
+                 cache_create_tok, parse_ok) = classify_document(
                     a_client, doc, candidates, text, matched_kws,
                 )
             except anthropic.APIError as exc:
@@ -714,7 +834,13 @@ def main(argv: List[str] | None = None) -> int:
             stats.api_calls += 1
             stats.input_tokens += in_tok
             stats.output_tokens += out_tok
-            stats.cost_usd += _estimate_cost(in_tok, out_tok)
+            stats.cache_read_tokens += cache_read_tok
+            stats.cache_creation_tokens += cache_create_tok
+            stats.cost_usd += _estimate_cost(
+                in_tok, out_tok,
+                cache_read_tokens=cache_read_tok,
+                cache_creation_tokens=cache_create_tok,
+            )
             stats.docs_classified += 1
 
             if not parse_ok:
@@ -769,8 +895,11 @@ def main(argv: List[str] | None = None) -> int:
                     stats.marker_failures)
         logger.info("  links_inserted=%d  links_dedup_skipped=%d",
                     stats.links_inserted, stats.links_dedup_skipped)
-        logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
-                    stats.input_tokens, stats.output_tokens, stats.cost_usd)
+        logger.info("  tokens: in=%d  out=%d  cache_read=%d  cache_create=%d  "
+                    "cost_usd=$%.3f",
+                    stats.input_tokens, stats.output_tokens,
+                    stats.cache_read_tokens, stats.cache_creation_tokens,
+                    stats.cost_usd)
         if crashed:
             final_status = "failed"
         elif budget_exceeded:

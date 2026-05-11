@@ -24,10 +24,16 @@ logger = logging.getLogger(__name__)
 PER_RUN_HARD_KILL_USD = 15.0
 ASSET_24H_SOFT_USD = 20.0
 GLOBAL_24H_SOFT_USD = 500.0
+# Per-component HARD halt for asset_linker. Soft alerts (above) only emit
+# operator_flag rows; this ceiling causes the linker run loop to return
+# early and the */15 cron will idle until the 24h window rolls forward.
+# Catches the 2026-05-11 incident vector at $10 instead of $40+.
+ASSET_LINKER_24H_HARD_USD = 10.0
 
 OPERATOR_FLAG_SOURCE = "orchestrator_cost"
 ASSET_FLAG_KIND = "asset_24h_budget_breached"
 GLOBAL_FLAG_KIND = "global_24h_budget_breached"
+ASSET_LINKER_FLAG_KIND = "asset_linker_24h_hard_halt"
 
 
 def asset_24h_cost_usd(sb, asset_id: str) -> float:
@@ -113,6 +119,57 @@ def global_24h_cost_usd(sb) -> float:
     except Exception:  # noqa: BLE001
         linker_total = 0.0
     return orch_total + linker_total
+
+
+def asset_linker_24h_cost_usd(sb) -> float:
+    """SUM(cost_usd) over asset_linker_runs rows started in the last 24h.
+    Pure-table read; no RPC. Missing-table → zero (pre-migration safety)."""
+    from datetime import datetime, timedelta, timezone
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(hours=24)).isoformat()
+    try:
+        rows = sb._rest(
+            "GET", "asset_linker_runs",
+            params={
+                "started_at": f"gte.{cutoff_iso}",
+                "select": "cost_usd",
+                "limit": "5000",
+            },
+        ) or []
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
+
+
+def check_asset_linker_hard_halt(sb) -> Dict[str, Any]:
+    """Return {"halt": bool, "total_24h_usd": float}. Caller (asset_linker
+    pass-1 main) MUST check this before fetching docs and bail out if
+    halt=True. On halt, also opens an operator_flag so the breach is visible
+    in the dashboard."""
+    total = asset_linker_24h_cost_usd(sb)
+    halt = total >= ASSET_LINKER_24H_HARD_USD
+    if halt:
+        upsert_cost_flag(
+            sb,
+            severity="critical",
+            kind=ASSET_LINKER_FLAG_KIND,
+            title=(
+                f"asset_linker 24h spend ${total:.2f} ≥ hard halt "
+                f"${ASSET_LINKER_24H_HARD_USD:.0f}"
+            ),
+            body=(
+                f"asset_linker_runs cost in the last 24h is ${total:.2f}, "
+                f"≥ the ${ASSET_LINKER_24H_HARD_USD:.0f} HARD halt. New "
+                "pass-1 runs return early without enqueuing docs until the "
+                "rolling 24h falls back below the ceiling. Investigate the "
+                "spike before raising the ceiling."
+            ),
+            evidence={
+                "asset_linker_24h_usd": round(total, 4),
+                "hard_halt_usd": ASSET_LINKER_24H_HARD_USD,
+            },
+        )
+    return {"halt": halt, "total_24h_usd": round(total, 4)}
 
 
 def upsert_cost_flag(

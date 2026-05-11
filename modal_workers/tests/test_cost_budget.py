@@ -16,12 +16,16 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "x")
 from modal_workers.shared.cost_budget import (
     ASSET_24H_SOFT_USD,
     ASSET_FLAG_KIND,
+    ASSET_LINKER_24H_HARD_USD,
+    ASSET_LINKER_FLAG_KIND,
     GLOBAL_24H_SOFT_USD,
     GLOBAL_FLAG_KIND,
     OPERATOR_FLAG_SOURCE,
     PER_RUN_HARD_KILL_USD,
     asset_24h_cost_usd,
+    asset_linker_24h_cost_usd,
     check_24h_thresholds,
+    check_asset_linker_hard_halt,
     global_24h_cost_usd,
     upsert_cost_flag,
 )
@@ -167,6 +171,68 @@ def test_global_24h_treats_missing_linker_table_as_zero():
 def test_global_24h_handles_empty():
     sb = _split_sb(orch_rows=[], linker_rows=[])
     assert global_24h_cost_usd(sb) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# asset_linker_24h_cost_usd / check_asset_linker_hard_halt — HARD halt
+# Catches the 2026-05-11 incident vector at $10 instead of $40+.
+# ---------------------------------------------------------------------------
+
+def _linker_sb(rows, raise_missing_table: bool = False):
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if path == "asset_linker_runs":
+            if raise_missing_table:
+                raise Exception('relation "asset_linker_runs" does not exist')
+            return rows
+        if path == "operator_flags":
+            return []
+        return []
+    sb._rest = MagicMock(side_effect=_rest)
+    return sb
+
+
+def test_asset_linker_24h_sums_cost_usd():
+    sb = _linker_sb([
+        {"cost_usd": "4.50"}, {"cost_usd": "3.10"}, {"cost_usd": "0.40"},
+    ])
+    assert asset_linker_24h_cost_usd(sb) == pytest.approx(8.00)
+
+
+def test_asset_linker_24h_missing_table_returns_zero():
+    """Pre-migration safety — same pattern as global_24h_cost_usd."""
+    sb = _linker_sb([], raise_missing_table=True)
+    assert asset_linker_24h_cost_usd(sb) == 0.0
+
+
+def test_hard_halt_does_not_fire_below_ceiling():
+    sb = _linker_sb([{"cost_usd": "4.99"}])
+    result = check_asset_linker_hard_halt(sb)
+    assert result["halt"] is False
+    assert result["total_24h_usd"] == pytest.approx(4.99)
+    # No operator_flag insert on the non-halt path.
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert inserts == []
+
+
+def test_hard_halt_fires_at_ceiling_and_opens_flag():
+    """At ASSET_LINKER_24H_HARD_USD ($10) the run loop must halt AND the
+    breach must be visible in operator_flags so the dashboard surfaces it."""
+    sb = _linker_sb([{"cost_usd": str(ASSET_LINKER_24H_HARD_USD)}])
+    result = check_asset_linker_hard_halt(sb)
+    assert result["halt"] is True
+    assert result["total_24h_usd"] == pytest.approx(ASSET_LINKER_24H_HARD_USD)
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert len(inserts) == 1
+    body = inserts[0].kwargs["json_body"]
+    assert body["source"] == OPERATOR_FLAG_SOURCE
+    assert body["kind"] == ASSET_LINKER_FLAG_KIND
+    # 'critical' (not 'error') to satisfy the operator_flags severity CHECK
+    # constraint which whitelists info/warn/critical only.
+    assert body["severity"] == "critical"
 
 
 # ---------------------------------------------------------------------------

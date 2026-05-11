@@ -70,7 +70,8 @@ def _assets() -> List[Dict[str, Any]]:
     }]
 
 
-def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80):
+def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80,
+                        cache_read: int = 0, cache_create: int = 0):
     block = MagicMock()
     block.type = "text"
     block.text = json_body
@@ -78,6 +79,8 @@ def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80):
     resp.content = [block]
     resp.usage.input_tokens = in_tok
     resp.usage.output_tokens = out_tok
+    resp.usage.cache_read_input_tokens = cache_read
+    resp.usage.cache_creation_input_tokens = cache_create
     return resp
 
 
@@ -301,7 +304,7 @@ def test_classify_document_parse_ok_false_on_bad_json():
         return_value=_anthropic_response("not valid json at all")
     )
 
-    links, in_tok, out_tok, parse_ok = classify_document(
+    links, in_tok, out_tok, cache_read, cache_create, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )
@@ -317,7 +320,7 @@ def test_classify_document_parse_ok_true_on_valid_empty_links():
         return_value=_anthropic_response('{"links": []}')
     )
 
-    links, in_tok, out_tok, parse_ok = classify_document(
+    links, in_tok, out_tok, cache_read, cache_create, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )
@@ -338,7 +341,7 @@ def test_classify_document_parse_ok_true_on_valid_link():
     }]})
     a_client.messages.create = MagicMock(return_value=_anthropic_response(body))
 
-    links, _, _, parse_ok = classify_document(
+    links, _, _, _, _, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )
