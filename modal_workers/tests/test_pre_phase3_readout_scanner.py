@@ -88,6 +88,44 @@ class TestInterventionExtraction:
 
 
 # ---------------------------------------------------------------------------
+# Lead-drug-name picker (feeds auto_seed_fda_asset hint)
+# ---------------------------------------------------------------------------
+
+class TestPickLeadDrugName:
+    def test_strips_short_route_prefix(self):
+        # "IV Tulisokibart" / "SC Tulisokibart" both seen in CT.gov data.
+        assert scanner._pick_lead_drug_name(
+            [{"name": "IV Tulisokibart", "type": "DRUG"}]
+        ) == "Tulisokibart"
+        assert scanner._pick_lead_drug_name(
+            [{"name": "SC Tulisokibart", "type": "DRUG"}]
+        ) == "Tulisokibart"
+        assert scanner._pick_lead_drug_name(
+            [{"name": "PO Foobarinib", "type": "DRUG"}]
+        ) == "Foobarinib"
+
+    def test_returns_first_intervention(self):
+        # Caller is responsible for filtering placebos; picker just takes the
+        # first usable name.
+        assert scanner._pick_lead_drug_name([
+            {"name": "Retatrutide", "type": "DRUG"},
+            {"name": "Semaglutide", "type": "DRUG"},
+        ]) == "Retatrutide"
+
+    def test_does_not_strip_long_route_word(self):
+        # "Topical" is often part of the brand name (e.g. "Patidegib Topical
+        # Gel"); only short 2-3 char abbreviations get stripped.
+        assert scanner._pick_lead_drug_name(
+            [{"name": "Patidegib Topical Gel", "type": "DRUG"}]
+        ) == "Patidegib Topical Gel"
+
+    def test_empty_returns_none(self):
+        assert scanner._pick_lead_drug_name([]) is None
+        assert scanner._pick_lead_drug_name([{"name": "", "type": "DRUG"}]) is None
+        assert scanner._pick_lead_drug_name(None) is None
+
+
+# ---------------------------------------------------------------------------
 # Orange Book lookup helpers
 # ---------------------------------------------------------------------------
 
@@ -366,3 +404,102 @@ def test_scan_does_not_drop_when_orange_book_lookup_fails(monkeypatch, fake_supa
     assert result.signals[0].raw_payload["nct_id"] == "NCT99990003"
     assert result.run_metrics["skipped_already_approved"] == 0
     assert any("orange_book" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# auto_seed_fda_asset hint — drives the SQL trigger that creates stub fda_assets
+# ---------------------------------------------------------------------------
+
+def _mk_scored(*, sponsor: str = "Acme Bio", base_rate_key: str = "metabolic_diabetes",
+               interventions: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """Build a minimal `scored` dict matching _score_trial's output, just enough
+    for _build_signal to consume."""
+    return {
+        "nct_id": "NCT12345678",
+        "brief_title": "Phase 3 study of widgetinib",
+        "sponsor_name": sponsor,
+        "sponsor_class": "INDUSTRY",
+        "status": "COMPLETED",
+        "primary_completion_date": "2026-08-01",
+        "days_until_readout": 90,
+        "enrollment": 800,
+        "conditions": ["Type 2 Diabetes"],
+        "interventions": interventions if interventions is not None else [
+            {"name": "IV Widgetinib", "type": "DRUG"},
+        ],
+        "primary_outcomes": ["A1C reduction at 24 weeks"],
+        "base_rate_key": base_rate_key,
+        "base_rate_approval": 0.55,
+        "matched_indications": ["diabetes|type 2 DM|T2DM"],
+        "patterns_hit": 4,
+        "pattern_names": ["industry_sponsored", "single_primary_endpoint",
+                          "enrollment_complete_readout_imminent", "meaningful_enrollment"],
+    }
+
+
+class TestAutoSeedFdaAssetHint:
+    def test_hint_present_when_ticker_resolves(self, monkeypatch):
+        """When SEC issuer match resolves a ticker, the signal carries an
+        auto_seed_fda_asset payload that the SQL trigger consumes."""
+        idx = MagicMock()
+        idx.resolve.return_value = scanner.IssuerMatch(
+            ticker="ABCD", cik="0001234567", title="Acme Bio Inc.",
+            match_kind="exact",
+        )
+        # openfigi is best-effort; force it to no-op.
+        monkeypatch.setattr(
+            "modal_workers.shared.openfigi_resolver.resolve_ticker",
+            lambda *_a, **_kw: MagicMock(resolved=False, issuer_figi=None, mic=None),
+        )
+
+        sig = scanner._build_signal(
+            _mk_scored(),
+            scan_date=SCAN_DATE,
+            issuer_index=idx,
+        )
+        assert sig is not None
+        hint = sig.raw_payload.get("auto_seed_fda_asset")
+        assert hint is not None
+        assert hint["ticker"] == "ABCD"
+        # IV route prefix is stripped.
+        assert hint["drug_name"] == "Widgetinib"
+        # Indication carries the base_rate_key for the asset_linker scope.
+        assert hint["indication"] == "metabolic_diabetes"
+        assert hint["nct_id"] == "NCT12345678"
+        assert hint["primary_completion_date"] == "2026-08-01"
+        # Sponsor uses the SEC-authoritative title when resolved.
+        assert hint["sponsor_name"] == "Acme Bio Inc."
+
+    def test_hint_absent_when_ticker_does_not_resolve(self):
+        """No SEC issuer match → no hint (the SQL trigger no-ops on absence).
+        This is the common path for foreign listings and private biotechs."""
+        idx = MagicMock()
+        idx.resolve.return_value = None  # SEC universe missed this sponsor
+
+        sig = scanner._build_signal(
+            _mk_scored(sponsor="Obscure EU Biotech AG"),
+            scan_date=SCAN_DATE,
+            issuer_index=idx,
+        )
+        assert sig is not None
+        assert "auto_seed_fda_asset" not in sig.raw_payload
+
+    def test_hint_absent_when_no_drug_intervention(self, monkeypatch):
+        """Ticker resolved but interventions all placebo/empty → no hint."""
+        idx = MagicMock()
+        idx.resolve.return_value = scanner.IssuerMatch(
+            ticker="ABCD", cik="0001234567", title="Acme Bio Inc.",
+            match_kind="exact",
+        )
+        monkeypatch.setattr(
+            "modal_workers.shared.openfigi_resolver.resolve_ticker",
+            lambda *_a, **_kw: MagicMock(resolved=False, issuer_figi=None, mic=None),
+        )
+
+        sig = scanner._build_signal(
+            _mk_scored(interventions=[]),
+            scan_date=SCAN_DATE,
+            issuer_index=idx,
+        )
+        assert sig is not None
+        assert "auto_seed_fda_asset" not in sig.raw_payload

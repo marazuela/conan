@@ -230,6 +230,31 @@ def _extract_drug_interventions(raw: List[Dict[str, Any]]) -> List[Dict[str, str
     return out
 
 
+# Leading 2-3 char route-of-administration abbreviations seen in CT.gov
+# intervention names (e.g. "IV Tulisokibart", "SC Placebo"). Only stripped for
+# the auto-seed drug_name hint — full names stay in raw_payload["interventions"].
+_ROUTE_PREFIX_RE = re.compile(r"^(IV|SC|PO|IM|IT|SQ|IP|IN)\s+", re.IGNORECASE)
+
+
+def _pick_lead_drug_name(interventions: List[Dict[str, str]]) -> Optional[str]:
+    """Pick a single drug name from filtered interventions for fda_asset seeding.
+
+    Caller must pre-filter via `_extract_drug_interventions` so placebos and
+    non-drug arms are already gone. Strips short route-of-administration
+    prefixes (IV/SC/PO/IM/IT/SQ/IP/IN); does not touch longer English route
+    words like "Oral" or "Topical" since those often belong to the brand name
+    (e.g. "Patidegib Topical Gel"). Returns None if no usable name remains.
+    """
+    for iv in interventions or []:
+        raw_name = (iv.get("name") or "").strip()
+        if not raw_name:
+            continue
+        cleaned = _ROUTE_PREFIX_RE.sub("", raw_name).strip()
+        if cleaned:
+            return cleaned
+    return None
+
+
 def _normalize_sponsor(name: str) -> str:
     """Lowercase, strip punctuation, drop generic corporate-suffix tokens.
     Used only for substring matching between CT.gov leadSponsor.name and
@@ -584,6 +609,23 @@ def _build_signal(
         "upside_pct": 50.0,
         "downside_pct": 35.0,
     }
+
+    # Auto-seed hint: when this signal resolves to a public issuer AND has a
+    # usable drug-like intervention, a SQL AFTER-INSERT trigger on signals will
+    # create a stub `fda_assets` row (program_status='phase3', is_active=true)
+    # so the v3 asset_linker cron can begin ingesting docs for this asset. The
+    # trigger only fires when this key is present and the entity has no
+    # existing fda_asset; missing/empty fields are a no-op.
+    lead_drug = _pick_lead_drug_name(scored.get("interventions", []))
+    if issuer_match is not None and lead_drug:
+        raw_payload["auto_seed_fda_asset"] = {
+            "ticker": issuer_match.ticker,
+            "drug_name": lead_drug,
+            "sponsor_name": issuer_match.title or sponsor,
+            "indication": scored["base_rate_key"],
+            "nct_id": nct,
+            "primary_completion_date": pcd,
+        }
 
     # SEC match wins for name (authoritative spelling); raw sponsor used otherwise.
     name_for_hint = (
