@@ -251,6 +251,7 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "tier2_fail",
         "ic_memo_run",
         "feedback_loop_kickoff",
+        "orchestrator_drain_queue",
     })
 
 
@@ -322,4 +323,65 @@ def test_dispatch_feedback_loop_kickoff_passes_through_optional_args(monkeypatch
         "refit_min_n": 50,
         "refit_bootstrap_resamples": 1000,
     }
+    assert "ignored_extra_key" not in spawned["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# orchestrator_drain_queue — fire-and-forget spawn into conan-v3-orchestrator
+# ---------------------------------------------------------------------------
+
+def test_dispatch_orchestrator_drain_queue_spawns_remote_fn(monkeypatch):
+    """Drain action must look up orchestrator_drain_queue in the deployed
+    conan-v3-orchestrator app and spawn it fire-and-forget. The endpoint
+    returns function_call_id without blocking on the (up to 3600s) drain."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-drain-abc"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        spawned["app"] = app_name
+        spawned["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("orchestrator_drain_queue", {})
+    assert out == {"spawned": True, "function_call_id": "fc-drain-abc"}
+    assert spawned["app"] == "conan-v3-orchestrator"
+    assert spawned["fn"] == "orchestrator_drain_queue"
+    assert spawned["kwargs"] == {}
+
+
+def test_dispatch_orchestrator_drain_queue_passes_max_per_run(monkeypatch):
+    """max_per_run is the only valid kwarg; unknown keys must NOT be
+    forwarded so orchestrator_drain_queue's signature stays canonical."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-drain-xyz"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name",
+                        staticmethod(lambda *a, **kw: _FakeFn()))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("orchestrator_drain_queue", {
+        "max_per_run": 10,
+        "ignored_extra_key": "should_not_pass_through",
+    })
+    assert out["spawned"] is True
+    assert spawned["kwargs"] == {"max_per_run": 10}
     assert "ignored_extra_key" not in spawned["kwargs"]

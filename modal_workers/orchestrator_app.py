@@ -324,12 +324,13 @@ def orchestrator_run_one(
     image=image,
     timeout=3600,
     secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
-    # NOTE (2026-05-07): Modal free-tier caps cron jobs at 5; conan-v2
-    # already uses all 5. Drainer ships as on-demand callable for now.
-    # Re-enable by upgrading plan and uncommenting:
-    #   schedule=modal.Period(minutes=5),
-    # Until then trigger via `modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue`
-    # or via Supabase pg_cron + _conan_modal_post helper.
+    # No @modal.Period — the drain is triggered by Supabase pg_cron job
+    # `v3-orchestrator-drain` (every 5 min) via the compute_v3 multiplex
+    # endpoint's `orchestrator_drain_queue` action. See migration
+    # supabase/migrations/20260518000010_v3_orchestrator_drain_pg_cron.sql.
+    # Rationale: Modal free-tier caps cron decorators at 5/workspace and
+    # conan-v2 already uses all 5. Manual one-shot invocation still works:
+    #   modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue
 )
 def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     """Drain pending orchestrator_runs rows and dispatch each to the
@@ -638,6 +639,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "tier2_fail",
     "ic_memo_run",
     "feedback_loop_kickoff",
+    "orchestrator_drain_queue",
 })
 
 
@@ -690,6 +692,21 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
                   "refit_min_n", "refit_bootstrap_resamples"):
             if k in args:
                 kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "orchestrator_drain_queue":
+        # Fire-and-forget spawn of the in-cluster drainer so pg_cron's
+        # HTTP POST returns in <1s while drain itself can run up to
+        # 3600s. Replaces the @modal.Period(minutes=5) decorator path
+        # so we don't consume a Modal cron slot. Fired by pg_cron job
+        # `v3-orchestrator-drain` (*/5 * * * *).
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "orchestrator_drain_queue",
+        )
+        kwargs: Dict[str, Any] = {}
+        if "max_per_run" in args:
+            kwargs["max_per_run"] = args["max_per_run"]
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 
