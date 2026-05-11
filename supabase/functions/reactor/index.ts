@@ -45,6 +45,7 @@ import {
 } from "../_shared/convergence.ts";
 import {
   classifyProvisionalHeuristic,
+  flattenPersistedDimensions,
   shouldProcessUpdate,
 } from "./scoring-state.ts";
 import {
@@ -764,9 +765,15 @@ async function rubricApplyCaps(
 ): Promise<
   { band: Band; auto_caps_triggered: string[]; demotion_reason: string | null }
 > {
+  // signals.dimensions is persisted as the provenance envelope
+  // ({dim: {value, provenance}, _provenance}); apply_auto_caps wants flat ints.
+  // Without this flatten, litigation raises TypeError on `dict < int` and
+  // merger_arb silently evaluates False against envelope dicts.
   const body = {
     signal: { raw_data: row.raw_payload ?? {} },
-    dimensions: row.dimensions ?? {},
+    dimensions: flattenPersistedDimensions(
+      row.dimensions as Record<string, unknown> | null | undefined,
+    ),
     profile: row.scoring_profile,
     band,
   };

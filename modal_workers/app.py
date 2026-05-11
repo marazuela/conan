@@ -85,9 +85,15 @@ compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUT
 @app.function(image=image, timeout=10)
 @modal.fastapi_endpoint(method="POST", label="rubric-apply-caps")
 def rubric_apply_caps(payload: dict) -> dict:
-    from modal_workers.shared.rubric_engine import apply_auto_caps, compute_demotion_reason
+    from modal_workers.shared.rubric_engine import (
+        apply_auto_caps,
+        compute_demotion_reason,
+        flatten_persisted_dimensions,
+    )
     signal = payload.get("signal") or {}
-    dimensions = payload.get("dimensions") or {}
+    # Callers may send either the persisted envelope ({dim:{value,provenance}})
+    # or pre-flattened ints; flatten_persisted_dimensions is idempotent.
+    dimensions = flatten_persisted_dimensions(payload.get("dimensions") or {})
     profile = payload["profile"]
     band = payload["band"]
     new_band, caps = apply_auto_caps(signal, dimensions, profile, band)
