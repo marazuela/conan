@@ -35,6 +35,7 @@ from modal_workers.extractor.asset_linker import (
     _finish_run_row,
     _mark_classified,
     _start_run_row,
+    build_keyword_index,
     classify_document,
     load_documents_to_link,
 )
@@ -78,6 +79,51 @@ def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80):
     resp.usage.input_tokens = in_tok
     resp.usage.output_tokens = out_tok
     return resp
+
+
+# ---------------------------------------------------------------------------
+# build_keyword_index — prefilter must NOT index `indication`
+# ---------------------------------------------------------------------------
+
+def test_keyword_index_excludes_indication_strings():
+    """The 2026-05-20 prefilter tightening: indication strings were causing
+    61% of docs to pass the prefilter against a <3% match rate (common
+    conditions like "type 2 diabetes" leak into every diabetes drug label).
+    Pin the exclusion so it can't silently regress."""
+    assets = [{
+        "id": "asset-1",
+        "drug_name": "VRDN",
+        "generic_name": "veligrotug",
+        "sponsor_name": "Viridian Therapeutics",
+        "indication": "thyroid eye disease",
+    }]
+    idx = build_keyword_index(assets)
+    # Indication strings must NOT appear as keywords
+    assert "thyroid eye disease" not in idx
+    assert "thyroid" not in idx
+    assert "eye" not in idx
+    # But drug_name / generic_name / sponsor_name MUST remain
+    assert "vrdn" in idx
+    assert "veligrotug" in idx
+    assert "viridian" in idx
+
+
+def test_keyword_index_still_handles_sponsor_and_generic():
+    """Regression guard: tightening must not have removed too much."""
+    assets = [{
+        "id": "a-2",
+        "drug_name": "FILSPARI (sparsentan)",
+        "generic_name": "sparsentan",
+        "sponsor_name": "Travere Therapeutics",
+        "indication": "IgA nephropathy",
+    }]
+    idx = build_keyword_index(assets)
+    assert "filspari" in idx
+    assert "sparsentan" in idx
+    assert "travere" in idx
+    # Indication tokens stay out
+    assert "iga" not in idx
+    assert "nephropathy" not in idx
 
 
 # ---------------------------------------------------------------------------

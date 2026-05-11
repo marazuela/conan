@@ -108,16 +108,21 @@ def load_active_assets(client: SupabaseClient,
 
 
 def build_keyword_index(assets: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Map keyword (drug_name / generic / sponsor / indication tokens) →
-    list of assets that match. Used by the regex pre-filter."""
+    """Map keyword (drug_name / generic_name / sponsor_name tokens) →
+    list of assets that match. Used by the regex pre-filter.
+
+    `indication` was previously indexed but caused 61% of docs to pass the
+    prefilter against a <3% true match rate — common-condition strings like
+    "type 2 diabetes" or "thyroid eye disease" leak into unrelated drug
+    labels. Sonnet correctly rejects them but the prefilter pays the input
+    bill. Dropped 2026-05-20 in response to the dailymed cost incident.
+    """
     idx: Dict[str, List[Dict[str, Any]]] = {}
     for a in assets:
-        for fld in ("drug_name", "generic_name", "sponsor_name", "indication"):
+        for fld in ("drug_name", "generic_name", "sponsor_name"):
             val = (a.get(fld) or "").strip()
             if not val:
                 continue
-            # Drug name as-is; sponsor split into informative tokens; indication
-            # take key noun phrases. Keep it simple — primary kw is drug_name.
             for kw in _keywords_from(val, fld):
                 idx.setdefault(kw.lower(), []).append(a)
     return idx
@@ -138,12 +143,6 @@ def _keywords_from(value: str, fld: str) -> List[str]:
         # First word of company name (skip "the/inc/corp/llc")
         tokens = re.findall(r"\b[A-Z][\w-]{3,}\b", value)
         return tokens[:2]
-    if fld == "indication":
-        # Take key noun phrases — first 3 words
-        words = value.split()
-        if len(words) <= 3:
-            return [value]
-        return [" ".join(words[:3])]
     return []
 
 
