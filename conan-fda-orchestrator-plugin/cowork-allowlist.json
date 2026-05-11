@@ -1,0 +1,44 @@
+{
+  "_comment": "Cowork web_fetch host allowlist required by this plugin's sub-agents. Sync to your Cowork runtime configuration. The runtime's host allowlist is external to this repo (lives in the user's Cowork session settings); this file documents the required hosts so it can be re-applied after a Cowork reset or by a new operator.",
+  "_provenance": "F-311 (2026-05-11): microstructure sub-agent's required-citation schema was failing with egress_blocked on the 6 hosts below. Cowork allowlist expansion was the chosen fix path (vs Modal-runtime port or Polygon-only rewrite).",
+  "version": "1.0.0",
+  "hosts": [
+    {
+      "host": "finance.yahoo.com",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Equity options chain snapshots + IV history for tickers without Polygon coverage; complements mcp__polygon-mcp__get_iv when Polygon data is stale."
+    },
+    {
+      "host": "nasdaq.com",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Pre-market and after-hours quote context; volume profile by exchange."
+    },
+    {
+      "host": "whalewisdom.com",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Institutional 13F holdings & changes for the target ticker (microstructure regime context)."
+    },
+    {
+      "host": "dataroma.com",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Super-investor portfolio composition (concentration & turnover signals)."
+    },
+    {
+      "host": "fintel.io",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Short interest, options flow heatmaps, dark pool prints."
+    },
+    {
+      "host": "interactivebrokers.com",
+      "used_by": ["sub-agent-options-microstructure"],
+      "purpose": "Borrow availability + rebate rates; required for shorting-feasibility annotations."
+    }
+  ],
+  "apply_steps": [
+    "1. Open your Cowork session settings (or .claude/settings.local.json for this project).",
+    "2. Add each host above to the web_fetch / WebFetch allowlist (key name varies by Cowork version — look for 'allowed_hosts', 'web_fetch.hosts', or equivalent).",
+    "3. Restart the Cowork drain skill for fda_agent_reviews so the allowlist change takes effect.",
+    "4. Re-queue any failed microstructure reviews:",
+    "   UPDATE public.fda_agent_reviews SET status='queued', ran_at=NULL, error_message=NULL WHERE status='failed' AND error_message LIKE 'egress_blocked%';"
+  ]
+}

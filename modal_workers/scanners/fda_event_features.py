@@ -483,6 +483,10 @@ class FeatureInputs:
     agent_confidences: List[float]
     agent_modifiers: AgentModifiers = field(default_factory=AgentModifiers)
     band_thresholds: Mapping[str, float] = None  # type: ignore[assignment]
+    # F-310: when the caller has loaded the active fda_model_versions row,
+    # designation_modifiers can be passed through to override the module
+    # default. None means "use DESIGNATION_MODIFIERS_DEFAULT".
+    designation_modifiers: Optional[Mapping[str, float]] = None
 
 
 @dataclass
@@ -517,11 +521,13 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
     fetched provider data. Tests can call this directly with hand-built inputs.
     """
     band_thresholds = inputs.band_thresholds or BAND_THRESHOLDS_DEFAULT
+    designation_modifiers = inputs.designation_modifiers or DESIGNATION_MODIFIERS_DEFAULT
     mods = inputs.agent_modifiers or AgentModifiers()
 
     fair_p_pre_modifier = apply_designation_modifiers(
         base_probability(inputs.indication, inputs.base_rates),
         inputs.designations,
+        modifiers=designation_modifiers,
     )
     # Medical agent shifts probability within ±10pp; clamp again for defense.
     fair_p = _clamp(
@@ -624,6 +630,7 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
         "downside_pct": downside_pct,
         "evidence_confidence_pre_boost": confidence_pre_boost,
         "band_thresholds": dict(band_thresholds),
+        "designation_modifiers": dict(designation_modifiers),
     }
     return FeatureSnapshot(
         fair_probability=fair_p,
@@ -660,6 +667,8 @@ def build_features(
     options: Optional[OptionsDataProvider],
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
+    band_thresholds: Optional[Mapping[str, float]] = None,
+    designation_modifiers: Optional[Mapping[str, float]] = None,
 ) -> FeatureSnapshot:
     """Pull provider data and compose a feature snapshot for one event.
 
@@ -749,5 +758,7 @@ def build_features(
         evidence_count=len(evidence_rows or []),
         agent_confidences=agent_confidences,
         agent_modifiers=agent_modifiers,
+        band_thresholds=band_thresholds,
+        designation_modifiers=designation_modifiers,
     )
     return compose_features(inputs)

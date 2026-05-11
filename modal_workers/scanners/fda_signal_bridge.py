@@ -148,6 +148,8 @@ def process_event(
     mode: str,
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
+    band_thresholds: Optional[Mapping[str, float]] = None,
+    designation_modifiers: Optional[Mapping[str, float]] = None,
 ) -> ProcessOutcome:
     """Pure single-event pipeline.
 
@@ -189,6 +191,8 @@ def process_event(
         options=options,
         snapshot_at=snapshot_at,
         designations=dict(designations) if designations else None,
+        band_thresholds=band_thresholds,
+        designation_modifiers=designation_modifiers,
     )
 
     # Gate 2: no auto-Immediate without market_implied_probability.
@@ -343,6 +347,34 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
 
     base_rates = load_base_rates(client)
 
+    # F-310: load the active fda_model_versions row once per scan. Pass its
+    # band_thresholds + designation_modifiers through to each process_event
+    # call. Falls back to fda_event_features module defaults when no active
+    # row exists (degrades to pre-F-310 behavior, not a hard error).
+    active_model_band_thresholds: Optional[Mapping[str, float]] = None
+    active_model_designation_modifiers: Optional[Mapping[str, float]] = None
+    try:
+        mv_rows = client._rest(
+            "POST", "rpc/fda_active_model_version", json_body={}
+        )
+        # The RPC returns the single row as a dict (or a 1-element list,
+        # depending on PostgREST version). Normalize to a dict.
+        if isinstance(mv_rows, list):
+            mv = mv_rows[0] if mv_rows else None
+        else:
+            mv = mv_rows
+        if isinstance(mv, dict):
+            bt = mv.get("band_thresholds") or {}
+            dm = mv.get("designation_modifiers") or {}
+            # Only override if the row populates the fields (sentinel empty
+            # dicts mean "fall back to defaults").
+            if isinstance(bt, dict) and bt:
+                active_model_band_thresholds = bt
+            if isinstance(dm, dict) and dm:
+                active_model_designation_modifiers = dm
+    except Exception as e:  # noqa: BLE001 — soft dep, fall back to defaults
+        warnings.append(f"fda_active_model_version load failed: {type(e).__name__}: {e}")
+
     # Pending events first — ordered by event_date ASC so near-term decisions
     # get scored even when the budget runs out before the tail.
     events = client._rest(
@@ -412,6 +444,8 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
                 mode=mode,
                 snapshot_at=snapshot_at,
                 designations=designations,
+                band_thresholds=active_model_band_thresholds,
+                designation_modifiers=active_model_designation_modifiers,
             )
         except Exception as e:  # noqa: BLE001 — one bad event must not poison the run
             warnings.append(f"process_event failed for {event_id}: {type(e).__name__}: {e}")

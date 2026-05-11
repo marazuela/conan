@@ -8,6 +8,13 @@ allowed-tools:
   - mcp__polygon-mcp__get_iv
   - mcp__polygon-mcp__straddle_implied_move
   - mcp__polygon-mcp__event_window_liquidity
+  # F-311: schema requires ≥3 primary citations; Polygon alone doesn't satisfy
+  # that, so the agent needs web_fetch for the supplementary public sources
+  # listed in cowork-allowlist.json (finance.yahoo.com, nasdaq.com,
+  # whalewisdom.com, dataroma.com, fintel.io, interactivebrokers.com).
+  # The Cowork runtime's host allowlist must include those 6 domains;
+  # without that, this skill fails with egress_blocked.
+  - WebFetch
 context: fork
 hooks:
   PreToolUse: [budget_check]
