@@ -1,9 +1,11 @@
 -- v3 feedback-loop scheduling — pg_cron daily kickoff @ 02:00 UTC.
 --
 -- Why pg_cron and not @modal.Cron: Modal free tier caps schedule decorators
--- at 5 per workspace; conan-v2 already uses 5 (1 Period + 4 Cron) and
--- conan-v3-orchestrator's `orchestrator_drain_queue` consumes the 6th slot
--- via Period(minutes=5). A 7th `@modal.Cron` would push us over the cap.
+-- at 5 per workspace; conan-v2 already uses all 5 (1 Period + 4 Cron) so
+-- v3 schedules cannot use the @modal.Period / @modal.Cron decorator path.
+-- conan-v3-orchestrator's drain runs via a sibling pg_cron job
+-- `v3-orchestrator-drain` (migration 20260518000010); this kickoff follows
+-- the same pattern.
 --
 -- The pg_cron job calls `_conan_modal_post_enqueue('compute_v3', body)`
 -- with body `{"action":"feedback_loop_kickoff","args":{}}`. The compute_v3
