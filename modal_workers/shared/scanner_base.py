@@ -319,6 +319,9 @@ def run_scanner(
     cfg = client.load_scanner_config(scanner_name)
     modal_inv = os.environ.get("MODAL_TASK_ID")  # Modal sets this at runtime
     run_id = client.open_scanner_run(cfg.scanner_id, modal_invocation_id=modal_inv)
+    # Expose run_id to scan_fn for per-run telemetry writes
+    # (e.g. unresolved_sponsor_log). Scanners that don't need it can ignore.
+    cfg.scanner_run_id = run_id
     result = ScannerResult(scanner=scanner_name, status="error", signals=[])
     final_status: ScannerStatus = "error"
     final_signals_emitted = 0

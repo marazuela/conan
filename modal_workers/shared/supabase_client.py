@@ -50,6 +50,10 @@ class ScannerConfig:
     timeout_soft_s: int
     timeout_hard_s: int
     config: Dict[str, Any] = field(default_factory=dict)
+    # Set by scanner_base.run_scanner after open_scanner_run. Lets scanners
+    # write per-run telemetry (e.g. unresolved_sponsor_log) cross-referenced
+    # to the originating scanner_runs row.
+    scanner_run_id: Optional[str] = None
 
 
 @dataclass
@@ -296,6 +300,38 @@ class SupabaseClient:
         self._rest_with_retry("PATCH", "scanner_runs",
                               params={"id": f"eq.{run_id}"},
                               json_body=patch)
+
+    def log_unresolved_sponsors(self, scanner_name: str, scanner_run_id: Optional[str],
+                                 rows: List[Dict[str, Any]]) -> int:
+        """Batch-insert unresolved-sponsor occurrences into unresolved_sponsor_log.
+
+        `rows` items shape: {"sponsor_name": str, "context": dict (optional)}.
+        Each row's `sponsor_name_normalized` is derived here via
+        sec_issuer_lookup._strip_suffix so the aggregation column aligns with
+        what IssuerIndex.resolve() actually compares against.
+
+        Best-effort: insert failure raises a single SupabaseError; callers
+        should treat this as fire-and-forget (telemetry, not load-bearing).
+        """
+        if not rows:
+            return 0
+        from modal_workers.shared.sec_issuer_lookup import _strip_suffix
+        body: List[Dict[str, Any]] = []
+        for r in rows:
+            name = (r.get("sponsor_name") or "").strip()
+            if not name:
+                continue
+            body.append({
+                "sponsor_name": name,
+                "sponsor_name_normalized": _strip_suffix(name),
+                "scanner_name": scanner_name,
+                "scanner_run_id": scanner_run_id,
+                "context": r.get("context") or {},
+            })
+        if not body:
+            return 0
+        self._rest("POST", "unresolved_sponsor_log", json_body=body)
+        return len(body)
 
     @staticmethod
     def _parse_iso(value: Optional[str]) -> Optional[datetime]:
