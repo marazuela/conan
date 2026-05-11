@@ -75,6 +75,7 @@ interface SignalRow extends Omit<GroupSignal, "score"> {
   band: Band | null;
   thesis_direction: Direction;
   convergence_bonus?: number | null;
+  convergence_key?: string | null;
   band_with_bonus?: Band | null;
   score_with_bonus?: number | null;
   auto_caps_triggered?: string[] | null;
@@ -452,6 +453,27 @@ async function processSignal(sig: SignalRow) {
     winnerRow.signal_id,
     windowSignals,
   );
+
+  // --- Trigger-row loser stamp. If the INSERT/UPDATE that fired this reactor
+  // run did NOT win the group, ensure its convergence_key is still set so
+  // future reactor invocations see it via fetchWindow (not just via the
+  // defensive push). Previously the loser stayed in `convergence_key=null`
+  // forever, which:
+  //   (a) made orphan_convergence_sweeper repeatedly POST it to the reactor
+  //       every 6h (sweeper filter: score IS NOT NULL AND band_with_bonus IS NULL),
+  //   (b) caused each replay to defensive-push the orphan into the winner's
+  //       group, inflating the winner's bonus relative to what a canonical-key
+  //       query computes — surfacing as convergence_qa `convergence_disagreement`
+  //       flags.
+  // Stamping the loser with bonus=0 + raw score/band parity keeps it in the
+  // canonical group with no convergence boost. score_with_bonus / band_with_bonus
+  // mirror raw score/band so the row is no longer picked up by the orphan filter.
+  if (
+    sig.signal_id !== winnerRow.signal_id &&
+    (sig.convergence_key ?? null) !== convergence_key
+  ) {
+    await stampRow(sig.signal_id, convergence_key, 0, sig.score!, sig.band!);
+  }
 
   // --- Step 8: on Immediate band, insert alert AND enqueue thesis_job in parallel.
   //   8a. alerts INSERT (ON CONFLICT DO NOTHING — same-day fingerprint dup).
@@ -834,12 +856,20 @@ async function clearDisplacedWinners(
   );
   const ids: string[] = [];
   for (const s of toClear) {
+    // Reset to raw score/band parity rather than nulls. Previously we cleared
+    // score_with_bonus + band_with_bonus to null, which re-tripped the
+    // orphan_convergence_sweeper filter (score IS NOT NULL AND band_with_bonus
+    // IS NULL) and caused the row to be POSTed back to the reactor every 6h
+    // — the replay then defensive-pushed the row into the winner's group and
+    // inflated the winner's bonus (convergence_qa `convergence_disagreement`).
+    // shouldClearDisplacedWinner already only fires on stamped rows, so s.score
+    // and s.band are non-null on every row we update here.
     const { error } = await sb
       .from("signals")
       .update({
         convergence_bonus: 0,
-        score_with_bonus: null,
-        band_with_bonus: null,
+        score_with_bonus: s.score,
+        band_with_bonus: s.band,
       })
       .eq("signal_id", s.signal_id)
       .eq("convergence_key", convergence_key);
