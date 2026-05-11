@@ -166,7 +166,7 @@ def _resolve_one(
     assessment = _fetch_one(sb, "convergence_assessments", assessment_id,
                             select="id,asset_id,reference_class,reference_class_base_rate,thesis_direction,thesis_summary,cited_prose_blocks,created_at,document_window_end")
     asset = _fetch_one(sb, "fda_assets", asset_id,
-                       select="id,asset_name,brand_name,sponsor,indication,indication_normalized,program_status,reference_class_signature,primary_ticker")
+                       select="id,drug_name,generic_name,sponsor_name,indication,indication_normalized,program_status,reference_class_signature,ticker")
     if assessment is None or asset is None:
         return ResolvedOutcome(
             queue_id=queue_id, assessment_id=assessment_id, asset_id=asset_id,
@@ -175,7 +175,7 @@ def _resolve_one(
             skipped_reason=f"assessment_or_asset_missing:assessment={assessment is not None},asset={asset is not None}",
         )
 
-    ticker = asset.get("primary_ticker")
+    ticker = asset.get("ticker")
     if not ticker or ticker in ("?", "PRIVATE_DISCARD", "UNRESOLVABLE"):
         # No ticker — can't label forward returns. Mark no_outcome and persist.
         outcome = ResolvedOutcome(
@@ -508,8 +508,8 @@ def _merge_memory_file(
     Append-only newest-first under '## Resolved post-mortems'. Idempotent: if
     a section entry for this assessment_id already exists, skip insertion.
     """
-    ticker = asset.get("primary_ticker") or "?"
-    asset_name = asset.get("asset_name") or asset.get("brand_name") or "?"
+    ticker = asset.get("ticker") or "?"
+    asset_name = asset.get("drug_name") or asset.get("generic_name") or "?"
     indication = asset.get("indication_normalized") or asset.get("indication") or "?"
 
     ro = outcome.realized_outcome or {}
@@ -585,10 +585,10 @@ def _default_post_mortem_writer(
     import anthropic  # noqa: WPS433  (lazy import is intentional)
 
     client = anthropic.Anthropic()
-    ticker = asset.get("primary_ticker") or "?"
+    ticker = asset.get("ticker") or "?"
     indication = asset.get("indication_normalized") or asset.get("indication") or "?"
-    sponsor = asset.get("sponsor") or "?"
-    asset_name = asset.get("asset_name") or asset.get("brand_name") or "?"
+    sponsor = asset.get("sponsor_name") or "?"
+    asset_name = asset.get("drug_name") or asset.get("generic_name") or "?"
 
     w30 = next((w for w in (label.get("windows") or []) if w.get("days") == 30), {})
     return_pct = w30.get("return_pct")
