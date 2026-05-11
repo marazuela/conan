@@ -59,13 +59,26 @@ _SUFFIX_STRIP_RE = re.compile(
 
 # Punctuation / whitespace we collapse during normalization.
 _PUNCT_COLLAPSE_RE = re.compile(r"[\s.,'&/\\-]+")
+# Standalone "and" — SEC filings use "&" interchangeably with the word "and"
+# in registrant names (e.g. SEC: "ELI LILLY & CO", CT.gov: "Eli Lilly and
+# Company"). Without this collapse, the two normalizations diverge (post-
+# punct-strip: "elilly..." vs "elillyand...") and the IssuerIndex misses on
+# every major pharma whose sponsor caption uses "and" — surfaced via the
+# 2026-05-11 unresolved_sponsor_log telemetry (R4 Phase 1).
+# \b boundary protects substrings like "Sandoz", "Holland".
+_AND_AS_AMP_RE = re.compile(r"\band\b", re.IGNORECASE)
 
 
 def _normalize(name: str) -> str:
-    """Lowercase, strip all whitespace+punctuation, for exact comparison."""
+    """Lowercase, strip all whitespace+punctuation, for exact comparison.
+
+    Treats the word "and" as equivalent to "&" (both get dropped) so SEC and
+    CT.gov captions reconcile to the same key.
+    """
     if not name:
         return ""
     s = name.lower()
+    s = _AND_AS_AMP_RE.sub("", s)
     s = _PUNCT_COLLAPSE_RE.sub("", s)
     return s.strip()
 
