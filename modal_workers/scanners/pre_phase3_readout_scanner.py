@@ -632,13 +632,23 @@ def _build_signal(
         issuer_match.title if issuer_match
         else (sponsor if sponsor != "Unknown sponsor" else None)
     )
+    # F-302: prefer alias-supplied MIC + country when present (foreign listings
+    # like Akeso 9926.XHKG/HK, AriBio 140860.XKRX/KR, Camurus AB CAMX.XSTO/SE).
+    # SEC matches and unresolved sponsors default to MIC=figi_mic / country=US;
+    # the OpenFIGI US-exchange call (lines 553-561 above) is the source of
+    # figi_mic for SEC-listed sponsors and stays unchanged.
+    hint_mic = (issuer_match.mic if (issuer_match and issuer_match.mic) else figi_mic)
+    hint_country = (
+        issuer_match.country if (issuer_match and issuer_match.country)
+        else "US"
+    )
     entity_hints = EntityHints(
         issuer_figi=issuer_figi,
         ticker=issuer_match.ticker if issuer_match else None,
-        mic=figi_mic,
+        mic=hint_mic,
         cik=issuer_match.cik if issuer_match else None,
         name=name_for_hint,
-        country="US",
+        country=hint_country,
     )
 
     return Signal(

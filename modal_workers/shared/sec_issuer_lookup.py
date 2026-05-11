@@ -53,6 +53,12 @@ class IssuerMatch:
     # call. Foreign aliases (e.g. 9926.XHKG for Akeso) cannot use that path,
     # so passing MIC through here avoids a guaranteed-miss OpenFIGI roundtrip.
     mic: Optional[str] = None
+    # F-302: pre-known ISO-3166 country code for alias matches (entities.country).
+    # SEC matches default to None — callers stamp "US" themselves since SEC's
+    # company_tickers.json is US-only. Alias matches plumb the curated country
+    # (HK, KR, SE, CN, etc.) so signal raw_payload + entity_hints reflect the
+    # real listing geography instead of the hardcoded "US".
+    country: Optional[str] = None
 
 
 # Corporate suffix patterns we strip during normalization so
@@ -275,12 +281,14 @@ class IssuerIndex:
             if not (name and ticker):
                 continue
             mic = (arow.get("primary_mic") or "").strip() or None
+            country = (arow.get("country") or "").strip() or None
             match = IssuerMatch(
                 ticker=ticker,
                 cik=None,
                 title=name,
                 match_kind="alias",
                 mic=mic,
+                country=country,
             )
             k1 = _normalize(name)
             k2 = _strip_suffix(name)

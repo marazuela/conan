@@ -688,3 +688,52 @@ Implementation:
 Operator step after deploy: `UPDATE internal_config SET value=<deployed compute-v3 URL> WHERE key='modal_url_compute_v3'` — the migration seeds an unreachable placeholder so accidental pre-seed RPC calls fail loudly with a pg_net transport error rather than routing somewhere unintended. With this in place, the Cowork `bulk_orchestrator_run` skill can retire its direct-insert fallback once the operator has run `modal deploy modal_workers/app.py` (releases the v2 `health` slot) + `modal deploy modal_workers/orchestrator_app.py` (claims the slot for compute-v3) + the secret-update step.
 
 **Deployed live 2026-05-08:** Both Modal apps redeployed (conan-v2 7 endpoints, conan-v3-orchestrator 1 endpoint = 8/8). All three Phase 4B migrations applied to project xvwvwbnxdsjpnealarkh (`v3_phase_4b_convergence_assessments_tier`, `v3_phase_4b_sub_agent_calls_ic_memo_role`, `v3_phase_4b_compute_rpcs`). The compute-v3 URL `https://marazuela--compute-v3.modal.run` is wired into `internal_config.modal_url_compute_v3`. End-to-end smoke verified: `select rpc_tier2_bulk_enqueue(ARRAY[]::text[])` returned request_id 8580; `select rpc_compute_collect(8580, 60000)` returned `{"failed":[],"enqueued":[],"failed_count":0,"enqueued_count":0}` — the empty-list happy path through SQL → pg_net → Modal auth → dispatch → `enqueue_tier2_bulk(sb, [])` → response. Phase 4B is functionally live; the only remaining piece is Cowork scheduling the `bulk_orchestrator_run` cron entry against priority=1 and priority=2 cadences.
+
+---
+
+## D-130 — Two FDA agentic systems coexist: `fda_agent_reviews` vs `sub_agent_calls` (2026-05-11)
+
+**Context.** The 2026-05-11 deep audit ([audit/fda_scanners_deep_audit_2026-05-11.md](audit/fda_scanners_deep_audit_2026-05-11.md), commit `df81e3e`) surfaced an architectural confusion: two parallel agentic systems with overlapping names (`regulatory`, `microstructure`) operate on different inputs and emit to different tables. They are not connected. Without a written decision, future contributors will naturally try to "deduplicate" them — which would silently regress one of the two pipelines.
+
+**Decision.** Keep both systems. Document the boundary; do not merge.
+
+### System A — `fda_agent_reviews` (per-event specialist reviews)
+
+- **Trigger.** `enqueue_fda_agent_reviews` trigger (migration `20260520000000`) fires `AFTER INSERT ON public.fda_regulatory_events` when `event_status='pending'` AND `event_type ∉ {approval, crl, presumed_crl, withdrawal}`. Inserts 3 rows into `fda_agent_reviews`: one each of `agent_kind ∈ {medical, regulatory, microstructure}` with `status='queued'`.
+- **Inputs.** A single `fda_regulatory_events` row + the parent `fda_assets` row + any `fda_event_evidence`. No `convergence_assessments` involvement.
+- **Drain.** External Cowork skill (NOT in this repo) processes the queue serially. Updates `status='running' → 'completed'` and writes `structured_output` jsonb + `citations` + `confidence`.
+- **Output table.** `fda_agent_reviews.structured_output`. Schema is per-agent_kind: medical produces effect_size_pp + safety_concerns + endpoint_quality + fair_probability_modifier; regulatory produces precedent_class_outcome + adcom_pattern; microstructure produces options_iv + straddle_implied_move + ≥3 primary citations (the source of F-311's egress requirement).
+- **Consumer.** `fda_signal_promote_to_thesis` RPC (operator-driven, dashboard click). It does NOT read these reviews directly — instead, it requires an `ic_memo` review row (also `fda_agent_reviews.agent_kind='ic_memo'`) to exist and be `status='completed'`. The IC-memo synthesizer agent reads the three specialist outputs and produces an investment recommendation that gates promotion.
+- **Lifecycle.** One-shot per event. Not re-run on subsequent rescores. New event row → new review batch.
+
+### System B — `sub_agent_calls` (orchestrator Stage-1 sub-agents)
+
+- **Trigger.** Inside `orchestrator_runtime.runtime.run_one()` Stage 1, when `ORCH_ENABLE_SUB_AGENTS=1` env var is set (default `=0`). Dispatches 4 sub-agents in parallel: `literature`, `competitive_landscape`, `regulatory_history`, `options_microstructure`.
+- **Inputs.** The full orchestrator `RunContext` for one `convergence_assessment` — the entire 10-stage state, not just an event.
+- **Drain.** Inline within the orchestrator (Modal app `conan-v3-orchestrator`). Synchronous to `run_one()`; each call writes a `sub_agent_calls` row with `role`, `query`, `output jsonb`, `tokens`, `cost_usd`.
+- **Output table.** `sub_agent_calls.output`. Schema is per-role; consumed by Stage 2 (pre_mortem) and Stage 4 (reference_class) downstream in the same `run_one()` invocation.
+- **Consumer.** The orchestrator itself in subsequent stages. The output never crosses into `fda_agent_reviews` or `fda_event_evidence`.
+- **Lifecycle.** One-shot per orchestrator run. Re-runs of the same asset produce new `sub_agent_calls` rows (no supersession; the latest assessment row's `id` is the FK).
+
+### Why the two are not merged
+
+| Property | fda_agent_reviews | sub_agent_calls |
+|---|---|---|
+| Granularity | per `fda_regulatory_events` row | per `convergence_assessments` row |
+| Runtime | Cowork (3rd-party machine, restricted egress) | Modal (full egress) |
+| Cadence | trigger-driven, fan-out 1→3 per event | invocation-driven, one-shot when flag set |
+| Cost ceiling | per-review hard cap (TBD in F-312 follow-up) | per-assessment $15 ceiling (D-125) |
+| Consumer | IC-memo agent → promote-to-thesis RPC | orchestrator stages 2/4 inline |
+| Latency budget | ~3 hours p50 (audit data) | ~3 minutes per sub-agent inline |
+
+Merging them would require either (a) blocking the orchestrator on Cowork-skill completion (kills latency) or (b) duplicating the orchestrator's RunContext into Cowork (kills authenticity — the orchestrator's view of the asset includes intermediate stage outputs not visible to Cowork).
+
+### Open question (deferred, NOT decided here)
+
+Should `fda_agent_reviews.structured_output` (medical/regulatory/microstructure) be **read** by the orchestrator Stage-1 sub-agents as additional evidence inputs? This would not merge the systems but would let Stage-1's `regulatory_history` sub-agent prepend the latest `fda_agent_reviews(agent_kind='regulatory')` row from the same asset to its context, avoiding redundant API spend. Defer until post-Phase-6 calibration shows whether the duplication is materially hurting Brier scores.
+
+**Consequences.**
+
+- Future PRs that touch either system reference D-130 to confirm intent before any deduplication/refactor.
+- The audit document explicitly tags F-314 against this decision, so the "two systems, distinct purposes" framing is grep-discoverable from the next FDA stack audit.
+- No code change. Documentation only.

@@ -652,3 +652,166 @@ def test_build_eop2_signal_uses_smaller_magnitude_than_pdufa(fake_client):
     assert sig is not None
     assert sig.raw_payload["upside_pct"] == 15.0
     assert sig.raw_payload["downside_pct"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# F-313: end-to-end scan() integration test.
+#
+# The unit tests above cover individual classifiers, designations, CRL
+# extraction, EOP2 detection, magnitude defaults, etc. — but none exercise
+# the full scan(cfg) phase ordering (watchlist load → discovery → enrichment
+# → crosscheck → CRL → signal build → EOP2 → write-back). A regression in
+# the budget-guarded phase sequence (e.g. someone moves a budget check
+# before the load) would only surface in production runs.
+#
+# This test stubs every I/O boundary and feeds a synthetic watchlist with
+# 3 scenarios designed to exercise distinct subtypes:
+#   - AXSM: imminent PDUFA → pdufa_imminent
+#   - LLY:  PDUFA already moved earlier in last 14d → pdufa_date_advanced
+#   - VKTX: 60d-out PDUFA → pdufa_watchlist
+# Assertions stay narrow: scan() returns ok/partial, signal_type set per
+# entry matches the classifier's intent, no wall-clock warning at default
+# budget.
+# ---------------------------------------------------------------------------
+
+def _stub_scan_io(monkeypatch, watchlist):
+    """Replace every I/O call scan() makes with a deterministic stub.
+
+    Returns the fake_client side that the watchlist getter resolves from so
+    tests can also intercept downstream Supabase REST writes if they need to.
+    """
+    # Watchlist load — return our fixture instead of hitting Storage.
+    monkeypatch.setattr(scanner, "_load_watchlist", lambda *_a, **_kw: list(watchlist))
+    monkeypatch.setattr(scanner, "_save_watchlist", lambda *_a, **_kw: None)
+
+    # Discovery + enrichment + CRL + EOP2 — all become no-ops. The scan()
+    # contract: if discovery turns up nothing, signal-build still runs over
+    # the existing watchlist.
+    monkeypatch.setattr(scanner, "_discover_pdufa_from_edgar", lambda *_a, **_kw: 0)
+    monkeypatch.setattr(scanner, "_enrich_watchlist", lambda *_a, **_kw: 0)
+    monkeypatch.setattr(scanner, "_run_approval_crosscheck", lambda *_a, **_kw: [])
+    monkeypatch.setattr(scanner, "_discover_crls_from_edgar", lambda *_a, **_kw: [])
+    monkeypatch.setattr(scanner, "_apply_presumed_crl", lambda *_a, **_kw: [])
+    monkeypatch.setattr(scanner, "_discover_eop2_from_edgar", lambda *_a, **_kw: [])
+
+    # Market snapshot already neutered in fake_client fixture; mirror here so
+    # tests that don't use that fixture still bypass the network.
+    import modal_workers.shared.market_snapshot as ms
+    monkeypatch.setattr(ms, "load_market_snapshot", lambda *_a, **_kw: None)
+
+    # OpenFIGI resolve — best-effort; pretend no FIGI available.
+    import modal_workers.shared.openfigi_resolver as openfigi
+    class _NoResolve:
+        resolved = False
+        issuer_figi = None
+        mic = None
+    monkeypatch.setattr(openfigi, "resolve_ticker", lambda *_a, **_kw: _NoResolve())
+    monkeypatch.setattr(openfigi, "set_cache_backend", lambda *_a, **_kw: None)
+
+
+def test_scan_end_to_end_minimum_yield(monkeypatch):
+    """F-313: end-to-end exercise of scan(cfg) with a 3-entry synthetic
+    watchlist. Asserts the scan completes ok/partial, emits the expected
+    signal subtype per entry, and does not trip the wall-clock budget."""
+    today = datetime.now(timezone.utc).date()
+
+    watchlist = [
+        _entry(
+            ticker="AXSM",
+            drug_name="AXS-05",
+            company_name="Axsome Therapeutics",
+            indication="MDD",
+            pdufa_date=(today + timedelta(days=5)).isoformat(),  # imminent
+        ),
+        _entry(
+            ticker="LLY",
+            drug_name="Tirzepatide",
+            company_name="Eli Lilly and Company",
+            indication="diabetes",
+            pdufa_date=(today + timedelta(days=40)).isoformat(),
+            previous_pdufa_date=(today + timedelta(days=70)).isoformat(),  # advanced
+            pdufa_date_change_kind="advanced",
+            pdufa_date_changed_at=today.isoformat(),
+        ),
+        _entry(
+            ticker="VKTX",
+            drug_name="VK2735",
+            company_name="Viking Therapeutics",
+            indication="obesity",
+            pdufa_date=(today + timedelta(days=60)).isoformat(),  # watchlist window
+        ),
+    ]
+
+    _stub_scan_io(monkeypatch, watchlist)
+    monkeypatch.setattr(
+        scanner, "load_base_rates",
+        lambda _c: {"metabolic_diabetes": 0.45, "metabolic_obesity": 0.48,
+                    "psychiatry_depression": 0.40, "default": 0.58},
+    )
+    # Stub the SupabaseClient hit for internal_config (F-316 loader). Empty
+    # response → falls back to in-code DISQUALIFIED_TICKERS_FALLBACK.
+    monkeypatch.setattr(
+        scanner, "_load_disqualified_tickers",
+        lambda _c: dict(scanner._DISQUALIFIED_TICKERS_FALLBACK),
+    )
+
+    # Block SupabaseClient construction from creating real connections.
+    monkeypatch.setattr(
+        scanner.SupabaseClient,
+        "__init__",
+        lambda self, *_a, **_kw: None,
+    )
+    # OpenFIGI cache backend init reads from client; stub to avoid attribute errors.
+    monkeypatch.setattr(
+        scanner.SupabaseClient,
+        "openfigi_cache_backend",
+        lambda self: (None, None),
+        raising=False,
+    )
+    # Required for SEC_USER_AGENT env var check (discovery would raise without it).
+    monkeypatch.setenv("SEC_USER_AGENT", "test-agent test@example.com")
+
+    cfg = scanner.ScannerConfig(
+        scanner_id="test-scanner-id",
+        name="fda_pdufa_pipeline",
+        status="operational",
+        geography="US",
+        cadence="daily",
+        default_scoring_profile="binary_catalyst",
+        signal_type_profile_map={},
+        endpoints={},
+        timeout_soft_s=240,
+        timeout_hard_s=300,
+        config={"auto_discover": False, "enrich": False, "approval_crosscheck": False},
+    )
+
+    result = scanner.scan(cfg)
+
+    # Phase ordering invariant — scan must NOT trip the wall-clock budget
+    # under these stubbed conditions (every I/O call is O(1)).
+    assert not any("wall-clock budget" in w.lower() for w in result.warnings), (
+        f"wall-clock budget warning surfaced unexpectedly: {result.warnings}"
+    )
+
+    # status must be ok or partial; error means scan() crashed.
+    assert result.status in ("ok", "partial"), (
+        f"unexpected scan status: {result.status} (warnings: {result.warnings})"
+    )
+
+    # Each watchlist entry should produce at least one signal in its expected
+    # subtype. Map ticker → expected signal_type.
+    expected = {
+        "AXSM": scanner.SIGNAL_TYPE_IMMINENT,
+        "LLY": scanner.SIGNAL_TYPE_DATE_ADVANCED,
+        "VKTX": scanner.SIGNAL_TYPE_WATCHLIST,
+    }
+    by_ticker = {s.raw_payload.get("ticker"): s for s in result.signals}
+    for ticker, expected_subtype in expected.items():
+        assert ticker in by_ticker, (
+            f"no signal emitted for {ticker}; emitted tickers were "
+            f"{list(by_ticker.keys())}"
+        )
+        assert by_ticker[ticker].signal_type == expected_subtype, (
+            f"{ticker} expected signal_type={expected_subtype}, "
+            f"got {by_ticker[ticker].signal_type}"
+        )

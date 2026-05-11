@@ -97,13 +97,42 @@ APPROVAL_CACHE_TTL_S = 7 * 24 * 3600
 # avoid overwriting a recoverable backup. v1 parity.
 MIN_EXPECTED_ENTRIES = 20
 
-# Disqualification list (D-039) — preserved verbatim from v1. Pedro edits this in-place.
+# Disqualification list (D-039). Live values live in internal_config under
+# key='fda_pdufa_disqualified_tickers' (migration 20260523010000); see
+# _load_disqualified_tickers(). The dict below is the FALLBACK used when the
+# DB load fails (network blip, key missing) — keep it in sync with the
+# migration's seed values as a safety net.
 # Format: {"TICKER": "reason"}
-DISQUALIFIED_TICKERS: Dict[str, str] = {
+_DISQUALIFIED_TICKERS_FALLBACK: Dict[str, str] = {
     "ZLAB": "Augtyro already FDA-approved (Jun 2024). Scanner picks up China NMPA milestones.",
     "CORT": "Relacorilant (Lifyorli) approved early Mar 25, 2026. Not a pending PDUFA.",
     "ORCA": "Private company, not publicly traded. Cannot be actioned.",
 }
+
+
+def _load_disqualified_tickers(client) -> Dict[str, str]:
+    """Load the operator-editable disqualified-ticker map from internal_config.
+
+    Falls back to the in-code constant on any failure (network, missing key,
+    malformed JSON) so a misconfigured DB never silently widens the scanner's
+    output to known-approved or private tickers.
+    """
+    try:
+        rows = client._rest("GET", "internal_config",
+                            params={"key": "eq.fda_pdufa_disqualified_tickers",
+                                    "select": "value"})
+        if rows and rows[0].get("value"):
+            parsed = json.loads(rows[0]["value"])
+            if isinstance(parsed, dict):
+                # Coerce to {str: str} for the in-clause comparison.
+                return {str(k): str(v) for k, v in parsed.items()}
+    except Exception as e:  # noqa: BLE001 — soft dep on internal_config
+        logger.warning(
+            "fda_pdufa_disqualified_tickers load failed; "
+            "falling back to in-code values (%s: %s)",
+            type(e).__name__, e,
+        )
+    return dict(_DISQUALIFIED_TICKERS_FALLBACK)
 
 # Signal type routing — all PDUFA / AdCom / FDA decision-adjacent subtypes route to
 # binary_catalyst via the scanner row's signal_type_profile_map. Keep the list here
@@ -1112,13 +1141,14 @@ def _run_approval_crosscheck(watchlist: List[dict], user_agent: str,
         (e for e in watchlist if e.get("status") == "active"),
         key=lambda e: e.get("pdufa_date", "9999-99-99"),
     )
+    disqualified = _load_disqualified_tickers(client)
     for entry in active:
         if check_count >= max_checks:
             break
         if budget_deadline is not None and time.time() > budget_deadline:
             break
         ticker = entry.get("ticker", "")
-        if ticker in DISQUALIFIED_TICKERS:
+        if ticker in disqualified:
             continue
         drug_name = entry.get("drug_name", "")
         check_count += 1
@@ -1481,6 +1511,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     scan_start = time.time()
     budget_deadline = scan_start + budget
 
+    # F-316: load operator-editable disqualified-ticker map once per scan.
+    disqualified_tickers = _load_disqualified_tickers(client)
+
     warnings: List[str] = []
     fetched_records = 0
 
@@ -1650,7 +1683,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             continue
 
         ticker = entry.get("ticker", "")
-        if ticker in DISQUALIFIED_TICKERS:
+        if ticker in disqualified_tickers:
             continue
 
         # Lazy OpenFIGI lookup; best-effort, mirror edgar.
