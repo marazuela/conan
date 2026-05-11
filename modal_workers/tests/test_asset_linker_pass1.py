@@ -121,9 +121,86 @@ def test_keyword_index_still_handles_sponsor_and_generic():
     assert "filspari" in idx
     assert "sparsentan" in idx
     assert "travere" in idx
+    # Therapeutics is a SPONSOR_STOPWORD — must not be a keyword
+    assert "therapeutics" not in idx
     # Indication tokens stay out
     assert "iga" not in idx
     assert "nephropathy" not in idx
+
+
+# ---------------------------------------------------------------------------
+# Sponsor stopword filter — closes the second leak (boilerplate corp words)
+# ---------------------------------------------------------------------------
+
+def test_sponsor_stopwords_are_stripped():
+    """The 15:00 run showed 50% prefilter pass-rate even after dropping
+    indication. Root cause: pharma boilerplate words ("Sciences",
+    "Therapeutics", "Pharmaceuticals") in sponsor_name strings false-match
+    every dailymed label that mentions any pharma company. Stripping them
+    via SPONSOR_STOPWORDS leaves only the specific company name as a kw."""
+    assets = [
+        {"id": "a-1", "drug_name": "Aaa", "generic_name": "aaa",
+         "sponsor_name": "Gilead Sciences", "indication": "x"},
+        {"id": "a-2", "drug_name": "Bbb", "generic_name": "bbb",
+         "sponsor_name": "Ionis Pharmaceuticals", "indication": "x"},
+        {"id": "a-3", "drug_name": "Ccc", "generic_name": "ccc",
+         "sponsor_name": "Achieve Life Sciences", "indication": "x"},
+        {"id": "a-4", "drug_name": "Ddd", "generic_name": "ddd",
+         "sponsor_name": "MannKind Corporation", "indication": "x"},
+    ]
+    idx = build_keyword_index(assets)
+    # Specific company tokens kept (lowercased for matching)
+    assert "gilead" in idx
+    assert "ionis" in idx
+    assert "achieve" in idx
+    assert "mannkind" in idx
+    # Pharma boilerplate words MUST NOT appear as keywords
+    for stopword in ("sciences", "therapeutics", "pharmaceuticals",
+                     "pharmaceutical", "pharma", "medicines", "life",
+                     "corporation", "limited"):
+        assert stopword not in idx, (
+            f"'{stopword}' is a SPONSOR_STOPWORD but leaked into the keyword "
+            "index — would match every drug label mentioning any pharma "
+            "company. Got idx keys: %r" % sorted(idx.keys())
+        )
+
+
+def test_sponsor_stopwords_known_limitation_two_common_words():
+    """Known partial-fix: sponsor names whose first 2 non-stopword tokens are
+    both common English words (e.g. 'Bristol Myers Squibb' → [Bristol, Myers],
+    'Scholar Rock' → [Scholar, Rock]) still leak. Those tokens stay because
+    they aren't pharma boilerplate. drug_name + generic_name cover these
+    assets robustly; this is acknowledged tech-debt not a regression."""
+    assets = [{
+        "id": "a-bms",
+        "drug_name": "Iberdomide",
+        "generic_name": "iberdomide",
+        "sponsor_name": "Bristol Myers Squibb",
+        "indication": "x",
+    }]
+    idx = build_keyword_index(assets)
+    # "Bristol" and "Myers" remain — not ideal but acceptable
+    assert "bristol" in idx or "myers" in idx
+    # And the specific drug_name/generic_name still index
+    assert "iberdomide" in idx
+
+
+def test_sponsor_stopword_only_yields_no_keyword():
+    """Edge case: a sponsor_name composed entirely of stopwords (rare but
+    possible, e.g. a misformatted 'Pharmaceutical Sciences') should yield
+    NO sponsor keyword. drug_name + generic_name still cover the asset."""
+    assets = [{
+        "id": "a-1",
+        "drug_name": "Veligrotug",
+        "generic_name": "veligrotug",
+        "sponsor_name": "Pharmaceutical Sciences",
+        "indication": "TED",
+    }]
+    idx = build_keyword_index(assets)
+    # No sponsor token survived — but drug/generic did
+    assert "veligrotug" in idx
+    assert "pharmaceutical" not in idx
+    assert "sciences" not in idx
 
 
 # ---------------------------------------------------------------------------

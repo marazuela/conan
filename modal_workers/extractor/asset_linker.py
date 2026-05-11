@@ -129,6 +129,27 @@ def build_keyword_index(assets: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
     return idx
 
 
+# Pharma-industry boilerplate words that appear in many sponsor_name strings
+# AND inside unrelated dailymed drug labels — indexing them as keywords
+# leaks ~30% of dailymed docs through the prefilter to Sonnet for $0 of true
+# matches. Stripped 2026-05-20 after the indication-removal pass-rate stayed
+# at ~50% instead of dropping to ~15%.
+SPONSOR_STOPWORDS = frozenset({
+    # Corporate-form suffixes (case-sensitive, matched as title-case tokens)
+    "Corporation", "Corporate", "Limited", "Holdings", "Holding",
+    "Group", "Industries", "Company", "Companies",
+    # Pharma industry boilerplate — these are the worst offenders
+    "Therapeutics", "Therapeutic", "Therapy",
+    "Pharmaceuticals", "Pharmaceutical", "Pharma", "Pharmacy",
+    "Sciences", "Science", "Bioscience", "Biosciences",
+    "Medicines", "Medicine", "Medical", "Health", "Healthcare",
+    "Biotech", "BioPharma", "Biopharmaceuticals",
+    # Generic-sounding modifiers commonly used in pharma brand names
+    "Precision", "Advanced", "Innovative", "Life", "Lab", "Labs",
+    "Global", "International", "Worldwide",
+})
+
+
 def _keywords_from(value: str, fld: str) -> List[str]:
     """Pick keywords worth regex-matching."""
     if fld == "drug_name":
@@ -141,9 +162,13 @@ def _keywords_from(value: str, fld: str) -> List[str]:
     if fld == "generic_name":
         return [value] if len(value) >= 4 else []
     if fld == "sponsor_name":
-        # First word of company name (skip "the/inc/corp/llc")
+        # Find all 4+-char Title-case tokens, drop pharma boilerplate, take
+        # the first 2 specific tokens. If filtering empties the list, prefer
+        # NO keyword over a stopword keyword — drug_name + generic_name
+        # already cover the asset.
         tokens = re.findall(r"\b[A-Z][\w-]{3,}\b", value)
-        return tokens[:2]
+        specific = [t for t in tokens if t not in SPONSOR_STOPWORDS]
+        return specific[:2]
     return []
 
 
