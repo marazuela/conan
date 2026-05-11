@@ -699,6 +699,10 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     below_gate = 0
     skipped_already_approved = 0
     unresolved_sponsors: List[str] = []
+    # Parallel structured capture for unresolved_sponsor_log telemetry. The
+    # string list above feeds the human warning; this list feeds the log
+    # table that Phase-2 prioritization queries against.
+    unresolved_log_rows: List[Dict[str, Any]] = []
     for t in trials:
         if time.time() - scan_start > budget:
             warnings.append(f"wall-clock budget ({budget}s) exceeded during scoring")
@@ -750,7 +754,16 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         # Recherche & Développement"). Worth a warning so the audit can
         # decide whether to add an alias map.
         if issuer_index is not None and not sig.raw_payload.get("universe_resolved"):
-            unresolved_sponsors.append(scored["sponsor_name"] or "?")
+            sponsor_name = scored["sponsor_name"] or "?"
+            unresolved_sponsors.append(sponsor_name)
+            unresolved_log_rows.append({
+                "sponsor_name": sponsor_name,
+                "context": {
+                    "nct_id": nct,
+                    "sponsor_class": scored.get("sponsor_class"),
+                    "patterns_hit": scored.get("patterns_hit"),
+                },
+            })
         signals.append(sig)
 
     if unresolved_sponsors:
@@ -759,6 +772,20 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             f"sec_issuer_lookup unresolved for {len(unresolved_sponsors)} INDUSTRY "
             f"sponsor(s): {sample}"
         )
+
+    # Best-effort: write per-occurrence telemetry to unresolved_sponsor_log.
+    # Phase-1 of R4 (sponsor→FIGI resolution gap) — frequency rank against
+    # this table to drive Phase 2A (seed-migration aliases) and 2B (OpenFIGI
+    # name-search fallback). Failure here must not break the scan run.
+    if unresolved_log_rows:
+        try:
+            client.log_unresolved_sponsors(
+                NAME,
+                cfg.scanner_run_id,
+                unresolved_log_rows,
+            )
+        except Exception as e:  # noqa: BLE001 — telemetry, not load-bearing
+            warnings.append(f"unresolved_sponsor_log write failed: {type(e).__name__}: {e}")
 
     status = "partial" if warnings else "ok"
     if warnings and not signals and not trials:
