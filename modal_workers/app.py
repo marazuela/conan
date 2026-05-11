@@ -614,8 +614,12 @@ def takeover_candidate_scanner_once() -> dict:
     # caches; bumped to 300s (registry also updated).
     return _run("takeover_candidate_scanner")
 
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
 def pre_phase3_readout_scanner_once() -> dict:
+    # Modal hard timeout 180→300s + soft budget 90→240s (registry). The 90s soft
+    # mark was being hit on the scoring loop ("wall-clock budget (85s) exceeded
+    # during scoring"), dropping ~110/115 emissions per run (115 → 3 on 2026-05-11).
+    # 243 trials × per-trial OpenFDA + sec_issuer_lookup needs the extra headroom.
     return _run("pre_phase3_readout_scanner")
 
 
