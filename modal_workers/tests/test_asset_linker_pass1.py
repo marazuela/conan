@@ -32,12 +32,14 @@ import anthropic
 
 from modal_workers.extractor.asset_linker import (
     LinkerStats,
+    PREFILTER_EXCLUDED_DOC_TYPES,
     _finish_run_row,
     _mark_classified,
     _start_run_row,
     build_keyword_index,
     classify_document,
     load_documents_to_link,
+    prefilter_doc,
 )
 
 
@@ -204,6 +206,64 @@ def test_sponsor_stopword_only_yields_no_keyword():
     assert "veligrotug" in idx
     assert "pharmaceutical" not in idx
     assert "sciences" not in idx
+
+
+# ---------------------------------------------------------------------------
+# prefilter_doc — precision improvements (doc-type exclusion + word boundary)
+# Added 2026-05-11: edgar 424B2 yielded 0 links / 50 docs / 25 parse_errors,
+# and substring matching let "Vanda" embed in unrelated tokens like
+# "Vandalism".
+# ---------------------------------------------------------------------------
+
+def test_prefilter_skips_prospectus_doc_types():
+    """SEC prospectus/registration filings (424B2/B3/S-1/S-3) yield ~0 links
+    with high parse-error rates. The prefilter must return [] for these
+    without scanning text, regardless of keyword matches."""
+    idx = build_keyword_index(_assets())
+    # Text contains BOTH a drug and a sponsor hit — would normally pass.
+    text = "Veligrotug from Viridian Therapeutics is discussed in section 3."
+    for doc_type in PREFILTER_EXCLUDED_DOC_TYPES:
+        assert prefilter_doc(text, idx, source="edgar",
+                             doc_type=doc_type) == [], (
+            f"doc_type={doc_type} must be excluded by prefilter")
+
+
+def test_prefilter_does_not_skip_non_prospectus_edgar_types():
+    """8-K / 10-Q / 10-K must NOT be excluded — they're the high-yield
+    sources (70% / 61% / 32% link rate respectively)."""
+    idx = build_keyword_index(_assets())
+    text = "Viridian Therapeutics announced enrollment in the trial."
+    for doc_type in ("8-K", "10-Q", "10-K", "10-K/A", "6-K"):
+        result = prefilter_doc(text, idx, source="edgar", doc_type=doc_type)
+        assert len(result) == 1, f"doc_type={doc_type} must pass prefilter"
+
+
+def test_prefilter_uses_word_boundaries_not_substrings():
+    """A short sponsor token like 'Vanda' must NOT match inside 'Vandalism'.
+    Substring match was a precision leak before 2026-05-11."""
+    assets = [{
+        "id": "asset-vanda",
+        "drug_name": "Imsidolimab",
+        "generic_name": None,
+        "sponsor_name": "Vanda Pharmaceuticals",
+        "indication": "GPP",
+    }]
+    idx = build_keyword_index(assets)
+    # 'Vanda' is in the keyword index. Embedded in 'Vandalism' it must NOT
+    # trigger the prefilter.
+    text = "The Vandalism case was discussed in a board memo."
+    assert prefilter_doc(text, idx, source="edgar", doc_type="8-K") == []
+    # But standalone 'Vanda' (or 'Vanda Pharmaceuticals') DOES trigger.
+    text2 = "Vanda Pharmaceuticals issued an 8-K announcing the PDUFA date."
+    assert len(prefilter_doc(text2, idx, source="edgar", doc_type="8-K")) == 1
+
+
+def test_prefilter_word_boundary_is_case_insensitive():
+    """Sponsor tokens are stored title-cased but documents may have any
+    casing. Word-boundary regex must use the IGNORECASE flag."""
+    idx = build_keyword_index(_assets())
+    text = "VIRIDIAN THERAPEUTICS reported phase 3 data."
+    assert len(prefilter_doc(text, idx, source="edgar", doc_type="8-K")) == 1
 
 
 # ---------------------------------------------------------------------------

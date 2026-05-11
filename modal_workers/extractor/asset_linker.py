@@ -402,26 +402,62 @@ def _load_doc_text(doc: Dict[str, Any], client: SupabaseClient) -> Optional[str]
 # sponsor without also naming the specific drug. Sponsor-only hits are the
 # dominant false-positive vector here (big-pharma sponsors like Pfizer/BMS/
 # AstraZeneca appear on hundreds of unrelated dailymed labels). For these
-# sources we require a drug_name or generic_name hit. SEC sources (10-K/Q/8-K,
-# 424B2) keep the full prefilter — sponsor-only matches in competitor filings
-# are valuable signal there.
+# sources we require a drug_name or generic_name hit. SEC sources (10-K/Q/8-K)
+# keep the full prefilter — sponsor-only matches in competitor filings are
+# valuable signal there.
 SPONSOR_ONLY_INSUFFICIENT_SOURCES = frozenset({
     "dailymed", "openfda", "clinicaltrials",
 })
 
+# Doc types that historically yield ~0 links AND have a high parse-error rate
+# (Sonnet returns malformed JSON on these huge structured legalistic filings).
+# Observed 2026-05-11: 50 edgar 424B2 docs classified → 0 links, 25
+# parse_errors. These are SEC registration/prospectus filings — pipeline
+# disclosures are summarized but rarely material per-asset. Skip without
+# Sonnet; the existing 'no_match' marker stamps them so they don't re-fire.
+PREFILTER_EXCLUDED_DOC_TYPES = frozenset({
+    "424B2", "424B3", "424B4", "424B5",
+    "S-1", "S-1/A", "S-3", "S-3/A",
+})
+
+
+def _compile_keyword_patterns(keyword_index: Dict[str, Any]
+                              ) -> Dict[str, "re.Pattern[str]"]:
+    """Pre-compile word-boundary regex per keyword. Word boundaries prevent
+    short tokens like 'Vanda' from matching inside unrelated identifiers
+    (e.g. 'Vandalism'), which was a precision leak under the older substring
+    check."""
+    return {kw: re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE)
+            for kw in keyword_index}
+
 
 def prefilter_doc(text: str, keyword_index: Dict[str, List[Dict[str, Any]]],
-                  source: Optional[str] = None) -> List[Dict[str, Any]]:
+                  source: Optional[str] = None,
+                  doc_type: Optional[str] = None,
+                  keyword_patterns: Optional[Dict[str, "re.Pattern[str]"]] = None
+                  ) -> List[Dict[str, Any]]:
     """Returns the assets whose keywords appear in `text`. Empty list = skip.
 
-    For drug-label / FDA-app / trial sources, requires the asset to have at
-    least one drug_name or generic_name keyword hit (sponsor-only is dropped).
+    Three gates, cheapest first:
+      1. doc_type ∈ PREFILTER_EXCLUDED_DOC_TYPES → empty (no regex scan).
+      2. Keyword match via word-boundary regex on `text`.
+      3. For drug-label / FDA-app / trial sources, drop assets whose only
+         matched field was sponsor_name (sponsor-only insufficient).
+
+    keyword_patterns is an optional pre-compiled regex cache; if None we
+    compile on the fly (fine for tests, wasteful for production loops).
     """
-    text_lower = text.lower()
+    if doc_type and doc_type in PREFILTER_EXCLUDED_DOC_TYPES:
+        return []
+
+    if keyword_patterns is None:
+        keyword_patterns = _compile_keyword_patterns(keyword_index)
+
     matched_fields: Dict[str, set[str]] = {}
     asset_by_id: Dict[str, Dict[str, Any]] = {}
     for kw, entries in keyword_index.items():
-        if kw not in text_lower:
+        pat = keyword_patterns.get(kw)
+        if pat is None or not pat.search(text):
             continue
         for entry in entries:
             a = entry["asset"]
@@ -768,7 +804,9 @@ def main(argv: List[str] | None = None) -> int:
         logger.info("Loaded %d active asset(s)", len(assets))
 
         keyword_index = build_keyword_index(assets)
-        logger.info("Built keyword index with %d unique keywords", len(keyword_index))
+        keyword_patterns = _compile_keyword_patterns(keyword_index)
+        logger.info("Built keyword index with %d unique keywords (compiled "
+                    "to word-boundary regex)", len(keyword_index))
 
         doc_ids = ([d.strip() for d in args.doc_ids.split(",") if d.strip()]
                    if args.doc_ids else None)
@@ -790,7 +828,9 @@ def main(argv: List[str] | None = None) -> int:
                 continue
 
             candidates = prefilter_doc(text, keyword_index,
-                                       source=doc.get("source"))
+                                       source=doc.get("source"),
+                                       doc_type=doc.get("doc_type"),
+                                       keyword_patterns=keyword_patterns)
             if not candidates:
                 stats.docs_prefilter_skipped += 1
                 # Prefilter is deterministic given the current active asset set —
