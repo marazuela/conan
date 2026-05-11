@@ -98,18 +98,74 @@ def test_asset_24h_uses_rpc_when_available():
 
 
 # ---------------------------------------------------------------------------
-# global_24h_cost_usd
+# global_24h_cost_usd — sums BOTH convergence_assessments and asset_linker_runs
 # ---------------------------------------------------------------------------
 
-def test_global_24h_sums_all_recent():
-    rows = [{"cost_usd": "1.00"}, {"cost_usd": "2.50"}, {"cost_usd": "0.10"}]
-    sb = _fallback_sb(rows)
-    total = global_24h_cost_usd(sb)
-    assert total == 3.60
+def _split_sb(orch_rows: list, linker_rows: list, rpc_raises: bool = True):
+    """Table-aware SupabaseClient stub for global_24h_cost_usd. Returns
+    `orch_rows` for convergence_assessments and `linker_rows` for
+    asset_linker_runs. RPC path raises by default to force the fallback."""
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if path.startswith("rpc/"):
+            if rpc_raises:
+                raise Exception("RPC not available")
+            return []
+        if path == "convergence_assessments":
+            return orch_rows
+        if path == "asset_linker_runs":
+            return linker_rows
+        return []
+    sb._rest = MagicMock(side_effect=_rest)
+    return sb
+
+
+def test_global_24h_sums_orchestrator_only_when_linker_empty():
+    sb = _split_sb(
+        orch_rows=[{"cost_usd": "1.00"}, {"cost_usd": "2.50"}, {"cost_usd": "0.10"}],
+        linker_rows=[],
+    )
+    assert global_24h_cost_usd(sb) == 3.60
+
+
+def test_global_24h_sums_linker_only_when_orchestrator_empty():
+    """The 2026-05-11 incident burned ~$27 in asset_linker spend while
+    convergence_assessments showed only $5.18. The new UNION must surface
+    linker-only days."""
+    sb = _split_sb(
+        orch_rows=[],
+        linker_rows=[{"cost_usd": "2.40"}, {"cost_usd": "2.45"}, {"cost_usd": "2.41"}],
+    )
+    assert global_24h_cost_usd(sb) == pytest.approx(7.26)
+
+
+def test_global_24h_sums_both_tables():
+    sb = _split_sb(
+        orch_rows=[{"cost_usd": "5.00"}, {"cost_usd": "0.50"}],
+        linker_rows=[{"cost_usd": "1.20"}, {"cost_usd": "0.80"}],
+    )
+    assert global_24h_cost_usd(sb) == pytest.approx(7.50)
+
+
+def test_global_24h_treats_missing_linker_table_as_zero():
+    """Pre-migration deploys won't have asset_linker_runs. Function must
+    gracefully treat missing-table as zero, not crash."""
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if path.startswith("rpc/"):
+            raise Exception("RPC not available")
+        if path == "convergence_assessments":
+            return [{"cost_usd": "3.00"}]
+        # asset_linker_runs not yet migrated
+        raise Exception('relation "asset_linker_runs" does not exist')
+    sb._rest = MagicMock(side_effect=_rest)
+    assert global_24h_cost_usd(sb) == 3.00
 
 
 def test_global_24h_handles_empty():
-    sb = _fallback_sb([])
+    sb = _split_sb(orch_rows=[], linker_rows=[])
     assert global_24h_cost_usd(sb) == 0.0
 
 
