@@ -640,6 +640,9 @@ COMPUTE_V3_ACTIONS = frozenset({
     "ic_memo_run",
     "feedback_loop_kickoff",
     "orchestrator_drain_queue",
+    "asset_linker_run",
+    "asset_linker_pass2_run",
+    "fact_extractor_run",
 })
 
 
@@ -707,6 +710,48 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         kwargs: Dict[str, Any] = {}
         if "max_per_run" in args:
             kwargs["max_per_run"] = args["max_per_run"]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "asset_linker_run":
+        # Fire-and-forget spawn of the pass-1 Sonnet asset_linker so pg_cron
+        # returns in <1s while the linker runs up to 3600s. Fired by pg_cron
+        # job `v3-asset-linker-pass1` (every 15 min).
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "asset_linker_run",
+        )
+        kwargs: Dict[str, Any] = {}
+        for k in ("asset_id", "max_docs", "budget_usd"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "asset_linker_pass2_run":
+        # Fire-and-forget spawn of the pass-2 Haiku verifier over
+        # low-confidence pass-1 links. Fired by pg_cron job
+        # `v3-asset-linker-pass2` (twice hourly at :10/:40, offset from pass-1).
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "asset_linker_pass2_run",
+        )
+        kwargs: Dict[str, Any] = {}
+        for k in ("asset_id", "max_links", "threshold", "budget_usd"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "fact_extractor_run":
+        # Fire-and-forget spawn of the Sonnet fact_extractor over material
+        # asset_documents links. Fired by pg_cron job `v3-fact-extractor`
+        # (hourly at :20).
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "fact_extractor_run",
+        )
+        kwargs: Dict[str, Any] = {}
+        for k in ("asset_id", "max_links", "budget_usd"):
+            if k in args:
+                kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 

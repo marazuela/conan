@@ -252,6 +252,9 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "ic_memo_run",
         "feedback_loop_kickoff",
         "orchestrator_drain_queue",
+        "asset_linker_run",
+        "asset_linker_pass2_run",
+        "fact_extractor_run",
     })
 
 
@@ -384,4 +387,204 @@ def test_dispatch_orchestrator_drain_queue_passes_max_per_run(monkeypatch):
     })
     assert out["spawned"] is True
     assert spawned["kwargs"] == {"max_per_run": 10}
+    assert "ignored_extra_key" not in spawned["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# asset_linker_run — fire-and-forget spawn into conan-v3-orchestrator
+# ---------------------------------------------------------------------------
+
+def test_dispatch_asset_linker_run_spawns_remote_fn(monkeypatch):
+    """Pass-1 linker action must look up asset_linker_run in the deployed
+    conan-v3-orchestrator app and spawn it fire-and-forget."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-linker-abc"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        spawned["app"] = app_name
+        spawned["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("asset_linker_run", {})
+    assert out == {"spawned": True, "function_call_id": "fc-linker-abc"}
+    assert spawned["app"] == "conan-v3-orchestrator"
+    assert spawned["fn"] == "asset_linker_run"
+    assert spawned["kwargs"] == {}
+
+
+def test_dispatch_asset_linker_run_passes_through_optional_args(monkeypatch):
+    """asset_id, max_docs, budget_usd must reach the spawned function;
+    unknown keys must NOT pass through."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-linker-xyz"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name",
+                        staticmethod(lambda *a, **kw: _FakeFn()))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("asset_linker_run", {
+        "asset_id": "asset-1",
+        "max_docs": 50,
+        "budget_usd": 5.0,
+        "ignored_extra_key": "should_not_pass_through",
+    })
+    assert out["spawned"] is True
+    assert spawned["kwargs"] == {
+        "asset_id": "asset-1",
+        "max_docs": 50,
+        "budget_usd": 5.0,
+    }
+    assert "ignored_extra_key" not in spawned["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# asset_linker_pass2_run — fire-and-forget spawn into conan-v3-orchestrator
+# ---------------------------------------------------------------------------
+
+def test_dispatch_asset_linker_pass2_run_spawns_remote_fn(monkeypatch):
+    """Pass-2 verifier action must look up asset_linker_pass2_run in the
+    deployed conan-v3-orchestrator app and spawn it fire-and-forget."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-pass2-abc"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        spawned["app"] = app_name
+        spawned["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("asset_linker_pass2_run", {})
+    assert out == {"spawned": True, "function_call_id": "fc-pass2-abc"}
+    assert spawned["app"] == "conan-v3-orchestrator"
+    assert spawned["fn"] == "asset_linker_pass2_run"
+    assert spawned["kwargs"] == {}
+
+
+def test_dispatch_asset_linker_pass2_run_passes_through_optional_args(monkeypatch):
+    """asset_id, max_links, threshold, budget_usd must reach the spawned
+    function; unknown keys must NOT pass through."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-pass2-xyz"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name",
+                        staticmethod(lambda *a, **kw: _FakeFn()))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("asset_linker_pass2_run", {
+        "asset_id": "asset-2",
+        "max_links": 100,
+        "threshold": 0.75,
+        "budget_usd": 1.5,
+        "ignored_extra_key": "should_not_pass_through",
+    })
+    assert out["spawned"] is True
+    assert spawned["kwargs"] == {
+        "asset_id": "asset-2",
+        "max_links": 100,
+        "threshold": 0.75,
+        "budget_usd": 1.5,
+    }
+    assert "ignored_extra_key" not in spawned["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# fact_extractor_run — fire-and-forget spawn into conan-v3-orchestrator
+# ---------------------------------------------------------------------------
+
+def test_dispatch_fact_extractor_run_spawns_remote_fn(monkeypatch):
+    """Fact extractor action must look up fact_extractor_run in the
+    deployed conan-v3-orchestrator app and spawn it fire-and-forget."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-fact-abc"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        spawned["app"] = app_name
+        spawned["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("fact_extractor_run", {})
+    assert out == {"spawned": True, "function_call_id": "fc-fact-abc"}
+    assert spawned["app"] == "conan-v3-orchestrator"
+    assert spawned["fn"] == "fact_extractor_run"
+    assert spawned["kwargs"] == {}
+
+
+def test_dispatch_fact_extractor_run_passes_through_optional_args(monkeypatch):
+    """asset_id, max_links, budget_usd must reach the spawned function;
+    unknown keys must NOT pass through."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-fact-xyz"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name",
+                        staticmethod(lambda *a, **kw: _FakeFn()))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("fact_extractor_run", {
+        "asset_id": "asset-3",
+        "max_links": 200,
+        "budget_usd": 12.0,
+        "ignored_extra_key": "should_not_pass_through",
+    })
+    assert out["spawned"] is True
+    assert spawned["kwargs"] == {
+        "asset_id": "asset-3",
+        "max_links": 200,
+        "budget_usd": 12.0,
+    }
     assert "ignored_extra_key" not in spawned["kwargs"]
