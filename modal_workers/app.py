@@ -495,12 +495,15 @@ def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
 
 # --- 3h cadence ---
 
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
+@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
 def edgar_filing_monitor_once() -> dict:
     # Flagship EDGAR now runs budgeted full coverage by default (not one rotating
     # category only), with issuer filtering, market-cap triage, retries, and
     # structured telemetry. Give it room above the soft budget so it can finish
     # filing-type coverage and persist after_insert state safely.
+    # Hard timeout 180→240s + soft budget 115→200s (registry): 14d window showed
+    # 20% partial runs (23/114) hitting budget_exhausted_keyword_phase before the
+    # 4th category ('governance'); p95 partial duration 139s left no headroom.
     return _run("edgar_filing_monitor")
 
 @app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
