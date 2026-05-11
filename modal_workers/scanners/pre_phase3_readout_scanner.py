@@ -657,6 +657,75 @@ def _build_signal(
 
 
 # ---------------------------------------------------------------------------
+# operator_flags helper
+# ---------------------------------------------------------------------------
+
+def _flag_unresolved_entity(client: SupabaseClient, *,
+                            scanner_id: Optional[str],
+                            sponsor_name: str,
+                            nct_id: str,
+                            signal_id: str) -> None:
+    """UPSERT a `pre_phase3_unresolved_entity` operator_flag.
+
+    Surfaces sponsors that cleared the triage gate but couldn't be mapped to
+    any public-issuer identifier. The partial unique index
+    `operator_flags_open_uniq` collapses repeated upserts on the same
+    (source, kind, scanner_id) tuple, so the evidence carries the latest
+    sample (sponsor + nct). Best-effort: never raises into the scanner loop.
+    """
+    try:
+        evidence = {
+            "sponsor_name": sponsor_name,
+            "nct_id": nct_id,
+            "signal_id_dropped": signal_id,
+        }
+        title = f"pre_phase3_readout: sponsor '{sponsor_name[:60]}' did not resolve to a public issuer"
+        body = (
+            f"Scanner dropped trial {nct_id} because SEC issuer lookup + OpenFIGI "
+            f"produced no figi/ticker/cik for sponsor '{sponsor_name}'. Emitting "
+            f"would strand the signal (band_with_bonus never stamps; thesis_writer "
+            f"and v3 orchestrator can't enqueue without a ticker)."
+        )
+        filt = {
+            "source": "eq.scanner:pre_phase3_readout_scanner",
+            "kind": "eq.pre_phase3_unresolved_entity",
+            "resolved_at": "is.null",
+            "scanner_id": f"eq.{scanner_id}" if scanner_id else "is.null",
+            "entity_id": "is.null",
+            "signal_id": "is.null",
+            "candidate_id": "is.null",
+        }
+        existing = client._rest(
+            "GET", "operator_flags",
+            params={**filt, "select": "id", "limit": 1},
+        ) or []
+        row = {
+            "severity": "info",
+            "source": "scanner:pre_phase3_readout_scanner",
+            "kind": "pre_phase3_unresolved_entity",
+            "title": title,
+            "body": body,
+            "evidence": evidence,
+            "scanner_id": scanner_id,
+        }
+        if existing:
+            client._rest(
+                "PATCH", "operator_flags",
+                params={"id": f"eq.{existing[0]['id']}"},
+                json_body={k: row[k] for k in ("title", "body", "evidence", "severity")},
+                prefer="return=minimal",
+            )
+        else:
+            client._rest(
+                "POST", "operator_flags",
+                json_body=row,
+                prefer="return=minimal",
+            )
+    except Exception:  # noqa: BLE001 — observability MUST NOT break the scanner
+        pass
+
+
+# ---------------------------------------------------------------------------
 # scan entrypoint
 # ---------------------------------------------------------------------------
 
@@ -698,6 +767,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     below_gate = 0
     skipped_already_approved = 0
+    skipped_unresolved_entity = 0
     unresolved_sponsors: List[str] = []
     # Parallel structured capture for unresolved_sponsor_log telemetry. The
     # string list above feeds the human warning; this list feeds the log
@@ -746,16 +816,14 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         sig = _build_signal(scored, scan_date, issuer_index=issuer_index)
         if sig is None:
             continue
-        # Track sponsors that cleared the gate but didn't resolve to a public
-        # issuer. Every emitted sponsor here funded an INDUSTRY-class Phase 3
-        # with patterns_hit>=3 — most are large pharmas that should resolve.
-        # Misses are usually EU/Asian listings absent from SEC's US-only list,
-        # private biotechs, or odd-spelled subsidiaries (e.g. "Sanofi-Aventis
-        # Recherche & Développement"). Worth a warning so the audit can
-        # decide whether to add an alias map.
+        # Phase-1 R4 telemetry: log every sponsor that cleared the triage
+        # gate but failed SEC issuer-index resolution. This list is a
+        # superset of the drop block below — a signal may have a FIGI from
+        # OpenFIGI yet still miss the SEC index (EU/Asian listings, odd-
+        # spelled subsidiaries). Phase-2 alias/name-search work ranks
+        # against this log.
         if issuer_index is not None and not sig.raw_payload.get("universe_resolved"):
             sponsor_name = scored["sponsor_name"] or "?"
-            unresolved_sponsors.append(sponsor_name)
             unresolved_log_rows.append({
                 "sponsor_name": sponsor_name,
                 "context": {
@@ -764,13 +832,46 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                     "patterns_hit": scored.get("patterns_hit"),
                 },
             })
+
+        # Drop signals whose sponsor failed to resolve to any public-issuer
+        # identifier (no FIGI, no ticker, no CIK). Emitting these strands the
+        # signal downstream: resolve_or_create_entity falls through to name-
+        # only matching and creates an entity with primary_ticker/primary_mic
+        # NULL, which the convergence reactor and v3 orchestrator can't act on
+        # — `band_with_bonus` never stamps and the row sits in
+        # dashboard_signal_rows as display_band='immediate' forever.
+        # Surface upstream via operator_flags so the audit can decide whether
+        # to extend the SEC alias map or accept private-biotech blind spots.
+        if (
+            sig.entity_hints is None
+            or (
+                not sig.entity_hints.issuer_figi
+                and not sig.entity_hints.ticker
+                and not sig.entity_hints.cik
+            )
+        ):
+            skipped_unresolved_entity += 1
+            sponsor_name = scored["sponsor_name"] or "?"
+            unresolved_sponsors.append(sponsor_name)
+            warnings.append(
+                f"skipped {nct}: sponsor '{sponsor_name}' did not resolve to a "
+                f"public issuer (no figi/ticker/cik); emit would strand signal"
+            )
+            _flag_unresolved_entity(
+                client,
+                scanner_id=getattr(cfg, "scanner_id", None),
+                sponsor_name=sponsor_name,
+                nct_id=nct,
+                signal_id=sig.signal_id,
+            )
+            continue
         signals.append(sig)
 
     if unresolved_sponsors:
         sample = ", ".join(sorted(set(unresolved_sponsors))[:5])
         warnings.append(
-            f"sec_issuer_lookup unresolved for {len(unresolved_sponsors)} INDUSTRY "
-            f"sponsor(s): {sample}"
+            f"dropped {len(unresolved_sponsors)} INDUSTRY sponsor(s) — no public "
+            f"issuer identifier resolved: {sample}"
         )
 
     # Best-effort: write per-occurrence telemetry to unresolved_sponsor_log.
@@ -800,5 +901,6 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         run_metrics={
             "below_gate": below_gate,
             "skipped_already_approved": skipped_already_approved,
+            "skipped_unresolved_entity": skipped_unresolved_entity,
         },
     )
