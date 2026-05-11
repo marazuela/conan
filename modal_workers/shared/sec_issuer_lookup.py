@@ -42,9 +42,17 @@ REQUEST_TIMEOUT = 15
 class IssuerMatch:
     """Result of a successful party-name → issuer resolution."""
     ticker: str
-    cik: str            # zero-padded string
-    title: str          # SEC's official company name
-    match_kind: str     # "exact" | "suffix_trimmed" | "startswith"
+    # CIK is zero-padded for SEC-indexed matches; None for alias matches
+    # sourced from the entities table (foreign listings, subsidiaries, and
+    # other names absent from SEC's company_tickers.json).
+    cik: Optional[str]
+    title: str          # SEC's official company name (or entities.name for alias)
+    match_kind: str     # "exact" | "suffix_trimmed" | "startswith" | "alias"
+    # Pre-known MIC for alias matches (entities.primary_mic). SEC matches leave
+    # this None — pre_phase3 fills MIC via OpenFIGI's US-exchange resolve_ticker
+    # call. Foreign aliases (e.g. 9926.XHKG for Akeso) cannot use that path,
+    # so passing MIC through here avoids a guaranteed-miss OpenFIGI roundtrip.
+    mic: Optional[str] = None
 
 
 # Corporate suffix patterns we strip during normalization so
@@ -186,6 +194,48 @@ def _save_cached(client: Any, entries: Dict[str, Dict[str, Any]]) -> None:
         pass
 
 
+def _load_entity_aliases(client: Any) -> List[Dict[str, Any]]:
+    """Load curated sponsor aliases from the entities table.
+
+    R4 Phase 2A.3: bridge the gap between names absent from SEC's
+    company_tickers.json (foreign listings like Akeso 9926.XHKG, private
+    subsidiaries like Aragon→JNJ) and the IssuerIndex.resolve path. Seed
+    migrations populate entities.primary_ticker/primary_mic/country for
+    these; we surface them at IssuerIndex level so universe_resolved fires
+    correctly and the resolver returns useful hints (MIC, country) that
+    the SEC path can't supply.
+
+    Paginates: PostgREST silently caps result sets at 1000 rows regardless
+    of the `limit` parameter (Supabase default max-rows). With ~1600 rows
+    already qualifying, a single-page query was returning a non-deterministic
+    subset and randomly excluding aliases (Akeso, Aragon, AriBio, Gan & Lee
+    all missed in the first prod verification). Loop via offset until we
+    get a short page.
+
+    Best-effort: any failure (network, schema drift) returns the accumulated
+    rows so far; SEC paths still work standalone.
+    """
+    rows: List[Dict[str, Any]] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        try:
+            batch = client._rest("GET", "entities", params={
+                "select": "name,primary_ticker,primary_mic,country",
+                "primary_ticker": "not.is.null",
+                "order": "id",   # deterministic pagination
+                "limit": str(page_size),
+                "offset": str(offset),
+            }) or []
+        except Exception:  # noqa: BLE001 — alias index is a soft addon
+            return rows
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return rows
+
+
 class IssuerIndex:
     """In-memory index over SEC's tickers list. One instance per scanner run.
 
@@ -193,7 +243,8 @@ class IssuerIndex:
     `.resolve(name)` per party.
     """
 
-    def __init__(self, entries: Dict[str, Dict[str, Any]]):
+    def __init__(self, entries: Dict[str, Dict[str, Any]],
+                 aliases: Optional[List[Dict[str, Any]]] = None):
         self._entries = entries
         # Normalized-name → list of entries (the same name can recur for
         # multi-share-class issuers, e.g., "Alphabet Inc.")
@@ -212,10 +263,41 @@ class IssuerIndex:
             if k2 and k2 != k1:
                 self._by_suffix_trimmed.setdefault(k2, []).append(row)
 
+        # Alias index: entities-table rows with primary_ticker. Checked as a
+        # final fallback after SEC paths, so SEC remains authoritative when
+        # both have a hit. Collisions on the same normalized key are treated
+        # as ambiguous (None) to match SEC convention.
+        self._alias_by_norm: Dict[str, List[IssuerMatch]] = {}
+        self._alias_by_suffix_trimmed: Dict[str, List[IssuerMatch]] = {}
+        for arow in (aliases or []):
+            name = (arow.get("name") or "").strip()
+            ticker = (arow.get("primary_ticker") or "").strip()
+            if not (name and ticker):
+                continue
+            mic = (arow.get("primary_mic") or "").strip() or None
+            match = IssuerMatch(
+                ticker=ticker,
+                cik=None,
+                title=name,
+                match_kind="alias",
+                mic=mic,
+            )
+            k1 = _normalize(name)
+            k2 = _strip_suffix(name)
+            if k1:
+                self._alias_by_norm.setdefault(k1, []).append(match)
+            if k2 and k2 != k1:
+                self._alias_by_suffix_trimmed.setdefault(k2, []).append(match)
+
     @classmethod
     def load(cls, client: Any, user_agent: str,
              *, skip_cache: bool = False) -> Optional["IssuerIndex"]:
-        """Load from cache or fetch from SEC. Returns None if all paths fail."""
+        """Load from cache or fetch from SEC. Returns None if all paths fail.
+
+        Also pulls entity aliases from public.entities so foreign-listed and
+        privately-owned sponsors (seeded via the binary_catalyst seed
+        migrations) resolve via IssuerIndex.resolve too.
+        """
         entries: Optional[Dict[str, Dict[str, Any]]] = None
         if not skip_cache:
             entries = _load_cached(client)
@@ -225,7 +307,8 @@ class IssuerIndex:
                 _save_cached(client, entries)
         if not entries:
             return None
-        return cls(entries)
+        aliases = _load_entity_aliases(client)
+        return cls(entries, aliases=aliases)
 
     @staticmethod
     def _pick_unique(rows: List[Dict[str, Any]],
@@ -248,12 +331,24 @@ class IssuerIndex:
         # Ambiguous — multiple distinct issuers share a normalized name.
         return None
 
+    @staticmethod
+    def _pick_unique_alias(matches: List[IssuerMatch]) -> Optional[IssuerMatch]:
+        """Mirrors _pick_unique for the alias index: collapse multi-class
+        entries that share a (ticker, mic), reject genuinely ambiguous keys."""
+        if not matches:
+            return None
+        keys = {(m.ticker, m.mic) for m in matches}
+        if len(keys) == 1:
+            return matches[0]
+        return None
+
     def resolve(self, party_name: str) -> Optional[IssuerMatch]:
         """Match a caption-extracted party name to a public issuer.
 
         Tries exact match on fully-normalized name, then suffix-trimmed
-        exact, then suffix-trimmed startswith (unique). Returns None on miss
-        or ambiguous match.
+        exact, then suffix-trimmed startswith (unique). Final fallback: the
+        entity-alias index (seed-migration backed names absent from SEC).
+        Returns None on miss or ambiguous match.
         """
         if not party_name:
             return None
@@ -273,9 +368,31 @@ class IssuerIndex:
             if m:
                 return m
 
+        # Alias lookup — curated entities-table entries (seed migrations).
+        # Checked AFTER SEC's exact + suffix-trimmed paths (so authoritative
+        # SEC matches still win) but BEFORE SEC's startswith fuzzy path.
+        # Rationale: alias names are hand-curated and exact; SEC startswith
+        # can short-circuit on an unrelated prefix match (e.g. "Aragon
+        # Pharmaceuticals" → startswith finds "Aragon Therapeutics" or
+        # returns None on ambiguity) and would otherwise prevent the alias
+        # fallback from ever firing.
+        if k1 and k1 in self._alias_by_norm:
+            am = self._pick_unique_alias(self._alias_by_norm[k1])
+            if am:
+                return am
+        if k2 and k2 in self._alias_by_suffix_trimmed:
+            am = self._pick_unique_alias(self._alias_by_suffix_trimmed[k2])
+            if am:
+                return am
+        if k2 and k2 in self._alias_by_norm:
+            am = self._pick_unique_alias(self._alias_by_norm[k2])
+            if am:
+                return am
+
         # Startswith — unique prefix match on suffix-trimmed name.
-        # Guard against short keys (avoid matching every Apple* issuer when
-        # someone passes "a") by requiring len(k2) >= 4.
+        # Lowest-priority fuzzy fallback. Guard against short keys (avoid
+        # matching every Apple* issuer when someone passes "a") by requiring
+        # len(k2) >= 4.
         if k2 and len(k2) >= 4:
             hits: List[Dict[str, Any]] = []
             for k, rows in self._by_suffix_trimmed.items():
@@ -286,4 +403,5 @@ class IssuerIndex:
             m = self._pick_unique(hits, "startswith")
             if m:
                 return m
+
         return None
