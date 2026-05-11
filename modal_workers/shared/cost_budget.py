@@ -72,9 +72,9 @@ def asset_24h_cost_usd(sb, asset_id: str) -> float:
 
 
 def global_24h_cost_usd(sb) -> float:
-    """SUM(cost_usd) over convergence_assessments rows in the last 24h.
-    Bounded by select limit; for accurate accounting beyond ~1000 runs/day
-    add a SQL RPC."""
+    """SUM(cost_usd) over the last 24h across both orchestrator and
+    asset_linker spend. Bounded by select limit; for accurate accounting
+    beyond ~5000 rows/day add a SQL RPC."""
     rpc_payload: Dict[str, Any] = {}
     try:
         rows = sb._rest(
@@ -88,7 +88,7 @@ def global_24h_cost_usd(sb) -> float:
     from datetime import datetime, timedelta, timezone
     cutoff_iso = (datetime.now(timezone.utc)
                   - timedelta(hours=24)).isoformat()
-    rows = sb._rest(
+    orch_rows = sb._rest(
         "GET", "convergence_assessments",
         params={
             "created_at": f"gte.{cutoff_iso}",
@@ -96,7 +96,23 @@ def global_24h_cost_usd(sb) -> float:
             "limit": "5000",
         },
     ) or []
-    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
+    orch_total = sum(float(r.get("cost_usd") or 0.0) for r in orch_rows)
+
+    # asset_linker spend is logged separately in asset_linker_runs.
+    # Missing table (pre-migration deploys) → treat as zero.
+    try:
+        linker_rows = sb._rest(
+            "GET", "asset_linker_runs",
+            params={
+                "started_at": f"gte.{cutoff_iso}",
+                "select": "cost_usd",
+                "limit": "5000",
+            },
+        ) or []
+        linker_total = sum(float(r.get("cost_usd") or 0.0) for r in linker_rows)
+    except Exception:  # noqa: BLE001
+        linker_total = 0.0
+    return orch_total + linker_total
 
 
 def upsert_cost_flag(

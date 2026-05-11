@@ -152,16 +152,14 @@ def _keywords_from(value: str, fld: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def load_documents_to_link(client: SupabaseClient, max_docs: int = 200) -> List[Dict[str, Any]]:
-    """Pull documents that have no asset_documents row yet. Newest-first so
-    the most recent material lands quickly during a backfill."""
-    # PostgREST doesn't support NOT EXISTS subquery directly. Easiest: fetch
-    # all linked document_ids first, then exclude.
-    linked = client._rest(
-        "GET", "asset_documents",
-        params={"select": "document_id"},
-    ) or []
-    linked_ids = {r["document_id"] for r in linked}
+    """Pull documents that have not yet been classified by pass-1. Newest-first
+    so the most recent material lands quickly during a backfill.
 
+    Uses documents.linker_classified_at IS NULL (backed by the partial index
+    documents_linker_unclassified_idx). A terminal outcome — linked, no_match,
+    or parse_error — sets linker_classified_at; transient API errors leave it
+    NULL so the next run retries.
+    """
     rows = client._rest(
         "GET", "documents",
         params={
@@ -170,12 +168,88 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200) -> List[
                 "raw_text", "raw_text_tokens", "storage_path",
                 "published_at", "extensions",
             ]),
+            "linker_classified_at": "is.null",
             "order": "published_at.desc",
-            "limit": str(max_docs * 2),  # fetch extra to allow filtering
+            "limit": str(max_docs),
         },
     ) or []
+    return rows
 
-    return [r for r in rows if r["id"] not in linked_ids][:max_docs]
+
+def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> None:
+    """Stamp documents.linker_classified_at + result for a terminal pass-1
+    outcome. `result` is one of: linked, no_match, parse_error."""
+    from datetime import datetime, timezone
+    try:
+        client._rest(
+            "PATCH", "documents",
+            params={"id": f"eq.{doc_id}"},
+            json_body={
+                "linker_classified_at": datetime.now(timezone.utc).isoformat(),
+                "linker_classified_result": result,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mark_classified PATCH failed for doc %s (%s): %s",
+                       doc_id, result, exc)
+
+
+def _start_run_row(client: SupabaseClient, pass_name: str, model: str) -> Optional[str]:
+    """Insert asset_linker_runs row with status='running'. Returns row id or
+    None if the insert failed (we keep running — observability is best-effort)."""
+    try:
+        res = client._rest(
+            "POST", "asset_linker_runs",
+            json_body={"pass": pass_name, "model": model, "status": "running"},
+            prefer="return=representation",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("asset_linker_runs start INSERT failed: %s", exc)
+        return None
+    if res and isinstance(res, list) and res:
+        return res[0].get("id")
+    return None
+
+
+def _finish_run_row(
+    client: SupabaseClient,
+    run_id: Optional[str],
+    status: str,
+    stats: "LinkerStats | Pass2Stats",
+) -> None:
+    """PATCH the run row with terminal stats. Best-effort — silent on failure."""
+    if not run_id:
+        return
+    from datetime import datetime, timezone
+    patch: Dict[str, Any] = {
+        "status": status,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "api_calls": getattr(stats, "api_calls", 0),
+        "errors": getattr(stats, "errors", 0),
+        "input_tokens": getattr(stats, "input_tokens", 0),
+        "output_tokens": getattr(stats, "output_tokens", 0),
+        "cost_usd": round(float(getattr(stats, "cost_usd", 0.0)), 4),
+    }
+    # Pass-1 only fields
+    if isinstance(stats, LinkerStats):
+        patch["docs_seen"] = stats.docs_seen
+        patch["prefilter_passed"] = stats.docs_prefilter_passed
+        patch["prefilter_skipped"] = stats.docs_prefilter_skipped
+        patch["links_inserted"] = stats.links_inserted
+        patch["links_dedup_skipped"] = stats.links_dedup_skipped
+    # Pass-2 only fields
+    else:
+        patch["docs_seen"] = stats.rows_seen
+        patch["links_inserted"] = stats.kept + stats.demoted + stats.rejected
+    try:
+        client._rest(
+            "PATCH", "asset_linker_runs",
+            params={"id": f"eq.{run_id}"},
+            json_body=patch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("asset_linker_runs finish PATCH failed for %s: %s",
+                       run_id, exc)
 
 
 def _load_doc_text(doc: Dict[str, Any], client: SupabaseClient) -> Optional[str]:
@@ -324,9 +398,12 @@ def classify_document(
     candidate_assets: List[Dict[str, Any]],
     text: str,
     matched_keywords: List[str],
-) -> tuple[List[LinkResult], int, int]:
+) -> tuple[List[LinkResult], int, int, bool]:
     """Send a single document to Sonnet for classification. Returns
-    (links, input_tokens, output_tokens)."""
+    (links, input_tokens, output_tokens, parse_ok). parse_ok=False means
+    Sonnet returned malformed JSON — the call was paid for but no links can
+    be extracted; the caller should mark the doc as parse_error so it isn't
+    retried on the next cron run."""
     trimmed = trim_around_matches(text, matched_keywords)
 
     asset_card = "\n".join(
@@ -374,7 +451,7 @@ Document text (possibly trimmed for length — sections separated by […trim…
     except json.JSONDecodeError as exc:
         logger.warning("JSON parse failed for doc %s: %s — output was: %s",
                        doc["id"], exc, text_out[:200])
-        return [], in_tokens, out_tokens
+        return [], in_tokens, out_tokens, False
 
     raw_links = parsed.get("links", [])
     out: List[LinkResult] = []
@@ -399,7 +476,7 @@ Document text (possibly trimmed for length — sections separated by […trim…
             is_material=bool(r.get("is_material", True)),
             reasoning=str(r.get("reasoning", ""))[:1000],
         ))
-    return out, in_tokens, out_tokens
+    return out, in_tokens, out_tokens, True
 
 
 # ---------------------------------------------------------------------------
@@ -467,10 +544,13 @@ def main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = LinkerStats()
+    run_id = None if args.dry_run else _start_run_row(sb, "pass1", MODEL)
+    budget_exceeded = False
 
     assets = load_active_assets(sb, only_asset_id=args.asset_id)
     if not assets:
         logger.error("No active fda_assets found")
+        _finish_run_row(sb, run_id, "failed", stats)
         return 1
     logger.info("Loaded %d active asset(s)", len(assets))
 
@@ -485,6 +565,7 @@ def main(argv: List[str] | None = None) -> int:
         if stats.cost_usd > args.budget_usd:
             logger.warning("Budget exceeded ($%.2f > $%.2f); stopping early",
                            stats.cost_usd, args.budget_usd)
+            budget_exceeded = True
             break
 
         text = _load_doc_text(doc, sb)
@@ -496,6 +577,12 @@ def main(argv: List[str] | None = None) -> int:
         candidates = prefilter_doc(text, keyword_index)
         if not candidates:
             stats.docs_prefilter_skipped += 1
+            # Prefilter is deterministic given the current active asset set —
+            # mark as no_match so the doc doesn't reappear next cron run. If
+            # new assets are added later, a separate trigger should reset
+            # linker_classified_at = NULL for docs needing re-evaluation.
+            if not args.dry_run:
+                _mark_classified(sb, doc["id"], "no_match")
             continue
         stats.docs_prefilter_passed += 1
 
@@ -507,10 +594,11 @@ def main(argv: List[str] | None = None) -> int:
                 matched_kws.append(kw)
 
         try:
-            links, in_tok, out_tok = classify_document(
+            links, in_tok, out_tok, parse_ok = classify_document(
                 a_client, doc, candidates, text, matched_kws,
             )
         except anthropic.APIError as exc:
+            # Transient — don't mark, let the next cron run retry.
             logger.warning("API error for doc %s: %s", doc["id"], exc)
             stats.errors += 1
             time.sleep(2.0)
@@ -522,10 +610,20 @@ def main(argv: List[str] | None = None) -> int:
         stats.cost_usd += _estimate_cost(in_tok, out_tok)
         stats.docs_classified += 1
 
+        if not parse_ok:
+            # Sonnet returned malformed JSON. The call was paid for; retrying
+            # almost certainly produces the same garbage. Mark to stop the loop.
+            stats.errors += 1
+            if not args.dry_run:
+                _mark_classified(sb, doc["id"], "parse_error")
+            continue
+
         if not links:
             logger.info("doc %s [%s] %s — no links emitted (cost so far $%.3f)",
                         doc["id"], doc.get("source"), doc.get("doc_type"),
                         stats.cost_usd)
+            if not args.dry_run:
+                _mark_classified(sb, doc["id"], "no_match")
             continue
 
         if args.dry_run:
@@ -540,6 +638,7 @@ def main(argv: List[str] | None = None) -> int:
         inserted, skipped = insert_links(sb, doc["id"], links)
         stats.links_inserted += inserted
         stats.links_dedup_skipped += skipped
+        _mark_classified(sb, doc["id"], "linked")
         logger.info(
             "doc %s [%s] %s -> %d link(s) inserted, %d skipped (cost $%.3f)",
             doc["id"], doc.get("source"), doc.get("doc_type"),
@@ -556,6 +655,9 @@ def main(argv: List[str] | None = None) -> int:
                 stats.links_inserted, stats.links_dedup_skipped)
     logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
                 stats.input_tokens, stats.output_tokens, stats.cost_usd)
+
+    final_status = "budget_exceeded" if budget_exceeded else "completed"
+    _finish_run_row(sb, run_id, final_status, stats)
     return 0
 
 
@@ -779,6 +881,8 @@ def pass2_main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = Pass2Stats()
+    run_id = None if args.dry_run else _start_run_row(sb, "pass2", PASS2_MODEL)
+    budget_exceeded = False
 
     pending = _fetch_pass2_pending(
         sb,
@@ -790,6 +894,7 @@ def pass2_main(argv: List[str] | None = None) -> int:
     if not pending:
         logger.info("No pass-2 backlog (asset_id=%s threshold=%s)",
                     args.asset_id, args.threshold)
+        _finish_run_row(sb, run_id, "completed", stats)
         return 0
     logger.info("Pass-2 backlog: %d row(s); batching %d/call",
                 len(pending), PASS2_BATCH_SIZE)
@@ -802,6 +907,7 @@ def pass2_main(argv: List[str] | None = None) -> int:
         if stats.cost_usd > args.budget_usd:
             logger.warning("Budget exceeded ($%.4f > $%.2f); stopping",
                            stats.cost_usd, args.budget_usd)
+            budget_exceeded = True
             break
         batch = pending[i:i + PASS2_BATCH_SIZE]
         try:
@@ -850,6 +956,9 @@ def pass2_main(argv: List[str] | None = None) -> int:
                 stats.kept, stats.demoted, stats.rejected)
     logger.info("  tokens: in=%d out=%d cost_usd=$%.4f",
                 stats.input_tokens, stats.output_tokens, stats.cost_usd)
+
+    final_status = "budget_exceeded" if budget_exceeded else "completed"
+    _finish_run_row(sb, run_id, final_status, stats)
     return 0
 
 
