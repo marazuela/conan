@@ -44,9 +44,11 @@ from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-# Sonnet 4.6 — structured-output extraction. Cheap relative to Opus,
-# accurate for classification tasks.
-MODEL = "claude-sonnet-4-5-20250929"  # widely-available v4.5; v4.6 alias when GA
+# Pass-1 is keyword-prefiltered triage ("is this doc about asset X?"), not high-stakes
+# judgement — Haiku has been adequate for pass-2 verification (D-125) and is cheaper.
+# Override with ASSET_LINKER_PASS1_MODEL env var if recall regresses; falling back to
+# Sonnet is a one-env-var change.
+MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-haiku-4-5-20251001")
 
 # For huge docs, we trim around matches to keep cost bounded. 80k context is
 # plenty for asset linking (which doesn't need every paragraph — just the
@@ -84,13 +86,20 @@ class LinkerStats:
     marker_failures: int = 0   # _mark_classified PATCH failures (silent regression vector)
 
 
-# Sonnet 4.5 pricing (USD per 1M tokens, as of plan-time):
-COST_INPUT_PER_M = 3.0
-COST_OUTPUT_PER_M = 15.0
+# Per-model pricing (USD per 1M tokens). Match to MODEL by prefix.
+_PRICING = {
+    "claude-haiku-4-5": (0.80, 4.0),
+    "claude-sonnet-4-5": (3.0, 15.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+}
 
 
 def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
-    return (input_tokens * COST_INPUT_PER_M + output_tokens * COST_OUTPUT_PER_M) / 1_000_000
+    inp, out = next(
+        (rate for prefix, rate in _PRICING.items() if MODEL.startswith(prefix)),
+        (3.0, 15.0),  # default to Sonnet rates if the model id is unrecognised
+    )
+    return (input_tokens * inp + output_tokens * out) / 1_000_000
 
 
 # ---------------------------------------------------------------------------
