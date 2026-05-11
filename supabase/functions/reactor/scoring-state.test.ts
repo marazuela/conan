@@ -123,6 +123,24 @@ Deno.test("classifyProvisionalHeuristic treats extensions=null as malformed when
   assert(result.malformed === true, "null extensions with heuristic provenance is malformed");
 });
 
+Deno.test("shouldProcessUpdate fires on score-value change after initial scoring", () => {
+  assert(
+    shouldProcessUpdate(
+      {
+        score: 38,
+        dimensions: { approval_probability: 5, _provenance: "ai_resolved" },
+        extensions: { scoring_meta: { requires_resolution: false } },
+      },
+      {
+        score: 22,
+        dimensions: { approval_probability: 3, _provenance: "ai_resolved" },
+        extensions: { scoring_meta: { requires_resolution: false } },
+      },
+    ) === true,
+    "score-value change must re-enter convergence even when provenance is unchanged",
+  );
+});
+
 Deno.test("flattenPersistedDimensions strips _provenance key", () => {
   const out = flattenPersistedDimensions({ _provenance: "ai_resolved" });
   assert(Object.keys(out).length === 0, "expected empty dict");

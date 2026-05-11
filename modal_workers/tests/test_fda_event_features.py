@@ -129,9 +129,9 @@ def test_implied_move_symmetric_payoff_returns_none():
 
 def test_derive_band_thresholds():
     assert derive_band(40.0) == "immediate"
-    assert derive_band(30.0) == "watchlist"
-    assert derive_band(20.0) == "archive"
-    assert derive_band(10.0) == "discard"
+    assert derive_band(25.0) == "watchlist"
+    assert derive_band(15.0) == "archive"
+    assert derive_band(5.0) == "discard"
 
 
 def test_derive_band_custom_thresholds():

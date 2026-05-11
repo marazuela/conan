@@ -123,12 +123,12 @@ def _outcome(asmt_id: str, direction: str = "long", error: float = -10.0) -> Res
 def _asset() -> dict:
     return {
         "id": "asset-1",
-        "primary_ticker": "AVNS",
-        "asset_name": "ABC-123",
-        "brand_name": None,
+        "ticker": "AVNS",
+        "drug_name": "ABC-123",
+        "generic_name": None,
         "indication": "oncology",
         "indication_normalized": "oncology_hematologic",
-        "sponsor": "Avenas Bio",
+        "sponsor_name": "Avenas Bio",
     }
 
 

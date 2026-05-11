@@ -114,8 +114,16 @@ export function shouldProcessUpdate(
 
   const oldProv = scoringProvenance(previousRow);
   const newProv = scoringProvenance(nextRow);
-
   if (oldProv !== "ai_resolved" && newProv === "ai_resolved") return true;
+
+  // signal_resolver may re-score a row (e.g. 22 → 38) without changing
+  // provenance. Without this branch, convergence is never re-evaluated and
+  // band_with_bonus stays stale.
+  const oldScore = previousRow?.score ?? null;
+  const newScore = nextRow?.score ?? null;
+  if (oldScore !== null && newScore !== null && oldScore !== newScore) {
+    return true;
+  }
 
   // ai_resolved → ai_resolved: the trigger WHEN clause fires on any
   // `dimensions->>'_provenance'` distinct-from change. A resolver re-write

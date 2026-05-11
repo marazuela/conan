@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 import anthropic
 
+from orchestrator_runtime.pricing import estimate_cost as _estimate_cost
+
 logger = logging.getLogger(__name__)
 
 # Model selection — swap to Opus 4.7 + xhigh thinking when rate-limit tier permits
@@ -32,12 +34,22 @@ DEFAULT_MODEL = os.environ.get(
 DEFAULT_EXTRACTOR_MODEL = os.environ.get(
     "ORCHESTRATOR_EXTRACTOR_MODEL", "claude-sonnet-4-5-20250929")
 
-# Pricing per 1M tokens (USD). Sonnet 4.5 indicative.
-COST_TABLE = {
-    "claude-sonnet-4-5-20250929": (3.0, 15.0),       # input, output
-    "claude-opus-4-7-20260101": (15.0, 75.0),         # placeholder; bump when GA pricing known
-    "claude-haiku-4-5-20251001": (0.80, 4.0),
-}
+
+class BudgetExceededError(RuntimeError):
+    """Raised by OrchestratorClient.call() when the per-run cost ceiling is
+    breached *after* the in-flight call returns. The runtime detaches the
+    budget; the drain handler converts this into status='killed_budget' and
+    writes the partial cost. Distinct from skipped_budget (pre-flight skip)."""
+
+    def __init__(self, run_id: Optional[str], ceiling_usd: float,
+                 accumulated_usd: float):
+        self.run_id = run_id
+        self.ceiling_usd = ceiling_usd
+        self.accumulated_usd = accumulated_usd
+        super().__init__(
+            f"Budget exceeded for run {run_id}: "
+            f"${accumulated_usd:.4f} > ${ceiling_usd:.2f}"
+        )
 
 
 @dataclass
@@ -54,11 +66,24 @@ class CallResult:
     raw_message: Optional[anthropic.types.Message] = None
 
 
-def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    rates = COST_TABLE.get(model)
-    if not rates:
-        return 0.0
-    return (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
+def estimate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+) -> float:
+    """Cache-aware cost estimate. Delegates to orchestrator_runtime.pricing.
+
+    Kept here for backwards compat with callers that import from client.py.
+    """
+    return _estimate_cost(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+        cache_read_tokens=cache_read_tokens,
+    )
 
 
 class OrchestratorClient:
@@ -66,6 +91,35 @@ class OrchestratorClient:
         # The SDK reads ANTHROPIC_API_KEY from env if not passed; explicit None
         # is intentional — never log/store the key.
         self._client = anthropic.Anthropic(api_key=api_key)
+        # Per-run cost ceiling — see attach_budget(). None when not active.
+        self._budget_run_id: Optional[str] = None
+        self._budget_ceiling_usd: Optional[float] = None
+        self._budget_accumulated_usd: float = 0.0
+
+    def attach_budget(
+        self, run_id: Optional[str], hard_kill_usd: float,
+    ) -> None:
+        """Activate per-run hard-kill ceiling. Each subsequent call() returns
+        normally if cumulative cost ≤ ceiling, else raises BudgetExceededError.
+        Call detach_budget() when the run finishes (success or failure)."""
+        self._budget_run_id = run_id
+        self._budget_ceiling_usd = float(hard_kill_usd)
+        self._budget_accumulated_usd = 0.0
+
+    def detach_budget(self) -> float:
+        """Clear the active budget. Returns the accumulated cost so the
+        caller can write it to orchestrator_runs.cost_actual_usd."""
+        accumulated = self._budget_accumulated_usd
+        self._budget_run_id = None
+        self._budget_ceiling_usd = None
+        self._budget_accumulated_usd = 0.0
+        return accumulated
+
+    def get_accumulated_cost(self) -> float:
+        """Read-only view of the live budget accumulator. Useful in
+        BudgetExceededError handlers that need to PATCH the partial cost
+        before detach_budget() is called."""
+        return self._budget_accumulated_usd
 
     def call(
         self,
@@ -77,6 +131,8 @@ class OrchestratorClient:
         thinking_effort: Optional[str] = None,    # 'low'|'medium'|'high'|'xhigh' on Opus 4.7
         thinking_budget_tokens: Optional[int] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> CallResult:
         kwargs: Dict[str, Any] = {
             "model": model,
@@ -93,19 +149,89 @@ class OrchestratorClient:
             # Adaptive thinking — Opus 4.7+ accepts effort string
             kwargs["thinking"] = {"type": "enabled", "effort": thinking_effort}
 
-        headers = {}
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
+
+        headers: Dict[str, str] = {}
+        # Stream 3.1: default-inject interleaved-thinking beta header for Opus runs.
+        # Sonnet/Haiku skip the header (cheaper, no thinking tokens consumed).
+        if "opus" in model:
+            headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
         if extra_headers:
             headers.update(extra_headers)
 
         t0 = time.time()
-        try:
-            if headers:
-                resp = self._client.messages.create(extra_headers=headers, **kwargs)
-            else:
-                resp = self._client.messages.create(**kwargs)
-        except anthropic.APIError as exc:
-            logger.error("Anthropic API error: %s", exc)
-            raise
+        # Transient-error retry. 529 OverloadedError + 429 RateLimitError +
+        # APIConnectionError are upstream capacity / network blips and recover
+        # within seconds. Permanent errors (auth, bad-request) are NOT retried.
+        # Worst case: 2 + 4 + 8 = 14s extra wall-clock before giving up.
+        _RETRY_MAX_ATTEMPTS = int(os.environ.get("ORCH_RETRY_MAX_ATTEMPTS", "4"))
+        _RETRY_BASE_DELAY_S = float(os.environ.get("ORCH_RETRY_BASE_DELAY_S", "2.0"))
+        _TRANSIENT = (
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+        )
+        # OverloadedError exists only in newer SDKs; fall back to status check.
+        _OverloadedError = getattr(anthropic, "OverloadedError", None)
+        if _OverloadedError is not None:
+            _TRANSIENT = _TRANSIENT + (_OverloadedError,)
+
+        attempt = 0
+        last_exc: Optional[Exception] = None
+        while attempt < _RETRY_MAX_ATTEMPTS:
+            try:
+                if headers:
+                    resp = self._client.messages.create(extra_headers=headers, **kwargs)
+                else:
+                    resp = self._client.messages.create(**kwargs)
+                break
+            except _TRANSIENT as exc:
+                attempt += 1
+                last_exc = exc
+                if attempt >= _RETRY_MAX_ATTEMPTS:
+                    logger.error(
+                        "Anthropic transient error after %d attempts: %s",
+                        attempt, exc,
+                    )
+                    raise
+                delay = _RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                logger.warning(
+                    "Anthropic transient error (attempt %d/%d, sleeping %.1fs): %s",
+                    attempt, _RETRY_MAX_ATTEMPTS, delay, exc,
+                )
+                time.sleep(delay)
+            except anthropic.APIStatusError as exc:
+                # Some SDK versions surface 529 as APIStatusError instead of
+                # OverloadedError. Treat status_code 429/529/5xx as transient.
+                code = getattr(exc, "status_code", None)
+                if code in (429, 529) or (code is not None and 500 <= code < 600):
+                    attempt += 1
+                    last_exc = exc
+                    if attempt >= _RETRY_MAX_ATTEMPTS:
+                        logger.error(
+                            "Anthropic status %s after %d attempts: %s",
+                            code, attempt, exc,
+                        )
+                        raise
+                    delay = _RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Anthropic status %s (attempt %d/%d, sleeping %.1fs): %s",
+                        code, attempt, _RETRY_MAX_ATTEMPTS, delay, exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("Anthropic API error: %s", exc)
+                    raise
+            except anthropic.APIError as exc:
+                logger.error("Anthropic API error: %s", exc)
+                raise
+        else:
+            # _RETRY_MAX_ATTEMPTS exhausted with no break — re-raise last_exc.
+            if last_exc is not None:
+                raise last_exc
 
         latency_ms = int((time.time() - t0) * 1000)
         text = "".join(b.text for b in resp.content if b.type == "text")
@@ -119,7 +245,25 @@ class OrchestratorClient:
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
 
-        cost = estimate_cost(model, in_tok, out_tok)
+        cost = estimate_cost(
+            model,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cache_creation_tokens=cache_create,
+            cache_read_tokens=cache_read,
+        )
+
+        # Per-run budget accumulator. Raise *after* tallying so the caller's
+        # exception handler sees the full partial spend (this call has been
+        # paid for already; we can't unwind it).
+        if self._budget_ceiling_usd is not None:
+            self._budget_accumulated_usd += cost
+            if self._budget_accumulated_usd > self._budget_ceiling_usd:
+                raise BudgetExceededError(
+                    run_id=self._budget_run_id,
+                    ceiling_usd=self._budget_ceiling_usd,
+                    accumulated_usd=self._budget_accumulated_usd,
+                )
 
         return CallResult(
             text=text,

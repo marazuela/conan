@@ -73,6 +73,12 @@ from orchestrator_runtime.constitutional import (
     ConstitutionalResult,
     run_constitutional_check,
 )
+from orchestrator_runtime.memory import MemoryStore, MemoryBlobs
+from orchestrator_runtime.sub_agent_dispatcher import (
+    DISPATCH_TOOL_DEF,
+    dispatch_sub_agent_tool,
+    reset_budget as reset_sub_agent_budget,
+)
 from orchestrator_runtime.hypothesis import (
     STAGE_2_SYSTEM,
     HypothesisResult,
@@ -88,6 +94,19 @@ from orchestrator_runtime.premortem import (
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_VERSION = "orch-v0.4.0-mvp"
+
+# Stream 3.6: Stage 1 sub-agent dispatch is feature-flagged. When ON, Stage 1
+# runs an Anthropic tool-use loop with `dispatch_sub_agent` available. Default
+# OFF to minimize risk of regressions; enable per-assessment via env or by
+# passing `enable_sub_agents=True` to run_one().
+ENABLE_SUB_AGENTS_DEFAULT = os.environ.get("ORCH_ENABLE_SUB_AGENTS") == "1"
+
+# Phase 2B: when set, stage_1_rag_retrieve() injects local-corpus retrieval
+# results into ctx before Stage 1. Off by default during ramp; flip to "1"
+# once the RAG backfill (Phase 1A) is run against live data.
+ENABLE_STAGE_1_RAG_DEFAULT = os.environ.get("ORCH_ENABLE_STAGE_1_RAG") == "1"
+STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
+SUB_AGENT_LOOP_MAX_TURNS = 4
 
 # D-119: shared system prefix lifted from per-stage user content. All stages
 # in one assessment send the same asset preamble + anchor + fact layer as the
@@ -199,7 +218,10 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         rows = client._rest(
             "GET", "documents",
             params={
-                "select": "id,source,doc_type,title,url,published_at,raw_text,extensions",
+                # Stream 3.3: include anthropic_file_id + is_pdf so Stage 1 can
+                # emit native Citations-API document blocks where available.
+                "select": ("id,source,doc_type,title,url,published_at,raw_text,"
+                           "extensions,anthropic_file_id,is_pdf"),
                 "id": f"in.({ids_filter})",
             },
         ) or []
@@ -207,22 +229,37 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         by_id = {r["id"]: r for r in rows}
         docs = [by_id[did] for did in doc_ids if did in by_id]
 
-    # Memory file (if exists) — currently optional/empty for MVP
-    memory_text: Optional[str] = None
-    memory_path = asset.get("memory_path")
-    if memory_path:
-        try:
-            blob = client.read_cache("memory", memory_path.lstrip("/"))
-            if blob:
-                memory_text = blob.decode("utf-8", errors="replace")
-        except Exception as exc:
-            logger.debug("memory file %s not found: %s", memory_path, exc)
+    # Stream 3.4: hierarchical memory — parallel reads of asset + indication +
+    # reviewer_panel + sub_agent scopes from the memory_files index. Falls back
+    # to the legacy single asset.memory_path read when the new path is empty
+    # (eases backfill — old assets without an entry still load OK).
+    memory_store = MemoryStore(client)
+    sub_agent_key = (
+        f"summary/{asset_id}" if asset_id else None
+    )
+    memory_blobs = memory_store.load_all(
+        asset_id=asset_id,
+        indication=asset.get("indication_normalized") or asset.get("indication"),
+        reviewer_panel_id=asset.get("reviewer_panel_id"),
+        sub_agent_key=sub_agent_key,
+    )
+    memory_text = memory_blobs.as_text() if not memory_blobs.is_empty() else None
+    if memory_text is None:
+        legacy_path = asset.get("memory_path")
+        if legacy_path:
+            try:
+                blob = client.read_cache("memory", legacy_path.lstrip("/"))
+                if blob:
+                    memory_text = blob.decode("utf-8", errors="replace")
+            except Exception as exc:
+                logger.debug("legacy memory %s not found: %s", legacy_path, exc)
 
     return {
         "asset": asset,
         "facts": facts,
         "documents": docs,
         "memory_text": memory_text,
+        "memory_blobs": memory_blobs,
         "asset_doc_links": asset_docs,
         "reference_class_anchor": None,  # populated by stage_4_anchor
     }
@@ -265,6 +302,77 @@ def stage_4_anchor(
         },
     )
     return anchor, metric
+
+
+# ===========================================================================
+# Stage 1 RAG retrieval (Phase 2B) — runs between Stage 4 and Stage 1
+# ===========================================================================
+
+def stage_1_rag_retrieve(
+    sb: SupabaseClient,
+    ctx: Dict[str, Any],
+    *,
+    k: int = STAGE_1_RAG_K,
+    asset_scoped: bool = False,
+) -> StageMetric:
+    """Retrieve top-k chunks from the local RAG corpus and store them in
+    ``ctx["rag_chunks"]`` for ``_build_stage_1_user_content`` to render.
+
+    The retrieved chunks land in the user message (NOT the cached system
+    prefix) so retrieval drift between runs does not bust the asset-level
+    cache. Per D-119, the system prefix only contains things that are
+    deterministic given the asset.
+
+    Query construction: indication + drug_name (best heuristic seed for the
+    high-recall retrieval pass; the model can then iterate via the sub-agent
+    `internal_rag_hybrid_search` tool for narrower follow-up queries).
+
+    Cold-start safe: if the corpus is empty, hybrid_search returns [] and the
+    user content omits the retrieved-context section entirely.
+    """
+    asset = ctx.get("asset") or {}
+    drug = (asset.get("drug_name") or "").strip()
+    indication = (
+        asset.get("indication_normalized") or asset.get("indication") or ""
+    ).strip()
+    query = " ".join(filter(None, [indication, drug])) or asset.get("ticker")
+    if not query:
+        ctx["rag_chunks"] = []
+        return StageMetric(
+            stage_name="stage_1_rag_retrieve",
+            model="rag",
+            input_tokens=0, output_tokens=0,
+            cost_usd=0.0, latency_ms=0,
+            notes={"skipped": "no_query"},
+        )
+
+    t0 = time.time()
+    try:
+        from orchestrator_runtime import rag_handle
+        chunks = rag_handle.hybrid_search(
+            sb, query,
+            corpus="all",
+            k=k,
+            asset_id=asset.get("id") if asset_scoped else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # RAG is best-effort. If the corpus or RPCs aren't ready, log and
+        # emit an empty list so Stage 1 falls through to the legacy path.
+        logger.warning("stage_1_rag_retrieve: %s — degrading to no RAG", exc)
+        chunks = []
+
+    ctx["rag_chunks"] = chunks
+    return StageMetric(
+        stage_name="stage_1_rag_retrieve",
+        model="rag",
+        input_tokens=0, output_tokens=0,
+        cost_usd=0.0,
+        latency_ms=int((time.time() - t0) * 1000),
+        notes={
+            "n_chunks": len(chunks), "k": k,
+            "asset_scoped": asset_scoped, "query": query[:200],
+        },
+    )
 
 
 # ===========================================================================
@@ -331,31 +439,183 @@ def stage_1_synthesize(
     a_client: OrchestratorClient,
     ctx: Dict[str, Any],
     model: str,
+    *,
+    enable_sub_agents: bool = ENABLE_SUB_AGENTS_DEFAULT,
+    assessment_id: Optional[str] = None,
 ) -> tuple[str, StageMetric]:
+    """Stage 1 synthesis. Single-shot by default.
+
+    Stream 3.6: when `enable_sub_agents=True`, Claude is given the
+    `dispatch_sub_agent` tool and the call enters a tool-use loop. Claude can
+    issue parallel tool calls for literature / competitive / regulatory_history /
+    options_microstructure within one assistant turn; results land back as
+    tool_result blocks and Claude continues until it produces final cited
+    prose.
+    """
     user_content = _build_stage_1_user_content(ctx)
     facts = ctx["facts"]
     docs = ctx["documents"]
     system_blocks = build_system_blocks(
-        build_shared_system_prefix(ctx), STAGE_1_SYSTEM)
-    result = a_client.call(
-        system=system_blocks,
-        messages=[{"role": "user", "content": user_content}],
-        model=model,
-        max_tokens=4096,
+        build_shared_system_prefix(ctx), STAGE_1_SYSTEM,
+        static_prefix=build_static_prefix(ctx),
     )
+
+    # Stream 3.3: prefer native Citations API content blocks when any document
+    # in ctx has been uploaded to Anthropic Files API; falls back to the
+    # text-only user_content otherwise.
+    has_file_ids = any(d.get("anthropic_file_id") for d in docs)
+    user_payload: Any = (
+        _build_stage_1_user_content_blocks(ctx) if has_file_ids else user_content
+    )
+
+    if not enable_sub_agents:
+        result = a_client.call(
+            system=system_blocks,
+            messages=[{"role": "user", "content": user_payload}],
+            model=model,
+            max_tokens=4096,
+        )
+        metric = StageMetric(
+            stage_name="stage_1_synthesis",
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            thinking_tokens=result.thinking_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_creation_tokens=result.cache_creation_tokens,
+            cost_usd=result.cost_usd,
+            latency_ms=result.latency_ms,
+            notes={"n_facts": len(facts), "n_docs": len(docs)},
+        )
+        return result.text, metric
+
+    # Tool-use loop variant
+    return _stage_1_synthesize_with_dispatch(
+        a_client, ctx, model, system_blocks, user_payload, assessment_id,
+    )
+
+
+def _stage_1_synthesize_with_dispatch(
+    a_client: OrchestratorClient,
+    ctx: Dict[str, Any],
+    model: str,
+    system_blocks: List[Dict[str, Any]],
+    user_payload: Any,
+    assessment_id: Optional[str],
+) -> tuple[str, StageMetric]:
+    from modal_workers.sub_agents.runtime import _block_to_dict as _b2d
+
+    reset_sub_agent_budget()
+    asset_context = {
+        "asset_id": ctx["asset"]["id"],
+        "ticker": ctx["asset"].get("ticker"),
+        "drug_name": ctx["asset"].get("drug_name"),
+        "indication": ctx["asset"].get("indication"),
+        "reference_class": ctx["asset"].get("reference_class_signature"),
+    }
+    if isinstance(user_payload, str):
+        initial_content: Any = [{"type": "text", "text": user_payload}]
+    else:
+        initial_content = user_payload  # already a list of blocks
+    messages: List[Dict[str, Any]] = [
+        {"role": "user", "content": initial_content}
+    ]
+
+    total_in = total_out = 0
+    total_thinking = 0
+    total_cache_read = total_cache_create = 0
+    total_cost = 0.0
+    total_latency = 0
+    dispatch_log: List[Dict[str, Any]] = []
+    final_text = ""
+
+    for turn in range(SUB_AGENT_LOOP_MAX_TURNS):
+        result = a_client.call(
+            system=system_blocks,
+            messages=messages,
+            model=model,
+            max_tokens=4096,
+            tools=[DISPATCH_TOOL_DEF],
+        )
+        total_in += result.input_tokens
+        total_out += result.output_tokens
+        total_thinking += result.thinking_tokens
+        total_cache_read += result.cache_read_tokens
+        total_cache_create += result.cache_creation_tokens
+        total_cost += result.cost_usd
+        total_latency += result.latency_ms
+
+        msg = result.raw_message
+        if msg is None:
+            final_text = result.text
+            break
+
+        messages.append({
+            "role": "assistant",
+            "content": [_b2d(b) for b in msg.content],
+        })
+
+        stop_reason = getattr(msg, "stop_reason", "end_turn")
+        if stop_reason != "tool_use":
+            final_text = result.text
+            break
+
+        tool_results: List[Dict[str, Any]] = []
+        for block in msg.content:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            if block.name != "dispatch_sub_agent":
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps({"error": f"unknown tool {block.name}"}),
+                    "is_error": True,
+                })
+                continue
+            inp = dict(block.input or {})
+            dispatch_log.append({"role": inp.get("role"), "question": inp.get("question"),
+                                 "turn": turn})
+            try:
+                out = dispatch_sub_agent_tool(
+                    inp, asset_context=asset_context, assessment_id=assessment_id,
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(out, default=str)[:50000],
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Stage 1 dispatch failed: %s", exc)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps({"error": str(exc)}),
+                    "is_error": True,
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+    else:
+        logger.warning("Stage 1 hit SUB_AGENT_LOOP_MAX_TURNS=%d without end_turn",
+                       SUB_AGENT_LOOP_MAX_TURNS)
+
     metric = StageMetric(
         stage_name="stage_1_synthesis",
-        model=result.model,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        thinking_tokens=result.thinking_tokens,
-        cache_read_tokens=result.cache_read_tokens,
-        cache_creation_tokens=result.cache_creation_tokens,
-        cost_usd=result.cost_usd,
-        latency_ms=result.latency_ms,
-        notes={"n_facts": len(facts), "n_docs": len(docs)},
+        model=model,
+        input_tokens=total_in,
+        output_tokens=total_out,
+        thinking_tokens=total_thinking,
+        cache_read_tokens=total_cache_read,
+        cache_creation_tokens=total_cache_create,
+        cost_usd=total_cost,
+        latency_ms=total_latency,
+        notes={
+            "n_facts": len(ctx["facts"]),
+            "n_docs": len(ctx["documents"]),
+            "sub_agent_dispatches": dispatch_log,
+            "loop_turns": turn + 1,
+        },
     )
-    return result.text, metric
+    return final_text, metric
 
 
 # ===========================================================================
@@ -761,7 +1021,119 @@ def stage_10_persist(
         prefer="return=minimal",
     )
 
+    # Stream 3.4: write a distilled asset-scope memory blob so the next
+    # assessment of this asset starts with the prior thesis summary in
+    # context. We use the Stage 9 reasoning_summary plus headline metadata —
+    # not the full prose — so the memory file stays compact (<2KB) and the
+    # 1h-TTL system block A doesn't bloat. Best-effort: a write failure does
+    # not block the assessment from returning.
+    try:
+        # D-123 C5: read prior memory, then append-merge a new entry into
+        # ## Recent assessments (idempotent on assessment_id, capped at 5).
+        store = MemoryStore(sb)
+        prior_blobs = store.load_all(asset_id=asset_id)
+        prior_text = (prior_blobs.asset or "") if prior_blobs else ""
+        memory_summary = _build_asset_memory_summary(
+            asset=ctx["asset"],
+            parsed=parsed,
+            cited_prose=cited_prose,
+            conviction_calibrated=calibrated,
+            band=band,
+            direction=direction,
+            assessment_id=assessment_id,
+            prior_text=prior_text,
+        )
+        store.write(
+            scope="asset",
+            scope_id=asset_id,
+            content=memory_summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory writeback failed for asset=%s: %s", asset_id, exc)
+
     return assessment_id
+
+
+RECENT_ASSESSMENTS_CAP = 5
+
+
+def _parse_recent_assessments(prior_text: str) -> List[str]:
+    """Extract the bullet entries inside `## Recent assessments` from a
+    prior memory file. Returns the list of bullet lines (without the leading
+    '- '). Idempotent: if the section is missing, returns []."""
+    if not prior_text:
+        return []
+    lines = prior_text.splitlines()
+    out: List[str] = []
+    in_section = False
+    for ln in lines:
+        if ln.strip().startswith("## "):
+            if in_section:
+                break  # next section started
+            if ln.strip().lower() == "## recent assessments":
+                in_section = True
+            continue
+        if not in_section:
+            continue
+        if ln.strip().startswith("- "):
+            out.append(ln.strip()[2:])
+    return out
+
+
+def _build_asset_memory_summary(
+    *,
+    asset: Dict[str, Any],
+    parsed: Dict[str, Any],
+    cited_prose: str,
+    conviction_calibrated: float,
+    band: str,
+    direction: str,
+    assessment_id: str,
+    prior_text: str = "",
+) -> str:
+    """Compact asset-scope memory blob written by Stage 10.
+
+    D-123 Contract C5: `## Recent assessments` is append-only newest-first,
+    idempotent on assessment_id (re-running the same assessment doesn't
+    duplicate the entry), capped at RECENT_ASSESSMENTS_CAP.
+    """
+    reasoning = (parsed.get("reasoning_summary") or "")[:1200]
+    uncertainties = parsed.get("uncertainties") or []
+    unc_lines = [
+        f"- {u.get('question', '')[:200]}"
+        for u in uncertainties[:5]
+        if isinstance(u, dict)
+    ]
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Append-merge ## Recent assessments — newest first, dedupe by id.
+    new_entry = (
+        f"{timestamp[:19].replace('T', ' ')}Z · "
+        f"id={assessment_id[:8]} · band={band} · dir={direction} · "
+        f"conv={conviction_calibrated:.1f}"
+    )
+    prior = _parse_recent_assessments(prior_text)
+    # Idempotency marker: assessment_id substring.
+    seen_id = f"id={assessment_id[:8]}"
+    deduped = [e for e in prior if seen_id not in e]
+    merged = [new_entry] + deduped
+    merged = merged[:RECENT_ASSESSMENTS_CAP]
+    recent_lines = "\n".join(f"- {e}" for e in merged)
+
+    return (
+        f"# Asset memory — {asset.get('drug_name') or asset.get('ticker') or asset.get('id')}\n\n"
+        f"_Last updated: {timestamp}_\n\n"
+        f"- last_assessment_id: {assessment_id}\n"
+        f"- last_band: {band}\n"
+        f"- last_direction: {direction}\n"
+        f"- last_conviction_calibrated: {conviction_calibrated:.1f}\n"
+        f"- indication: {asset.get('indication') or '(unknown)'}\n"
+        f"- reference_class: {asset.get('reference_class_signature') or '(unknown)'}\n\n"
+        f"## Reasoning summary\n\n{reasoning}\n\n"
+        f"## Open uncertainties (top 5)\n\n"
+        + ("\n".join(unc_lines) if unc_lines else "_(none recorded)_")
+        + f"\n\n## Recent assessments\n\n{recent_lines}\n"
+    )
 
 
 def _direction_to_outcome(direction: str) -> str:
@@ -819,22 +1191,54 @@ recency)
 {facts_section}"""
 
 
+def build_static_prefix(ctx: Dict[str, Any]) -> Optional[str]:
+    """Stream 3.5 — 1h-TTL system block A.
+
+    Holds content that is invariant across many assessments of the same asset
+    or indication: the loaded memory hierarchy (asset / indication / reviewer
+    panel / sub-agent scopes). Returns None when memory is empty so callers
+    skip the block (avoids paying cache-creation tokens for empty content).
+    """
+    blobs: Optional[MemoryBlobs] = ctx.get("memory_blobs")
+    if blobs is None or blobs.is_empty():
+        return None
+    return f"## Memory hierarchy (static)\n\n{blobs.as_text()}\n"
+
+
 def build_system_blocks(
     shared_prefix: str,
     stage_system: str,
+    *,
+    static_prefix: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Construct system as [{shared_prefix, cache_control}, {stage_system}].
+    """Construct system blocks with mixed TTL caching (Stream 3.5).
 
-    The cache_control marker on block 0 caches everything from start of system
-    up to and including block 0 (i.e. the shared prefix). Block 1 follows
-    after the marker and is per-stage; it does NOT invalidate the cached
-    prefix.
+    Layout when static_prefix is supplied:
+      [block A: static_prefix, ttl=1h]   ← memory hierarchy + future taxonomy
+      [block B: shared_prefix, ttl=5m]   ← per-asset facts + Stage 4 anchor
+      [block C: stage_system, no cache]  ← per-stage instructions
+
+    Layout when static_prefix is None (back-compat for callers that don't load
+    memory — eg. eval_harness fixtures):
+      [block A: shared_prefix, ttl=5m]
+      [block B: stage_system, no cache]
+
+    The 5m TTL is implicit (no `ttl` key) — Anthropic's default ephemeral TTL.
     """
-    return [
-        {"type": "text", "text": shared_prefix,
-         "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": stage_system},
-    ]
+    blocks: List[Dict[str, Any]] = []
+    if static_prefix:
+        blocks.append({
+            "type": "text",
+            "text": static_prefix,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        })
+    blocks.append({
+        "type": "text",
+        "text": shared_prefix,
+        "cache_control": {"type": "ephemeral"},
+    })
+    blocks.append({"type": "text", "text": stage_system})
+    return blocks
 
 
 def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
@@ -843,9 +1247,15 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     moved to the cached system prefix per D-119.
 
     Reused by single-shot Stage 1 + ensemble.
+
+    Stream 3.3 note: when at least one document has an `anthropic_file_id`,
+    callers should prefer `_build_stage_1_user_content_blocks` which emits
+    native Citations-API document blocks. This text-only variant remains the
+    fallback for documents that haven't been uploaded.
     """
     docs = ctx["documents"]
     memory_text = ctx["memory_text"]
+    rag_chunks = ctx.get("rag_chunks") or []
 
     docs_section_parts = []
     for d in docs:
@@ -861,15 +1271,94 @@ def _build_stage_1_user_content(ctx: Dict[str, Any]) -> str:
     memory_section = (f"\n\n## Prior assessment memory\n\n{memory_text}\n"
                       if memory_text else "")
 
+    rag_section = ""
+    if rag_chunks:
+        from orchestrator_runtime import rag_handle
+        rendered = rag_handle.format_chunks_for_prompt(rag_chunks)
+        rag_section = (
+            f"\n## Retrieved context ({len(rag_chunks)} chunks from local "
+            f"primary-source corpus — cite via [D:<doc>] or [C:<chunk>])\n\n"
+            f"{rendered}\n"
+        )
+
     return f"""Document window: last 180 days (most recent {len(docs)} material \
 documents shown below; full set has more)
-
+{rag_section}
 ## Document excerpts ({len(docs)} documents, head-only excerpts)
 
 {docs_section}{memory_section}
 
 Produce the cited prose synthesis per the system prompt. End with the \
 Conclusion section in the exact format specified."""
+
+
+def _build_stage_1_user_content_blocks(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Stream 3.3 — Citations-API user content.
+
+    For each document that has been uploaded to Anthropic Files API
+    (documents.anthropic_file_id IS NOT NULL), emit a native document block
+    with `citations: {enabled: true}`. Documents without an uploaded file_id
+    keep the legacy text-excerpt path inside a single text block.
+
+    Returns a list of blocks suitable for `messages[0].content`.
+
+    The native citations metadata that comes back in Claude's response is
+    walked by Stage 7's constitutional check (`extract_native_citations`).
+    [F:short] / [D:short] notation remains supported as a fallback for facts
+    (which aren't documents) and for documents that aren't uploaded yet.
+    """
+    docs = ctx["documents"]
+    memory_text = ctx.get("memory_text")
+
+    blocks: List[Dict[str, Any]] = []
+    fallback_doc_parts: List[str] = []
+
+    for d in docs:
+        file_id = d.get("anthropic_file_id")
+        title = d.get("title") or f"D:{d['id'][:8]} — {d['source']}/{d['doc_type']}"
+        if file_id:
+            blocks.append({
+                "type": "document",
+                "source": {"type": "file", "file_id": file_id},
+                "title": title[:255],
+                "context": (
+                    f"doc_id={d['id'][:8]} source={d['source']} "
+                    f"doc_type={d['doc_type']} published_at={d.get('published_at')}"
+                ),
+                "citations": {"enabled": True},
+            })
+        else:
+            text = d.get("raw_text") or ""
+            excerpt = (text[:DOC_EXCERPT_CHARS] +
+                       ("\n[…trim…]\n" if len(text) > DOC_EXCERPT_CHARS else ""))
+            fallback_doc_parts.append(
+                f"### D:{d['id'][:8]} — {d['source']}/{d['doc_type']} — "
+                f"{title} — {d.get('published_at')}\n"
+                f"{excerpt}"
+            )
+
+    fallback_section = "\n\n".join(fallback_doc_parts)
+    memory_section = (
+        f"\n\n## Prior assessment memory\n\n{memory_text}\n"
+        if memory_text else ""
+    )
+    text_payload = (
+        f"Document window: last 180 days "
+        f"(documents with native Citations API: {len(blocks)}; "
+        f"documents shown as text excerpt below: {len(fallback_doc_parts)})\n\n"
+    )
+    if fallback_section:
+        text_payload += (
+            f"## Document excerpts (fallback for un-uploaded docs)\n\n"
+            f"{fallback_section}"
+        )
+    text_payload += memory_section
+    text_payload += (
+        "\n\nProduce the cited prose synthesis per the system prompt. End "
+        "with the Conclusion section in the exact format specified."
+    )
+    blocks.append({"type": "text", "text": text_payload})
+    return blocks
 
 
 def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
@@ -881,7 +1370,48 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             run_constitutional: bool = True,
             constitutional_skip_semantic: bool = False,
             enable_premortem: bool = True,
-            dry_run: bool = False) -> Optional[str]:
+            dry_run: bool = False,
+            run_id: Optional[str] = None,
+            hard_kill_usd: Optional[float] = 15.0,
+            parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Build one convergence_assessments row.
+
+    run_id + hard_kill_usd activate the per-run cost ceiling (Stream 6
+    step 4). When set, OrchestratorClient.call() raises BudgetExceededError
+    once cumulative cost exceeds hard_kill_usd; the caller (drain_queue)
+    converts that into status='killed_budget' on orchestrator_runs.
+    Pass hard_kill_usd=None to disable the kill switch (useful for
+    backtests / one-off CLI runs).
+
+    Phase 4A (D-127): pass a mutable dict via `parsed_out` to receive the
+    Stage 9 parsed payload (`thesis_direction`, `conviction_pct`,
+    `evidence_quality`, etc.) before persistence. The replay harness uses
+    this to convert a `dry_run=True` invocation into a ReplayOutput
+    without touching the DB.
+    """
+    if hard_kill_usd is not None:
+        a_client.attach_budget(run_id, hard_kill_usd)
+    try:
+        return _run_one_inner(
+            sb, a_client, asset_id, trigger_type, model, extractor_model,
+            ensemble_n, ensemble_mode, run_constitutional,
+            constitutional_skip_semantic, enable_premortem, dry_run,
+            parsed_out,
+        )
+    finally:
+        if hard_kill_usd is not None:
+            a_client.detach_budget()
+
+
+def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
+                   asset_id: str, trigger_type: str,
+                   model: str, extractor_model: str,
+                   ensemble_n: int, ensemble_mode: str,
+                   run_constitutional: bool,
+                   constitutional_skip_semantic: bool,
+                   enable_premortem: bool,
+                   dry_run: bool,
+                   parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
     logger.info("=== Stage 0: load context ===")
@@ -895,6 +1425,15 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
     logger.info("=== Stage 4: reference-class anchor ===")
     anchor, m4 = stage_4_anchor(sb, ctx)
     run.stage_metrics.append(m4)
+
+    if ENABLE_STAGE_1_RAG_DEFAULT:
+        logger.info("=== Stage 1 RAG retrieve (k=%d) ===", STAGE_1_RAG_K)
+        m_rag = stage_1_rag_retrieve(sb, ctx, k=STAGE_1_RAG_K)
+        run.stage_metrics.append(m_rag)
+        logger.info(
+            "Stage 1 RAG: %d chunks", len(ctx.get("rag_chunks") or []),
+        )
+
     if anchor.has_signal:
         br = anchor.base_rate
         logger.info(
@@ -911,8 +1450,13 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
     user_content = _build_stage_1_user_content(ctx)
     # D-119: shared system prefix is built once per assessment and reused as
     # the cached first system block across Stage 1 ensemble + Stage 2/3/7.
+    # Stream 3.5: static_prefix (memory hierarchy) layered above the per-asset
+    # prefix with a 1h TTL — survives many assessments of the same asset.
     shared_prefix = build_shared_system_prefix(ctx)
-    stage_1_system_blocks = build_system_blocks(shared_prefix, STAGE_1_SYSTEM)
+    static_prefix = build_static_prefix(ctx)
+    stage_1_system_blocks = build_system_blocks(
+        shared_prefix, STAGE_1_SYSTEM, static_prefix=static_prefix,
+    )
 
     if ensemble_n > 1:
         logger.info("=== Stage 1+9 ensemble (%s, n=%d) ===", ensemble_mode, ensemble_n)
@@ -1022,7 +1566,9 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             parsed_json=parsed,
             ctx=ctx,
             model=model,
-            system_blocks=build_system_blocks(shared_prefix, STAGE_2_SYSTEM),
+            system_blocks=build_system_blocks(
+                shared_prefix, STAGE_2_SYSTEM, static_prefix=static_prefix,
+            ),
         )
         # D-118: post-Stage-2 prior renormalization. Blend model priors toward
         # the empirical base rate from Stage 4, weighted by (1 - evidence_quality).
@@ -1074,7 +1620,9 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                 hypothesis_result=hypothesis_result,
                 ctx=ctx,
                 model=model,
-                system_blocks=build_system_blocks(shared_prefix, STAGE_3_SYSTEM),
+                system_blocks=build_system_blocks(
+                    shared_prefix, STAGE_3_SYSTEM, static_prefix=static_prefix,
+                ),
             )
             run.stage_metrics.append(StageMetric(
                 stage_name="stage_3_premortem",
@@ -1150,7 +1698,8 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             hypothesis_result=hypothesis_result,
             premortem_result=premortem_result,
             semantic_system_blocks=build_system_blocks(
-                shared_prefix, SEMANTIC_SYSTEM_PROMPT),
+                shared_prefix, SEMANTIC_SYSTEM_PROMPT, static_prefix=static_prefix,
+            ),
         )
         run.stage_metrics.append(StageMetric(
             stage_name="stage_7_constitutional",
@@ -1177,6 +1726,13 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
                     constitutional_result.n_citations_resolved,
                     constitutional_result.n_citations_checked,
                     constitutional_result.semantic_cost_usd)
+
+    # Phase 4A (D-127): expose parsed payload to the replay harness before
+    # the persistence gate. dict.update() preserves the caller's reference
+    # so they can read it after run_one returns.
+    if parsed_out is not None:
+        parsed_out.clear()
+        parsed_out.update(parsed)
 
     if dry_run:
         logger.info("[dry-run] would persist; assessment summary:")

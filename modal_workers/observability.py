@@ -768,7 +768,7 @@ def litigation_baselines_refresh(client: Optional[SupabaseClient] = None) -> Dic
 import os as _os  # avoid shadowing observability module's `os` if any
 
 _ORPHAN_MIN_AGE_SECONDS = 300       # 5 min — give the live reactor time to land
-_ORPHAN_BATCH_LIMIT = 100           # per-sweep cap
+_ORPHAN_BATCH_LIMIT = 250           # per-sweep cap
 _ORPHAN_REACTOR_TIMEOUT_S = 30.0    # per-call wall clock
 
 
@@ -906,6 +906,10 @@ _SLA_THRESHOLDS_S: Dict[str, int] = {
 _SLA_BATCH_LIMIT = 200
 _SLA_SAMPLE_SIZE = 5
 _SCORING_AUTO_RESET_MAX_ATTEMPTS = 3
+# F-216: long-horizon "really stuck" threshold for needs_scoring keyed on
+# created_at. Catches rows the regular SLA sweep can hide when updated_at
+# re-bumps on unrelated patches.
+_NEEDS_SCORING_AGED_THRESHOLD_DAYS = 7
 
 
 def _age_seconds(updated_at: Any, now: datetime) -> Optional[int]:
@@ -1027,6 +1031,71 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
                 "sample": sample,
                 "scoring_resets": resets if status == "scoring" else None,
                 "scoring_dlqs": dlqs if status == "scoring" else None,
+            },
+        )
+
+    # F-216: long-horizon "really stuck" sweep for needs_scoring, keyed on
+    # `created_at` instead of `updated_at`. The regular per-status loop above
+    # uses updated_at, which can re-bump on unrelated patches and hide rows
+    # that were born stuck. We do NOT auto-reset — at this age the right
+    # response is to check signal_resolver health, not retry a backlog.
+    aged_cutoff = (
+        now - timedelta(days=_NEEDS_SCORING_AGED_THRESHOLD_DAYS)
+    ).isoformat()
+    aged_rows = client._rest(
+        "GET", "thesis_jobs",
+        params={
+            "select": "id,signal_id,status,created_at,updated_at,attempt_count,signals(scoring_profile)",
+            "status": "eq.needs_scoring",
+            "created_at": f"lt.{aged_cutoff}",
+            "order": "created_at.asc",
+            "limit": str(_SLA_BATCH_LIMIT),
+        },
+    ) or []
+    summary["needs_scoring_aged_count"] = len(aged_rows)
+
+    if not aged_rows:
+        _resolve_flag(
+            client,
+            source="thesis_jobs",
+            kind="thesis_jobs_needs_scoring_aged",
+            note=(
+                f"auto-resolved: 0 jobs stuck in needs_scoring past "
+                f"{_NEEDS_SCORING_AGED_THRESHOLD_DAYS}d"
+            ),
+        )
+    else:
+        aged_sample: List[Dict[str, Any]] = []
+        for row in aged_rows[:_SLA_SAMPLE_SIZE]:
+            signals_inner = row.get("signals")
+            profile = None
+            if isinstance(signals_inner, dict):
+                profile = signals_inner.get("scoring_profile")
+            elif isinstance(signals_inner, list) and signals_inner:
+                inner = signals_inner[0]
+                profile = inner.get("scoring_profile") if isinstance(inner, dict) else None
+            aged_sample.append({
+                "job_id": row.get("id"),
+                "signal_id": row.get("signal_id"),
+                "age_seconds": _age_seconds(row.get("created_at"), now),
+                "attempt_count": row.get("attempt_count"),
+                "scoring_profile": profile,
+            })
+        _upsert_flag(
+            client,
+            severity="warn",
+            source="thesis_jobs",
+            kind="thesis_jobs_needs_scoring_aged",
+            title=(
+                f"{len(aged_rows)} thesis_jobs stuck in needs_scoring "
+                f"past {_NEEDS_SCORING_AGED_THRESHOLD_DAYS}d "
+                f"(check signal_resolver health)"
+            ),
+            evidence={
+                "status": "needs_scoring",
+                "threshold_days": _NEEDS_SCORING_AGED_THRESHOLD_DAYS,
+                "aged_count": len(aged_rows),
+                "sample": aged_sample,
             },
         )
 

@@ -499,3 +499,156 @@ def test_build_signal_falls_back_to_legacy_magnitude_when_no_snapshot(fake_clien
     assert sig is not None
     assert sig.raw_payload["upside_pct"] == 50.0
     assert sig.raw_payload["downside_pct"] == 35.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — EOP2 / Type B meeting detection (upstream of NDA)
+# ---------------------------------------------------------------------------
+
+def _eop2_hit(ticker: str, file_date: str) -> dict:
+    return {
+        "_id": "0001234567-26-000099:filename.htm",
+        "_source": {
+            "display_names": [f"{ticker} Therapeutics ({ticker}) (CIK 0001234567)"],
+            "ciks": ["0001234567"],
+            "adsh": "0001234567-26-000099",
+            "file_date": file_date,
+            "form": "8-K",
+        },
+    }
+
+
+def test_eop2_discovery_emits_positive_signal(monkeypatch):
+    today = datetime.now(timezone.utc).date()
+    file_date = today.isoformat()
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.efts_search",
+        lambda *_a, **_kw: [_eop2_hit("VKTX", file_date)],
+    )
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.fetch_filing_text",
+        lambda *_a, **_kw: (
+            "Item 8.01 Other Events. The Company today announced the successful "
+            "completion of an End-of-Phase 2 meeting with the FDA, reaching "
+            "alignment on the pivotal trial design for tovorafenib. "
+            "Type B meeting written minutes are forthcoming."
+        ),
+    )
+    discovered = scanner._discover_eop2_from_edgar(user_agent="ua@test")
+    assert len(discovered) == 1
+    hit = discovered[0]
+    assert hit["ticker"] == "VKTX"
+    assert hit["sentiment"] == "positive"
+    assert hit["drug_name"] == "tovorafenib"
+
+
+def test_eop2_discovery_skips_non_eop2_keyword_match(monkeypatch):
+    """EFTS keyword may match in unrelated context (exhibits, risk factors).
+    Body confirmation must reject hits without an explicit EOP2/Type B clause."""
+    today = datetime.now(timezone.utc).date()
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.efts_search",
+        lambda *_a, **_kw: [_eop2_hit("ABCD", today.isoformat())],
+    )
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.fetch_filing_text",
+        lambda *_a, **_kw: (
+            "Item 7.01 Regulation FD Disclosure. The Company will host a webcast "
+            "discussing recent strategic milestones. Quarterly earnings of $15M."
+        ),
+    )
+    assert scanner._discover_eop2_from_edgar(user_agent="ua@test") == []
+
+
+def test_eop2_discovery_skips_explicit_negative(monkeypatch):
+    """If the body has explicit negative phrasing AND no positive language,
+    don't emit (rare 8-K of failed meeting)."""
+    today = datetime.now(timezone.utc).date()
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.efts_search",
+        lambda *_a, **_kw: [_eop2_hit("ABCD", today.isoformat())],
+    )
+    monkeypatch.setattr(
+        "modal_workers.shared.edgar_efts.fetch_filing_text",
+        lambda *_a, **_kw: (
+            "Item 8.01. Following an End-of-Phase 2 meeting, the FDA indicated "
+            "no agreement on the proposed pivotal design and recommended "
+            "further data."
+        ),
+    )
+    assert scanner._discover_eop2_from_edgar(user_agent="ua@test") == []
+
+
+def test_build_eop2_signal_has_long_direction_and_low_timeline(fake_client):
+    today = datetime.now(timezone.utc).date()
+    hit = {
+        "ticker": "VKTX",
+        "company_name": "Viking Therapeutics",
+        "cik": "0001234567",
+        "adsh": "0001234567-26-000099",
+        "file_id": "0001234567-26-000099:abc.htm",
+        "file_date": today.isoformat(),
+        "drug_name": "VK2735",
+        "sentiment": "positive",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/1234567/00012345672600099",
+    }
+    sig = scanner._build_eop2_signal(hit, _scan_date(), client=fake_client)
+    assert sig is not None
+    assert sig.signal_type == scanner.SIGNAL_TYPE_EOP2
+    assert sig.thesis_direction == DIRECTION_LONG
+    # days_until_readout midpoint — rubric will derive low catalyst_timeline.
+    assert sig.raw_payload["days_until_readout"] == 365
+    # Strength: 3 base + 1 drug_name + 1 positive = 5.
+    assert sig.strength_estimate == 5
+    assert sig.raw_payload["meeting_type"] == "EOP2"
+    assert sig.raw_payload["sentiment"] == "positive"
+
+
+def test_build_eop2_signal_dedup_hash_keyed_on_adsh(fake_client):
+    """Two builds with same adsh → same source_content_hash → dedup."""
+    today = datetime.now(timezone.utc).date()
+    base = {
+        "ticker": "VKTX",
+        "company_name": "Viking",
+        "cik": "0001234567",
+        "adsh": "0001234567-26-000099",
+        "file_id": "0001234567-26-000099:abc.htm",
+        "file_date": today.isoformat(),
+        "drug_name": "VK2735",
+        "sentiment": "positive",
+        "source_url": "x",
+    }
+    sig_a = scanner._build_eop2_signal(base, _scan_date(), client=fake_client)
+    sig_b = scanner._build_eop2_signal(dict(base), _scan_date(), client=fake_client)
+    assert sig_a.source_content_hash == sig_b.source_content_hash
+    assert sig_a.signal_id == sig_b.signal_id
+
+
+def test_build_eop2_signal_no_drug_name_lowers_strength(fake_client):
+    today = datetime.now(timezone.utc).date()
+    hit = {
+        "ticker": "VKTX", "company_name": "Viking", "cik": "0001234567",
+        "adsh": "0001234567-26-000099", "file_id": "x:y",
+        "file_date": today.isoformat(), "drug_name": "",
+        "sentiment": "neutral", "source_url": "x",
+    }
+    sig = scanner._build_eop2_signal(hit, _scan_date(), client=fake_client)
+    assert sig is not None
+    # Base 3, no drug, neutral sentiment → 3.
+    assert sig.strength_estimate == 3
+
+
+def test_build_eop2_signal_uses_smaller_magnitude_than_pdufa(fake_client):
+    """EOP2 announcements move stocks less than PDUFA decisions even for
+    small caps. fake_client returns no mcap → 15/5 default (vs 50/35 PDUFA)."""
+    today = datetime.now(timezone.utc).date()
+    hit = {
+        "ticker": "VKTX", "company_name": "Viking", "cik": "0001234567",
+        "adsh": "0001234567-26-000099", "file_id": "x:y",
+        "file_date": today.isoformat(), "drug_name": "VK2735",
+        "sentiment": "positive", "source_url": "x",
+    }
+    sig = scanner._build_eop2_signal(hit, _scan_date(), client=fake_client)
+    assert sig is not None
+    assert sig.raw_payload["upside_pct"] == 15.0
+    assert sig.raw_payload["downside_pct"] == 5.0

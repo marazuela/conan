@@ -43,7 +43,7 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_RATE_LIMIT = 9              # req/sec (SEC ceiling is 10; 10% safety margin)
 REQUEST_TIMEOUT = 10            # per-request seconds
 DEDUP_WINDOW_DAYS = 45          # signal novelty window
-ROTATION_ORDER = ["activist", "mna", "distress", "governance"]
+ROTATION_ORDER = ["activist", "mna", "distress", "governance", "fda_outcome"]
 DEFAULT_COVERAGE_MODE = "full"
 
 MIN_QUERY_BUDGET_S = 2.0
@@ -103,6 +103,43 @@ SIGNAL_KEYWORDS: Dict[str, List[str]] = {
         "poison pill", "rights plan", "bylaw amendment", "declassify board",
         "auditor resignation", "whistleblower", "internal investigation",
     ],
+    # P0 #2 (2026-05-08) — close the FDA-outcome detection gap that left AXSM
+    # stuck-active for 8d post-PDUFA. Curated low-FP phrases only; whitelisted
+    # to 8-K / 8-K/A so risk-factor boilerplate in 10-K/10-Q doesn't fire.
+    # Per-keyword direction is resolved via _FDA_OUTCOME_KEYWORD_DIRECTION
+    # below since this bucket emits both long (approval) and short (CRL).
+    "fda_outcome": [
+        "approved by the U.S. Food and Drug Administration",
+        "received FDA approval",
+        "supplemental new drug application approved",
+        "NDA approved",
+        "BLA approved",
+        "Complete Response Letter",
+        "received a CRL",
+    ],
+}
+
+_FDA_OUTCOME_KEYWORD_DIRECTION: Dict[str, str] = {
+    "approved by the U.S. Food and Drug Administration": "long",
+    "received FDA approval": "long",
+    "supplemental new drug application approved": "long",
+    "NDA approved": "long",
+    "BLA approved": "long",
+    "Complete Response Letter": "short",
+    "received a CRL": "short",
+}
+
+# Per-keyword raw_payload.status emitted for fda_outcome hits. Matches the
+# pre_edge_monitor binary-resolution vocabulary so an fda_outcome signal flows
+# through `_binary_resolution` and triggers a deterministic deliver/kill.
+_FDA_OUTCOME_KEYWORD_STATUS: Dict[str, str] = {
+    "approved by the U.S. Food and Drug Administration": "approved",
+    "received FDA approval": "approved",
+    "supplemental new drug application approved": "approved",
+    "NDA approved": "approved",
+    "BLA approved": "approved",
+    "Complete Response Letter": "crl",
+    "received a CRL": "crl",
 }
 
 SIGNAL_FILING_TYPES: Dict[str, List[str]] = {
@@ -120,7 +157,17 @@ CATEGORY_FORM_WHITELIST: Dict[str, set] = {
     "activist":   {"8-K", "8-K/A", "SC 13D", "SC 13D/A", "SC 14D9", "PRER14A", "DFAN14A"},
     "mna":        {"8-K", "8-K/A", "SC 13D", "SC 13D/A", "SC TO-T", "SC TO-T/A",
                    "SC 13E3", "SC 13E3/A", "PREM14A"},
-    "governance": {"8-K", "8-K/A", "10-K", "10-K/A", "10-Q", "10-Q/A"},
+    # Governance keywords (poison pill / rights plan / auditor resignation /
+    # internal investigation) appear in every 10-K and 10-Q as standard risk-
+    # factor and disclosure-control boilerplate. Substantive governance events
+    # are 8-K-disclosable. Restricting to 8-K trades a small recall loss on
+    # buried-in-MD&A disclosures for a large precision win.
+    "governance": {"8-K", "8-K/A"},
+    # FDA approval / CRL announcements are filed under 8-K Item 8.01 (Other
+    # Events) or 7.01 (Reg FD). Whitelisting 8-K only avoids matches on the
+    # boilerplate "FDA approval" phrase that appears in every drug-issuer 10-K
+    # risk-factor section.
+    "fda_outcome": {"8-K", "8-K/A"},
 }
 
 SPAC_IPO_FORM_BLACKLIST = {
@@ -158,12 +205,23 @@ MERGER_SIBLING_WINDOW_DAYS = 7
 
 # Category → thesis direction (v2 addition; v1 scanner didn't emit this but the
 # reactor + convergence classification need it for contradiction detection).
+# `fda_outcome` resolves direction per-keyword (see _resolve_thesis_direction)
+# because the bucket carries both long (approval) and short (CRL) phrases.
 _CATEGORY_DIRECTION: Dict[str, str] = {
     "activist": "long",      # 13D accumulator bullish on target
     "mna": "long",           # target expected to rise
     "distress": "short",     # going concern / restatement bearish
     "governance": "neutral", # poison pill etc. ambiguous until actor known
+    "fda_outcome": "neutral",  # placeholder; per-keyword override below
 }
+
+
+def _resolve_thesis_direction(category: str, keyword: str) -> Optional[str]:
+    """Direction for a keyword hit. Special-cases fda_outcome which carries
+    both directions in one bucket (approvals = long, CRLs = short)."""
+    if category == "fda_outcome":
+        return _FDA_OUTCOME_KEYWORD_DIRECTION.get(keyword) or _CATEGORY_DIRECTION.get(category)
+    return _CATEGORY_DIRECTION.get(category)
 
 _FILING_TYPE_DIRECTION: Dict[str, str] = {
     "activist_ownership": "long",
@@ -187,6 +245,9 @@ _CATEGORY_SIGNAL_TYPE: Dict[str, str] = {
     "distress":   "distress_keyword",
     "mna":        "mna_keyword",
     "governance": "governance_keyword",
+    # fda_outcome emits a distinct signal_type so downstream (pre_edge_monitor,
+    # convergence) can route it to FDA-specific resolution logic.
+    "fda_outcome": "fda_outcome_8k",
 }
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1232,16 @@ def _compute_strength(category: str, keyword: str, form: str) -> int:
             strength = 3
     elif category == "governance" and keyword in ("poison pill", "rights plan"):
         strength = 3
+    elif category == "fda_outcome":
+        # 8-K approval / CRL announcements are decisive resolution events.
+        # Approvals (long) carry slightly higher strength than CRLs because
+        # "Complete Response Letter" can appear in narrative summaries of
+        # prior years, while "approved by the U.S. Food and Drug
+        # Administration" requires the issuer to actively claim the event.
+        if _FDA_OUTCOME_KEYWORD_DIRECTION.get(keyword) == "long":
+            strength = 5
+        else:
+            strength = 4
     return strength
 
 
@@ -1222,6 +1293,15 @@ def _build_signal(
         "exchange": exchange,
         "market_cap_usd_mm": market_cap_usd_mm,
     }
+
+    # P0 #2 — fda_outcome signals carry a `status` field that matches the
+    # pre_edge_monitor binary-resolution vocabulary (approved/crl). This lets
+    # `_binary_resolution` route the signal to a deterministic deliver/kill
+    # without any additional translation layer.
+    if signal_type == "fda_outcome_8k":
+        fda_status = _FDA_OUTCOME_KEYWORD_STATUS.get(matched_keyword)
+        if fda_status:
+            raw_payload["status"] = fda_status
 
     entity_hints = EntityHints(
         issuer_figi=issuer_figi,
@@ -1455,7 +1535,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
                     hit,
                     matched_keyword=keyword,
                     signal_type=signal_type,
-                    thesis_direction=_CATEGORY_DIRECTION.get(category),
+                    thesis_direction=_resolve_thesis_direction(category, keyword),
                     strength_estimate=_compute_strength(category, keyword, form),
                     scan_date=scan_date,
                     tickers=tickers,

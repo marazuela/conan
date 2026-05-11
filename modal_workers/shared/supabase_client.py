@@ -244,6 +244,22 @@ class SupabaseClient:
             names.extend(row["name"] for row in unset if row.get("name"))
         return sorted(set(names))
 
+    def load_operational_names_by_cadence(self, cadence: str) -> List[str]:
+        """Names of operational scanners with the given cadence. Used by the 3h
+        and weekly dispatchers (daily uses load_operational_daily_names_for_hour
+        because it routes by scheduled_hour_utc).
+        """
+        rows = self._rest(
+            "GET",
+            "scanners",
+            params={
+                "cadence": f"eq.{cadence}",
+                "status": "eq.operational",
+                "select": "name",
+            },
+        ) or []
+        return sorted({row["name"] for row in rows if row.get("name")})
+
     def update_scanner_last_run(self, scanner_id: str, last_run_utc: str,
                                 last_run_status: str, last_run_signals: int) -> None:
         self._rest_with_retry("PATCH", "scanners",

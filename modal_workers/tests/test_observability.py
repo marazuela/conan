@@ -453,15 +453,109 @@ def test_thesis_jobs_sla_sweeper_resolves_status_flags_when_clean(monkeypatch):
 
     result = observability.thesis_jobs_sla_sweeper(client)
     assert all(count == 0 for count in result["breaches_by_status"].values())
+    # F-216: aged sweep also runs and finds zero rows.
+    assert result["needs_scoring_aged_count"] == 0
 
-    # Four PATCH calls (one per status) to resolve flags.
+    # Five PATCH calls: one per SLA status + the F-216 aged-sweep kind.
     resolves = [c for c in captured
                 if c["method"] == "PATCH" and c["path"] == "operator_flags"]
     resolved_kinds = {c["params"].get("kind") for c in resolves}
     assert resolved_kinds == {
         "eq.sla_breach_needs_scoring", "eq.sla_breach_scoring",
         "eq.sla_breach_queued", "eq.sla_breach_drafting",
+        "eq.thesis_jobs_needs_scoring_aged",
     }
+
+
+def test_thesis_jobs_sla_sweeper_aged_needs_scoring_flag(monkeypatch):
+    """F-216: rows in needs_scoring older than the aged threshold (created_at,
+    not updated_at) raise a `thesis_jobs_needs_scoring_aged` flag — but are
+    NOT auto-reset (this is a 'check signal_resolver health' alert, not a
+    retry-eligible state)."""
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params,
+                         "json_body": json_body, "prefer": prefer})
+        if method == "GET" and path == "thesis_jobs":
+            params = params or {}
+            # Aged sweep: status=eq.needs_scoring AND a created_at filter is set.
+            if "created_at" in params:
+                return [
+                    {"id": "old-1", "signal_id": "s-old-1",
+                     "status": "needs_scoring",
+                     "created_at": "2026-04-01T10:00:00Z",
+                     "updated_at": "2026-05-06T10:00:00Z",
+                     "attempt_count": 0,
+                     "signals": {"scoring_profile": "binary_catalyst"}},
+                    {"id": "old-2", "signal_id": "s-old-2",
+                     "status": "needs_scoring",
+                     "created_at": "2026-04-15T10:00:00Z",
+                     "updated_at": "2026-05-06T10:00:00Z",
+                     "attempt_count": 1,
+                     "signals": {"scoring_profile": "fda_event"}},
+                ]
+            return []  # no rows for the regular per-status SLA loop
+        if method == "GET" and path == "operator_flags":
+            return []
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://fake"
+    client.service_key = "fake"
+
+    result = observability.thesis_jobs_sla_sweeper(client)
+
+    # Aged sweep counted exactly the seeded rows.
+    assert result["needs_scoring_aged_count"] == 2
+    # No PATCH on thesis_jobs — aged sweep MUST NOT auto-reset/dlq.
+    job_patches = [c for c in captured
+                   if c["method"] == "PATCH" and c["path"] == "thesis_jobs"]
+    assert job_patches == []
+    # Exactly one POST to operator_flags with the aged-flag kind.
+    aged_posts = [
+        c for c in captured
+        if c["method"] == "POST" and c["path"] == "operator_flags"
+        and c["json_body"].get("kind") == "thesis_jobs_needs_scoring_aged"
+    ]
+    assert len(aged_posts) == 1
+    flag_body = aged_posts[0]["json_body"]
+    assert flag_body["severity"] == "warn"
+    assert flag_body["evidence"]["aged_count"] == 2
+    assert flag_body["evidence"]["threshold_days"] == 7
+    sample = flag_body["evidence"]["sample"]
+    assert {row["job_id"] for row in sample} == {"old-1", "old-2"}
+    assert {row["scoring_profile"] for row in sample} == {
+        "binary_catalyst", "fda_event",
+    }
+
+
+def test_thesis_jobs_sla_sweeper_aged_resolves_when_clean(monkeypatch):
+    """F-216: zero aged rows → existing aged-flag is auto-resolved."""
+    captured = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params,
+                         "json_body": json_body})
+        if method == "GET":
+            return []
+        return None
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    client = SupabaseClient.__new__(SupabaseClient)
+    client.url = "https://fake"
+    client.service_key = "fake"
+
+    result = observability.thesis_jobs_sla_sweeper(client)
+    assert result["needs_scoring_aged_count"] == 0
+
+    aged_resolves = [
+        c for c in captured
+        if c["method"] == "PATCH" and c["path"] == "operator_flags"
+        and c["params"].get("kind") == "eq.thesis_jobs_needs_scoring_aged"
+    ]
+    assert len(aged_resolves) == 1
 
 
 def test_summarize_provisional_backlog_counts_by_profile(monkeypatch):

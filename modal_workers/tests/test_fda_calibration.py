@@ -291,7 +291,7 @@ def test_generate_prior_candidates_clamps_priors_to_unit_interval():
 
 
 def test_generate_threshold_candidates_preserves_ordering():
-    base = {"immediate": 35.0, "watchlist": 25.0, "archive": 15.0}
+    base = {"immediate": 30.0, "watchlist": 20.0, "archive": 10.0}
     candidates = list(generate_threshold_candidates(base))
     # Every candidate must keep imm > wl > arc
     for c in candidates:
@@ -299,7 +299,7 @@ def test_generate_threshold_candidates_preserves_ordering():
 
 
 def test_generate_threshold_candidates_yields_baseline():
-    base = {"immediate": 35.0, "watchlist": 25.0, "archive": 15.0}
+    base = {"immediate": 30.0, "watchlist": 20.0, "archive": 10.0}
     candidates = list(generate_threshold_candidates(base))
     assert candidates[0] == base
 

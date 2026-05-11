@@ -105,11 +105,20 @@ def rubric_apply_caps(payload: dict) -> dict:
 
 
 # ----------------------------------------------------------------------
-# health — trivial liveness check; doubles as smoke test after deploy.
+# health — trivial liveness check.
+#
+# 2026-05-08 — demoted from `@modal.fastapi_endpoint` (label='health',
+# URL https://marazuela--health.modal.run) to a plain Modal function to
+# free one of the workspace's 8 free-tier `fastapi_endpoint` slots so
+# conan-v3-orchestrator's `compute-v3` multiplex can deploy. No code in
+# this repo or the Cowork skills called the HTTP endpoint — it was a
+# manual smoke test only ("doubles as smoke test after deploy" per its
+# original comment). Manual smoke now: `modal run conan-v2::health`.
+# (The local engine `health_check.py` is unrelated; it never hit this
+# endpoint.)
 # ----------------------------------------------------------------------
 
-@app.function(image=image, timeout=5)
-@modal.fastapi_endpoint(method="GET", label="health")
+@app.function(image=image, timeout=10)
 def health() -> dict:
     from modal_workers.shared.rubric_engine import WEIGHTS
     return {
@@ -494,9 +503,24 @@ def edgar_filing_monitor_once() -> dict:
     # filing-type coverage and persist after_insert state safely.
     return _run("edgar_filing_monitor")
 
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
 def fda_pdufa_pipeline_once() -> dict:
+    # Soft budget bumped 60→120s + Modal hard timeout 120→240s. Two recent runs
+    # (2026-04-28, 2026-04-30) hit "wall-clock budget exceeded during signal build"
+    # at the 60s soft mark, dropping watchlist tail entries silently. With ~45-entry
+    # watchlists + per-entry OpenFIGI + market-snapshot lookups, 60s is too tight on
+    # cold caches. Registry timeout_soft_s/hard_s updated to match.
     return _run("fda_pdufa_pipeline")
+
+
+@app.function(image=image, timeout=600, secrets=[scanner_secrets, supabase_secrets])
+def fda_signal_bridge_once() -> dict:
+    # Iterates pending fda_regulatory_events, calls process_event +
+    # upsert_feature_snapshot per row. Mode (shadow / shadow_with_emit /
+    # operational) is read from scanners.config.mode at run time. Polygon
+    # providers are best-effort: missing POLYGON_API_KEY leaves market+options
+    # None and degrades to fair_probability-only scoring with Immediate gated off.
+    return _run("fda_signal_bridge")
 
 @app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
 def lse_rns_scanner_once() -> dict:
@@ -592,6 +616,28 @@ def pre_phase3_readout_scanner_once() -> dict:
     return _run("pre_phase3_readout_scanner")
 
 
+# --- v3 RAG corpus ingest (signal-less; daily registry-driven, deep on Sun) ---
+
+@app.function(image=image, timeout=900, secrets=[scanner_secrets, supabase_secrets])
+def openfda_corpus_ingest_once() -> dict:
+    # Registry-driven via dispatch_release_times: scanners.scheduled_hour_utc=6
+    # routes this to the 06 UTC bucket. The scanner auto-switches to a 180d
+    # deep sweep on Sundays so a single registry row covers both shallow
+    # daily ingest and the weekly backfill catch-up. timeout=900s sized for
+    # the 180d sweep (shallow 30d runs in <60s).
+    return _run("openfda_corpus_ingest")
+
+
+@app.function(image=image, timeout=900, secrets=[scanner_secrets, supabase_secrets])
+def openfda_corpus_ingest_deep() -> dict:
+    # Manual override entry point — sets OPENFDA_INGEST_MODE=deep so a non-Sunday
+    # ad-hoc run still triggers the 180d sweep. Not on a schedule; invoke via
+    # `modal run modal_workers/app.py::openfda_corpus_ingest_deep`.
+    import os
+    os.environ["OPENFDA_INGEST_MODE"] = "deep"
+    return _run("openfda_corpus_ingest")
+
+
 # ==========================================================================
 # Catalyst-universe fetchers (Phase 1b of the accuracy feedback loop).
 # Populate catalyst_universe with independent-truth catalyst events, which
@@ -645,12 +691,29 @@ def reporting_weekly_once() -> dict:
 # are queued; spawned functions run independently.
 # ==========================================================================
 
-_SCANNERS_3H: List[str] = [
+_DEFAULT_SCANNERS_3H: List[str] = [
     "edgar_filing_monitor",
 ]
-_SCANNERS_WEEKLY: List[str] = [
+_DEFAULT_SCANNERS_WEEKLY: List[str] = [
     "takeover_candidate_scanner",
 ]
+
+
+def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], Optional[str]]:
+    """Resolve operational scanner names for a cadence from the registry, falling
+    back to a hardcoded list if the registry lookup fails. Returns (names, error).
+
+    Registry is the source of truth — adding/removing a 3h or weekly scanner is a
+    single UPDATE on public.scanners, no redeploy. The hardcoded fallback only
+    fires if the registry GET errors (network, auth) so a transient failure
+    doesn't leave the cron empty.
+    """
+    try:
+        from modal_workers.shared.supabase_client import SupabaseClient
+        names = SupabaseClient().load_operational_names_by_cadence(cadence)
+        return names, None
+    except Exception as e:  # noqa: BLE001
+        return list(fallback), f"{type(e).__name__}: {e}"
 
 # Catalyst-universe fetchers are NOT registry-backed scanners — they have no
 # row in public.scanners, so _dispatch_by_hour can't pick them up. Hardcoded
@@ -743,7 +806,11 @@ def _dispatch(names: List[str]) -> dict:
 @app.function(image=image, schedule=modal.Period(hours=3), timeout=60,
               secrets=[scanner_secrets, supabase_secrets])
 def dispatch_3h() -> dict:
-    return _dispatch(_SCANNERS_3H)
+    names, registry_error = _load_cadence_names("3h", _DEFAULT_SCANNERS_3H)
+    envelope = _dispatch(names)
+    if registry_error:
+        envelope["registry_error"] = registry_error
+    return envelope
 
 
 @app.function(image=image, schedule=modal.Cron("0 6,8,13,17,21 * * *"), timeout=60,
@@ -790,7 +857,11 @@ def dispatch_release_times() -> dict:
 @app.function(image=image, schedule=modal.Cron("0 12 * * 1"), timeout=60,
               secrets=[scanner_secrets, supabase_secrets])
 def dispatch_weekly() -> dict:
-    return _dispatch(_SCANNERS_WEEKLY)
+    names, registry_error = _load_cadence_names("weekly", _DEFAULT_SCANNERS_WEEKLY)
+    envelope = _dispatch(names)
+    if registry_error:
+        envelope["registry_error"] = registry_error
+    return envelope
 
 
 # ==========================================================================
@@ -870,6 +941,21 @@ def dispatch_observability() -> dict:
         results["ran"].append("pre_edge_monitor")
     except Exception as e:
         results["pre_edge_monitor_error"] = str(e)
+
+    # 20:00-20:59 UTC window: daily price tracker (spawned via dispatcher to
+    # stay under Modal's 5-cron plan limit; previously had its own @modal.Cron
+    # at 23:30 UTC, but that pushed the app to 6 schedules and blocked deploy).
+    # 20:15 UTC ≈ 16:15 ET — late-session, US daily close not yet final, so
+    # yfinance prev-day data is still the previous trading day; the price
+    # tracker reads `realized_move_*` over a window already settled.
+    if now.hour == 20:
+        import sys
+        me = sys.modules[__name__]
+        try:
+            results["evaluate_ticker_movement"] = me.evaluate_ticker_movement.spawn().object_id
+            results["ran"].append("evaluate_ticker_movement")
+        except Exception as e:
+            results["evaluate_ticker_movement_error"] = str(e)
 
     # 02:00-02:59 UTC window (the :15 run): daily sweeps.
     if now.hour == 2:
@@ -993,9 +1079,12 @@ def timing_auditor_once() -> dict:
 # in yfinance before we fetch.
 # ==========================================================================
 
-@app.function(image=image, schedule=modal.Cron("30 23 * * *"), timeout=1800,
+@app.function(image=image, timeout=1800,
               secrets=[scanner_secrets, supabase_secrets])
 def evaluate_ticker_movement() -> dict:
+    # Spawned daily by `dispatch_observability` at the 20:15 UTC tick — schedule
+    # was lifted off this function to stay under Modal's 5-cron plan limit.
+    # Manual runs available via `evaluate_ticker_movement_once`.
     from modal_workers.evaluators.price_tracker import run_price_tracker
     return run_price_tracker()
 

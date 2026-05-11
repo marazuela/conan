@@ -309,9 +309,9 @@ def calibrate(
     baseline_priors = (active or {}).get("priors_by_indication") or {}
     baseline_modifiers = (active or {}).get("designation_modifiers") or {}
     baseline_thresholds = (active or {}).get("band_thresholds") or {
-        "immediate": 35.0,
-        "watchlist": 25.0,
-        "archive": 15.0,
+        "immediate": 30.0,
+        "watchlist": 20.0,
+        "archive": 10.0,
     }
 
     # 3. Sample-size guard (short-circuits before grid search).

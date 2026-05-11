@@ -98,9 +98,9 @@ function pickWinner(signals: GroupSignal[]): GroupSignal {
 // classify_band — exact threshold logic from rubric_engine.py.
 export type Band = "immediate" | "watchlist" | "archive" | "discard";
 export function classifyBand(score: number): Band {
-  if (score >= 35) return "immediate";
-  if (score >= 25) return "watchlist";
-  if (score >= 15) return "archive";
+  if (score >= 30) return "immediate";
+  if (score >= 20) return "watchlist";
+  if (score >= 10) return "archive";
   return "discard";
 }
 

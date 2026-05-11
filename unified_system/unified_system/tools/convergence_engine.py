@@ -179,11 +179,11 @@ def run_convergence() -> Dict:
             scoring["score_with_bonus"] = round((scoring.get("score", 0) or 0) + bonus, 2)
             # Re-classify band based on boosted score
             new_band = scoring["score_with_bonus"]
-            if new_band >= 35:
+            if new_band >= 30:
                 scoring["band_with_bonus"] = "immediate"
-            elif new_band >= 25:
+            elif new_band >= 20:
                 scoring["band_with_bonus"] = "watchlist"
-            elif new_band >= 15:
+            elif new_band >= 10:
                 scoring["band_with_bonus"] = "archive"
             else:
                 scoring["band_with_bonus"] = "discard"
