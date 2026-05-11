@@ -250,4 +250,76 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "tier2_complete",
         "tier2_fail",
         "ic_memo_run",
+        "feedback_loop_kickoff",
     })
+
+
+# ---------------------------------------------------------------------------
+# feedback_loop_kickoff — fire-and-forget spawn into conan-v3-feedback-loop
+# ---------------------------------------------------------------------------
+
+def test_dispatch_feedback_loop_kickoff_spawns_remote_fn(monkeypatch):
+    """The kickoff action looks up daily_feedback_loop in the deployed
+    feedback-loop app and spawns it. The endpoint must return the
+    function_call_id without blocking on the (up to 7200s) chain."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-abc123"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        spawned["app"] = app_name
+        spawned["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("feedback_loop_kickoff", {})
+    assert out == {"spawned": True, "function_call_id": "fc-abc123"}
+    assert spawned["app"] == "conan-v3-feedback-loop"
+    assert spawned["fn"] == "daily_feedback_loop"
+    assert spawned["kwargs"] == {}
+
+
+def test_dispatch_feedback_loop_kickoff_passes_through_optional_args(monkeypatch):
+    """Optional knobs (drain_batch_size, monitor_window_days, refit_min_n,
+    refit_bootstrap_resamples) must reach the spawned function untouched.
+    Unknown keys must NOT be forwarded so daily_feedback_loop's signature
+    stays the source of truth for valid kwargs."""
+    spawned: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-xyz789"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            spawned["kwargs"] = kwargs
+            return _Handle()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name",
+                        staticmethod(lambda *a, **kw: _FakeFn()))
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("feedback_loop_kickoff", {
+        "drain_batch_size": 100,
+        "monitor_window_days": 14,
+        "refit_min_n": 50,
+        "refit_bootstrap_resamples": 1000,
+        "ignored_extra_key": "should_not_pass_through",
+    })
+    assert out["spawned"] is True
+    assert spawned["kwargs"] == {
+        "drain_batch_size": 100,
+        "monitor_window_days": 14,
+        "refit_min_n": 50,
+        "refit_bootstrap_resamples": 1000,
+    }
+    assert "ignored_extra_key" not in spawned["kwargs"]

@@ -637,6 +637,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "tier2_complete",
     "tier2_fail",
     "ic_memo_run",
+    "feedback_loop_kickoff",
 })
 
 
@@ -666,14 +667,6 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
     """Pure dispatcher: route `action` to the right helper. Imported by
     the FastAPI endpoint AND by tests (so we don't have to import the
     Modal app to exercise routing)."""
-    from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import (
-        complete_tier2_run,
-        enqueue_tier2_bulk,
-        fail_tier2_run,
-    )
-    from orchestrator_runtime.ic_memo_runner import run_ic_memo
-
     if action not in COMPUTE_V3_ACTIONS:
         from fastapi import HTTPException
         raise HTTPException(
@@ -683,6 +676,30 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
                 "valid_actions": sorted(COMPUTE_V3_ACTIONS),
             },
         )
+
+    if action == "feedback_loop_kickoff":
+        # Lookup-and-spawn against the deployed conan-v3-feedback-loop app
+        # so this endpoint returns in <1s while the daily chain runs up to
+        # 7200s on its own task. Fired by pg_cron job
+        # `v3-feedback-loop-daily` (02:00 UTC).
+        fn = modal.Function.from_name(
+            "conan-v3-feedback-loop", "daily_feedback_loop",
+        )
+        kwargs: Dict[str, Any] = {}
+        for k in ("drain_batch_size", "monitor_window_days",
+                  "refit_min_n", "refit_bootstrap_resamples"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from orchestrator_runtime.tier2 import (
+        complete_tier2_run,
+        enqueue_tier2_bulk,
+        fail_tier2_run,
+    )
+    from orchestrator_runtime.ic_memo_runner import run_ic_memo
 
     sb = SupabaseClient()
     if action == "tier2_bulk_enqueue":
