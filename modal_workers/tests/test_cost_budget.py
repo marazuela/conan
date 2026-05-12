@@ -21,12 +21,16 @@ from modal_workers.shared.cost_budget import (
     GLOBAL_24H_SOFT_USD,
     GLOBAL_FLAG_KIND,
     OPERATOR_FLAG_SOURCE,
+    ORCHESTRATOR_24H_HARD_USD,
+    ORCHESTRATOR_FLAG_KIND,
     PER_RUN_HARD_KILL_USD,
     asset_24h_cost_usd,
     asset_linker_24h_cost_usd,
     check_24h_thresholds,
     check_asset_linker_hard_halt,
+    check_orchestrator_hard_halt,
     global_24h_cost_usd,
+    orchestrator_24h_cost_usd,
     upsert_cost_flag,
 )
 
@@ -232,6 +236,66 @@ def test_hard_halt_fires_at_ceiling_and_opens_flag():
     assert body["kind"] == ASSET_LINKER_FLAG_KIND
     # 'critical' (not 'error') to satisfy the operator_flags severity CHECK
     # constraint which whitelists info/warn/critical only.
+    assert body["severity"] == "critical"
+
+
+# ---------------------------------------------------------------------------
+# orchestrator_24h_cost_usd / check_orchestrator_hard_halt — drain-queue HARD
+# halt. Mirror of the asset_linker pattern; reads convergence_assessments
+# instead of asset_linker_runs.
+# ---------------------------------------------------------------------------
+
+def _orchestrator_sb(rows, raise_missing_table: bool = False):
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if path == "convergence_assessments":
+            if raise_missing_table:
+                raise Exception('relation "convergence_assessments" does '
+                                'not exist')
+            return rows
+        if path == "operator_flags":
+            return []
+        return []
+    sb._rest = MagicMock(side_effect=_rest)
+    return sb
+
+
+def test_orchestrator_24h_sums_cost_usd():
+    sb = _orchestrator_sb([
+        {"cost_usd": "12.30"}, {"cost_usd": "8.40"}, {"cost_usd": "3.10"},
+    ])
+    assert orchestrator_24h_cost_usd(sb) == pytest.approx(23.80)
+
+
+def test_orchestrator_24h_missing_table_returns_zero():
+    sb = _orchestrator_sb([], raise_missing_table=True)
+    assert orchestrator_24h_cost_usd(sb) == 0.0
+
+
+def test_orchestrator_hard_halt_does_not_fire_below_ceiling():
+    sb = _orchestrator_sb([{"cost_usd": str(ORCHESTRATOR_24H_HARD_USD - 0.01)}])
+    result = check_orchestrator_hard_halt(sb)
+    assert result["halt"] is False
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert inserts == []
+
+
+def test_orchestrator_hard_halt_fires_at_ceiling_and_opens_flag():
+    """Sized at $50 — 6× the observed healthy daily rate. Mirrors the
+    asset_linker halt semantics: drain returns early, pending rows stay
+    queued, single operator_flag opens for dashboard surfacing."""
+    sb = _orchestrator_sb([{"cost_usd": str(ORCHESTRATOR_24H_HARD_USD)}])
+    result = check_orchestrator_hard_halt(sb)
+    assert result["halt"] is True
+    assert result["total_24h_usd"] == pytest.approx(ORCHESTRATOR_24H_HARD_USD)
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert len(inserts) == 1
+    body = inserts[0].kwargs["json_body"]
+    assert body["source"] == OPERATOR_FLAG_SOURCE
+    assert body["kind"] == ORCHESTRATOR_FLAG_KIND
     assert body["severity"] == "critical"
 
 
