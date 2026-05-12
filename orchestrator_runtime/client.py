@@ -28,9 +28,13 @@ from orchestrator_runtime.pricing import estimate_cost as _estimate_cost
 
 logger = logging.getLogger(__name__)
 
-# Model selection — swap to Opus 4.7 + xhigh thinking when rate-limit tier permits
+# Model selection — Opus 4.7 is the production synthesis model per the
+# module docstring. Set ORCHESTRATOR_MODEL=claude-sonnet-4-5-20250929 to fall
+# back to Sonnet for cost or rate-limit reasons. The extractor sub-call stays
+# on Sonnet because it's a structured-output extraction (no synthesis judgment)
+# where Sonnet quality is sufficient at 1/5th the cost.
 DEFAULT_MODEL = os.environ.get(
-    "ORCHESTRATOR_MODEL", "claude-sonnet-4-5-20250929")
+    "ORCHESTRATOR_MODEL", "claude-opus-4-7")
 DEFAULT_EXTRACTOR_MODEL = os.environ.get(
     "ORCHESTRATOR_EXTRACTOR_MODEL", "claude-sonnet-4-5-20250929")
 

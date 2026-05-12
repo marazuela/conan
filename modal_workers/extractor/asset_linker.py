@@ -44,9 +44,11 @@ from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-# Sonnet 4.6 — structured-output extraction. Cheap relative to Opus,
-# accurate for classification tasks.
-MODEL = "claude-sonnet-4-5-20250929"  # widely-available v4.5; v4.6 alias when GA
+# Pass-1 is keyword-prefiltered triage ("is this doc about asset X?"), not high-stakes
+# judgement — Haiku has been adequate for pass-2 verification (D-125) and is cheaper.
+# Override with ASSET_LINKER_PASS1_MODEL env var if recall regresses; falling back to
+# Sonnet is a one-env-var change.
+MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-haiku-4-5-20251001")
 
 # For huge docs, we trim around matches to keep cost bounded. 80k context is
 # plenty for asset linking (which doesn't need every paragraph — just the
@@ -86,22 +88,29 @@ class LinkerStats:
     marker_failures: int = 0   # _mark_classified PATCH failures (silent regression vector)
 
 
-# Sonnet 4.5 pricing (USD per 1M tokens, as of plan-time):
-COST_INPUT_PER_M = 3.0
-COST_OUTPUT_PER_M = 15.0
-# Prompt caching (5-min ephemeral): write = 1.25× base, read = 0.1× base.
-COST_CACHE_WRITE_PER_M = COST_INPUT_PER_M * 1.25  # 3.75
-COST_CACHE_READ_PER_M = COST_INPUT_PER_M * 0.10   # 0.30
+# Per-model pricing — (input, output, cache_write, cache_read) per 1M tokens, USD.
+# Cache-aware so prompt caching (5-min ephemeral) is priced correctly. Match MODEL
+# by prefix so a fully-qualified id like "claude-haiku-4-5-20251001" resolves
+# without needing every dated variant to be enumerated.
+_PRICING = {
+    "claude-haiku-4-5":  (1.00,  5.00,  1.25, 0.10),
+    "claude-sonnet-4-5": (3.00, 15.00,  3.75, 0.30),
+    "claude-sonnet-4-6": (3.00, 15.00,  3.75, 0.30),
+}
 
 
 def _estimate_cost(input_tokens: int, output_tokens: int,
                    cache_read_tokens: int = 0,
                    cache_creation_tokens: int = 0) -> float:
+    in_rate, out_rate, cache_write_rate, cache_read_rate = next(
+        (rates for prefix, rates in _PRICING.items() if MODEL.startswith(prefix)),
+        (3.00, 15.00, 3.75, 0.30),  # default to Sonnet 4.5 if MODEL id is unrecognised
+    )
     return (
-        input_tokens * COST_INPUT_PER_M
-        + cache_creation_tokens * COST_CACHE_WRITE_PER_M
-        + cache_read_tokens * COST_CACHE_READ_PER_M
-        + output_tokens * COST_OUTPUT_PER_M
+        input_tokens * in_rate
+        + cache_creation_tokens * cache_write_rate
+        + cache_read_tokens * cache_read_rate
+        + output_tokens * out_rate
     ) / 1_000_000
 
 
