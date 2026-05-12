@@ -222,8 +222,8 @@ def test_hard_halt_does_not_fire_below_ceiling():
 
 
 def test_hard_halt_fires_at_ceiling_and_opens_flag():
-    """At ASSET_LINKER_24H_HARD_USD ($10) the run loop must halt AND the
-    breach must be visible in operator_flags so the dashboard surfaces it."""
+    """At ASSET_LINKER_24H_HARD_USD the run loop must halt AND the breach
+    must be visible in operator_flags so the dashboard surfaces it."""
     sb = _linker_sb([{"cost_usd": str(ASSET_LINKER_24H_HARD_USD)}])
     result = check_asset_linker_hard_halt(sb)
     assert result["halt"] is True
