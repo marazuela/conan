@@ -18,6 +18,8 @@ from modal_workers.shared.cost_budget import (
     ASSET_FLAG_KIND,
     ASSET_LINKER_24H_HARD_USD,
     ASSET_LINKER_FLAG_KIND,
+    FACT_EXTRACTOR_24H_HARD_USD,
+    FACT_EXTRACTOR_FLAG_KIND,
     GLOBAL_24H_SOFT_USD,
     GLOBAL_FLAG_KIND,
     OPERATOR_FLAG_SOURCE,
@@ -28,7 +30,9 @@ from modal_workers.shared.cost_budget import (
     asset_linker_24h_cost_usd,
     check_24h_thresholds,
     check_asset_linker_hard_halt,
+    check_fact_extractor_hard_halt,
     check_orchestrator_hard_halt,
+    fact_extractor_24h_cost_usd,
     global_24h_cost_usd,
     orchestrator_24h_cost_usd,
     upsert_cost_flag,
@@ -296,6 +300,67 @@ def test_orchestrator_hard_halt_fires_at_ceiling_and_opens_flag():
     body = inserts[0].kwargs["json_body"]
     assert body["source"] == OPERATOR_FLAG_SOURCE
     assert body["kind"] == ORCHESTRATOR_FLAG_KIND
+    assert body["severity"] == "critical"
+
+
+# ---------------------------------------------------------------------------
+# fact_extractor_24h_cost_usd / check_fact_extractor_hard_halt — sized at
+# $20/24h (vs asset_linker $10 and orchestrator $50). Mirror semantics.
+# ---------------------------------------------------------------------------
+
+def _fact_extractor_sb(rows, raise_missing_table: bool = False):
+    sb = MagicMock()
+
+    def _rest(method, path, **_kwargs):
+        if path == "fact_extractor_runs":
+            if raise_missing_table:
+                raise Exception('relation "fact_extractor_runs" does not exist')
+            return rows
+        if path == "operator_flags":
+            return []
+        return []
+    sb._rest = MagicMock(side_effect=_rest)
+    return sb
+
+
+def test_fact_extractor_24h_sums_cost_usd():
+    sb = _fact_extractor_sb([
+        {"cost_usd": "3.20"}, {"cost_usd": "5.00"}, {"cost_usd": "1.10"},
+    ])
+    assert fact_extractor_24h_cost_usd(sb) == pytest.approx(9.30)
+
+
+def test_fact_extractor_24h_missing_table_returns_zero():
+    """Pre-migration deploys won't have fact_extractor_runs. The check must
+    return 0.0 rather than crash — same safety as the asset_linker variant."""
+    sb = _fact_extractor_sb([], raise_missing_table=True)
+    assert fact_extractor_24h_cost_usd(sb) == 0.0
+
+
+def test_fact_extractor_hard_halt_does_not_fire_below_ceiling():
+    sb = _fact_extractor_sb([
+        {"cost_usd": str(FACT_EXTRACTOR_24H_HARD_USD - 0.01)},
+    ])
+    result = check_fact_extractor_hard_halt(sb)
+    assert result["halt"] is False
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert inserts == []
+
+
+def test_fact_extractor_hard_halt_fires_at_ceiling_and_opens_flag():
+    """Same shape as asset_linker / orchestrator halt: critical severity,
+    correct kind, one operator_flag insert."""
+    sb = _fact_extractor_sb([{"cost_usd": str(FACT_EXTRACTOR_24H_HARD_USD)}])
+    result = check_fact_extractor_hard_halt(sb)
+    assert result["halt"] is True
+    assert result["total_24h_usd"] == pytest.approx(FACT_EXTRACTOR_24H_HARD_USD)
+    inserts = [c for c in sb._rest.call_args_list
+               if c.args == ("POST", "operator_flags")]
+    assert len(inserts) == 1
+    body = inserts[0].kwargs["json_body"]
+    assert body["source"] == OPERATOR_FLAG_SOURCE
+    assert body["kind"] == FACT_EXTRACTOR_FLAG_KIND
     assert body["severity"] == "critical"
 
 

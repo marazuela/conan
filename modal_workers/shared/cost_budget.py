@@ -35,12 +35,20 @@ ASSET_LINKER_24H_HARD_USD = 10.0
 # at 7 or extractor stage in an infinite loop) at $50 instead of letting
 # 12 drain ticks × 5 runs × $2 = $120/hour leak unbounded.
 ORCHESTRATOR_24H_HARD_USD = 50.0
+# Per-component HARD halt for sonnet_fact_extractor. The cron runs hourly
+# (jobid 12, schedule="20 * * * *") with a $5/run per-tick cap, so the
+# unbounded theoretical worst case is 24 × $5 = $120/day. We cap at $20
+# (~4 max runs) — enough headroom for legit operator-triggered backfills
+# but bounded against a runaway. Tightenable to $10 if Haiku takes over
+# pass-1 of fact extraction in the future.
+FACT_EXTRACTOR_24H_HARD_USD = 20.0
 
 OPERATOR_FLAG_SOURCE = "orchestrator_cost"
 ASSET_FLAG_KIND = "asset_24h_budget_breached"
 GLOBAL_FLAG_KIND = "global_24h_budget_breached"
 ASSET_LINKER_FLAG_KIND = "asset_linker_24h_hard_halt"
 ORCHESTRATOR_FLAG_KIND = "orchestrator_24h_hard_halt"
+FACT_EXTRACTOR_FLAG_KIND = "fact_extractor_24h_hard_halt"
 
 
 def asset_24h_cost_usd(sb, asset_id: str) -> float:
@@ -199,6 +207,60 @@ def check_orchestrator_hard_halt(sb) -> Dict[str, Any]:
             evidence={
                 "orchestrator_24h_usd": round(total, 4),
                 "hard_halt_usd": ORCHESTRATOR_24H_HARD_USD,
+            },
+        )
+    return {"halt": halt, "total_24h_usd": round(total, 4)}
+
+
+def fact_extractor_24h_cost_usd(sb) -> float:
+    """SUM(cost_usd) over fact_extractor_runs rows started in the last 24h.
+    Pure-table read; no RPC. Missing-table → zero (the table was added in
+    migration 20260522000020 and may not be applied on older deploys yet)."""
+    from datetime import datetime, timedelta, timezone
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(hours=24)).isoformat()
+    try:
+        rows = sb._rest(
+            "GET", "fact_extractor_runs",
+            params={
+                "started_at": f"gte.{cutoff_iso}",
+                "select": "cost_usd",
+                "limit": "5000",
+            },
+        ) or []
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
+
+
+def check_fact_extractor_hard_halt(sb) -> Dict[str, Any]:
+    """Return {"halt": bool, "total_24h_usd": float}. Caller (the
+    sonnet_fact_extractor main()) MUST check this before fetching docs and
+    bail out if halt=True. Mirror of check_asset_linker_hard_halt — same
+    observability semantics (single open operator_flag, dashboard surfacing,
+    auto-resume when 24h cost rolls below ceiling)."""
+    total = fact_extractor_24h_cost_usd(sb)
+    halt = total >= FACT_EXTRACTOR_24H_HARD_USD
+    if halt:
+        upsert_cost_flag(
+            sb,
+            severity="critical",
+            kind=FACT_EXTRACTOR_FLAG_KIND,
+            title=(
+                f"fact_extractor 24h spend ${total:.2f} ≥ hard halt "
+                f"${FACT_EXTRACTOR_24H_HARD_USD:.0f}"
+            ),
+            body=(
+                f"fact_extractor_runs cost in the last 24h is ${total:.2f}, "
+                f"≥ the ${FACT_EXTRACTOR_24H_HARD_USD:.0f} HARD halt. New "
+                "extractor runs return early without fetching docs until "
+                "the rolling 24h falls back below the ceiling. Investigate "
+                "the spike (asset_documents backlog spike, 10-K bulk-publish, "
+                "loop in fact insert) before raising the ceiling."
+            ),
+            evidence={
+                "fact_extractor_24h_usd": round(total, 4),
+                "hard_halt_usd": FACT_EXTRACTOR_24H_HARD_USD,
             },
         )
     return {"halt": halt, "total_24h_usd": round(total, 4)}
