@@ -29,11 +29,18 @@ GLOBAL_24H_SOFT_USD = 500.0
 # early and the */15 cron will idle until the 24h window rolls forward.
 # Catches the 2026-05-11 incident vector at $10 instead of $40+.
 ASSET_LINKER_24H_HARD_USD = 10.0
+# Per-component HARD halt for the orchestrator drain. Sized as 6× the
+# observed healthy daily rate (~$8/day for ~22 runs at ~$0.36/run avg) to
+# allow legit expansion but cap a runaway scenario (e.g. ensemble_n stuck
+# at 7 or extractor stage in an infinite loop) at $50 instead of letting
+# 12 drain ticks × 5 runs × $2 = $120/hour leak unbounded.
+ORCHESTRATOR_24H_HARD_USD = 50.0
 
 OPERATOR_FLAG_SOURCE = "orchestrator_cost"
 ASSET_FLAG_KIND = "asset_24h_budget_breached"
 GLOBAL_FLAG_KIND = "global_24h_budget_breached"
 ASSET_LINKER_FLAG_KIND = "asset_linker_24h_hard_halt"
+ORCHESTRATOR_FLAG_KIND = "orchestrator_24h_hard_halt"
 
 
 def asset_24h_cost_usd(sb, asset_id: str) -> float:
@@ -139,6 +146,62 @@ def asset_linker_24h_cost_usd(sb) -> float:
     except Exception:  # noqa: BLE001
         return 0.0
     return sum(float(r.get("cost_usd") or 0.0) for r in rows)
+
+
+def orchestrator_24h_cost_usd(sb) -> float:
+    """SUM(cost_usd) over convergence_assessments rows created in the last
+    24h. Pure-table read; no RPC. Missing-table → zero (pre-migration
+    safety, mirrors asset_linker_24h_cost_usd)."""
+    from datetime import datetime, timedelta, timezone
+    cutoff_iso = (datetime.now(timezone.utc)
+                  - timedelta(hours=24)).isoformat()
+    try:
+        rows = sb._rest(
+            "GET", "convergence_assessments",
+            params={
+                "created_at": f"gte.{cutoff_iso}",
+                "select": "cost_usd",
+                "limit": "5000",
+            },
+        ) or []
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
+
+
+def check_orchestrator_hard_halt(sb) -> Dict[str, Any]:
+    """Return {"halt": bool, "total_24h_usd": float}. Caller (the
+    orchestrator drain loop) MUST check this BEFORE pulling pending
+    orchestrator_runs rows and bail out if halt=True. On halt, also opens
+    an operator_flag so the breach is visible in the dashboard. Pending
+    rows stay pending — they'll be picked up by the next drain tick once
+    the rolling 24h drops back below the ceiling."""
+    total = orchestrator_24h_cost_usd(sb)
+    halt = total >= ORCHESTRATOR_24H_HARD_USD
+    if halt:
+        upsert_cost_flag(
+            sb,
+            severity="critical",
+            kind=ORCHESTRATOR_FLAG_KIND,
+            title=(
+                f"orchestrator 24h spend ${total:.2f} ≥ hard halt "
+                f"${ORCHESTRATOR_24H_HARD_USD:.0f}"
+            ),
+            body=(
+                f"convergence_assessments cost in the last 24h is "
+                f"${total:.2f}, ≥ the ${ORCHESTRATOR_24H_HARD_USD:.0f} "
+                "HARD halt. Drain ticks return early without dispatching "
+                "pending runs until the rolling 24h falls back below the "
+                "ceiling. Pending runs stay queued. Investigate the spike "
+                "(stuck ensemble_n, extractor infinite loop, asset thrash) "
+                "before raising the ceiling."
+            ),
+            evidence={
+                "orchestrator_24h_usd": round(total, 4),
+                "hard_halt_usd": ORCHESTRATOR_24H_HARD_USD,
+            },
+        )
+    return {"halt": halt, "total_24h_usd": round(total, 4)}
 
 
 def check_asset_linker_hard_halt(sb) -> Dict[str, Any]:

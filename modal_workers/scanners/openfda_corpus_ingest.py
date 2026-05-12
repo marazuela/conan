@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 from modal_workers.ingestion.openfda_ingest import (
     DEEP_SWEEP_DAYS,
+    DEFAULT_WALL_CLOCK_BUDGET_S,
     IngestRunResult,
     deep_sweep_openfda,
     ingest_drug_label_recent,
@@ -53,27 +55,56 @@ def _ingest_to_dict(r: IngestRunResult) -> Dict[str, Any]:
         "documents_dedup_hit": r.documents_dedup_hit,
         "documents_skipped": r.documents_skipped,
         "errors": r.errors,
+        "wall_clock_timeout_hit": r.wall_clock_timeout_hit,
     }
 
 
 def scan(cfg: ScannerConfig) -> ScannerResult:
-    """Entrypoint invoked by run_scanner. Emits no signals."""
+    """Entrypoint invoked by run_scanner. Emits no signals.
+
+    Computes a wall-clock deadline ~60s under the Modal function timeout so
+    paginated ingest exits gracefully (with metrics flushed and scanner_runs
+    marked 'partial') instead of getting SIGKILL'd mid-write. The 900s
+    SIGKILL on 2026-05-11 left 3408 dailymed labels half-ingested + the
+    scanner_runs row as status='error' with fetched_records=null, which then
+    fed the asset_linker rate-limit cascade.
+
+    Override via OPENFDA_WALL_CLOCK_BUDGET_S env var (operator backfills may
+    want to disable by setting it to a very large value).
+    """
     now = datetime.now(timezone.utc)
     mode = _resolve_mode(now)
 
+    budget_s = float(os.environ.get(
+        "OPENFDA_WALL_CLOCK_BUDGET_S", DEFAULT_WALL_CLOCK_BUDGET_S))
+    deadline = time.time() + budget_s
+
     if mode == "deep":
-        results = deep_sweep_openfda(days=DEEP_SWEEP_DAYS)
+        results = deep_sweep_openfda(
+            days=DEEP_SWEEP_DAYS, wall_clock_deadline=deadline,
+        )
     else:
         results = {
-            "drugsfda": ingest_drugsfda_approvals(),
-            "label": ingest_drug_label_recent(),
+            "drugsfda": ingest_drugsfda_approvals(wall_clock_deadline=deadline),
+            "label": ingest_drug_label_recent(wall_clock_deadline=deadline),
         }
 
     total_seen = sum(r.documents_seen for r in results.values())
     total_written = sum(r.documents_written for r in results.values())
     total_errors = sum(r.errors for r in results.values())
+    any_partial = any(r.wall_clock_timeout_hit for r in results.values())
 
-    status = "ok" if total_errors == 0 else "partial"
+    # Status precedence: 'error' for any actual error, else 'partial' if
+    # wall-clock truncated, else 'ok'. 'partial' is a clean terminal state —
+    # the row gets completed_at, metrics are persisted, the next cron tick
+    # picks up where this one left off (via the sliding 30d window).
+    if total_errors > 0:
+        status = "partial" if any_partial else "error"
+    elif any_partial:
+        status = "partial"
+    else:
+        status = "ok"
+
     return ScannerResult(
         scanner="openfda_corpus_ingest",
         status=status,
@@ -83,6 +114,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             "mode": mode,
             "documents_written_total": total_written,
             "documents_errors_total": total_errors,
+            "wall_clock_budget_s": budget_s,
+            "wall_clock_truncated": any_partial,
             "feeds": {name: _ingest_to_dict(r) for name, r in results.items()},
         },
     )
