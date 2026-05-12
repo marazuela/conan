@@ -32,12 +32,14 @@ import anthropic
 
 from modal_workers.extractor.asset_linker import (
     LinkerStats,
+    PREFILTER_EXCLUDED_DOC_TYPES,
     _finish_run_row,
     _mark_classified,
     _start_run_row,
     build_keyword_index,
     classify_document,
     load_documents_to_link,
+    prefilter_doc,
 )
 
 
@@ -70,7 +72,8 @@ def _assets() -> List[Dict[str, Any]]:
     }]
 
 
-def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80):
+def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80,
+                        cache_read: int = 0, cache_create: int = 0):
     block = MagicMock()
     block.type = "text"
     block.text = json_body
@@ -78,6 +81,8 @@ def _anthropic_response(json_body: str, in_tok: int = 1200, out_tok: int = 80):
     resp.content = [block]
     resp.usage.input_tokens = in_tok
     resp.usage.output_tokens = out_tok
+    resp.usage.cache_read_input_tokens = cache_read
+    resp.usage.cache_creation_input_tokens = cache_create
     return resp
 
 
@@ -204,6 +209,205 @@ def test_sponsor_stopword_only_yields_no_keyword():
 
 
 # ---------------------------------------------------------------------------
+# prefilter_doc — precision improvements (doc-type exclusion + word boundary)
+# Added 2026-05-11: edgar 424B2 yielded 0 links / 50 docs / 25 parse_errors,
+# and substring matching let "Vanda" embed in unrelated tokens like
+# "Vandalism".
+# ---------------------------------------------------------------------------
+
+def test_prefilter_skips_prospectus_doc_types():
+    """SEC prospectus/registration filings (424B2/B3/S-1/S-3) yield ~0 links
+    with high parse-error rates. The prefilter must return [] for these
+    without scanning text, regardless of keyword matches."""
+    idx = build_keyword_index(_assets())
+    # Text contains BOTH a drug and a sponsor hit — would normally pass.
+    text = "Veligrotug from Viridian Therapeutics is discussed in section 3."
+    for doc_type in PREFILTER_EXCLUDED_DOC_TYPES:
+        assert prefilter_doc(text, idx, source="edgar",
+                             doc_type=doc_type) == [], (
+            f"doc_type={doc_type} must be excluded by prefilter")
+
+
+def test_prefilter_does_not_skip_non_prospectus_edgar_types():
+    """8-K / 10-Q / 10-K must NOT be excluded — they're the high-yield
+    sources (70% / 61% / 32% link rate respectively)."""
+    idx = build_keyword_index(_assets())
+    text = "Viridian Therapeutics announced enrollment in the trial."
+    for doc_type in ("8-K", "10-Q", "10-K", "10-K/A", "6-K"):
+        result = prefilter_doc(text, idx, source="edgar", doc_type=doc_type)
+        assert len(result) == 1, f"doc_type={doc_type} must pass prefilter"
+
+
+def test_prefilter_uses_word_boundaries_not_substrings():
+    """A short sponsor token like 'Vanda' must NOT match inside 'Vandalism'.
+    Substring match was a precision leak before 2026-05-11."""
+    assets = [{
+        "id": "asset-vanda",
+        "drug_name": "Imsidolimab",
+        "generic_name": None,
+        "sponsor_name": "Vanda Pharmaceuticals",
+        "indication": "GPP",
+    }]
+    idx = build_keyword_index(assets)
+    # 'Vanda' is in the keyword index. Embedded in 'Vandalism' it must NOT
+    # trigger the prefilter.
+    text = "The Vandalism case was discussed in a board memo."
+    assert prefilter_doc(text, idx, source="edgar", doc_type="8-K") == []
+    # But standalone 'Vanda' (or 'Vanda Pharmaceuticals') DOES trigger.
+    text2 = "Vanda Pharmaceuticals issued an 8-K announcing the PDUFA date."
+    assert len(prefilter_doc(text2, idx, source="edgar", doc_type="8-K")) == 1
+
+
+def test_prefilter_word_boundary_is_case_insensitive():
+    """Sponsor tokens are stored title-cased but documents may have any
+    casing. Word-boundary regex must use the IGNORECASE flag."""
+    idx = build_keyword_index(_assets())
+    text = "VIRIDIAN THERAPEUTICS reported phase 3 data."
+    assert len(prefilter_doc(text, idx, source="edgar", doc_type="8-K")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Ticker matching — 2026-05-12: high-precision signal in SEC tables/headers
+# ---------------------------------------------------------------------------
+
+def _ticker_assets() -> List[Dict[str, Any]]:
+    return [{
+        "id": "asset-vnda",
+        "ticker": "VNDA",
+        "drug_name": "Imsidolimab",
+        "generic_name": None,
+        "sponsor_name": "Vanda Pharmaceuticals",
+        "indication": "GPP",
+    }]
+
+
+def test_keyword_index_includes_ticker():
+    idx = build_keyword_index(_ticker_assets())
+    assert "vnda" in idx
+    assert idx["vnda"][0]["field"] == "ticker"
+
+
+def test_keyword_index_drops_short_tickers():
+    """2-char tickers (e.g. 'MS', 'GS') would match too many English
+    fragments. Enforce a 3-char minimum."""
+    short = [{
+        "id": "asset-x", "ticker": "MS", "drug_name": "DrugX",
+        "generic_name": None, "sponsor_name": "X Corp", "indication": "y",
+    }]
+    idx = build_keyword_index(short)
+    assert "ms" not in idx
+    assert "drugx" in idx  # drug_name still indexed
+
+
+def test_keyword_index_handles_null_ticker():
+    """Some assets don't have tickers (private companies, foreign listings).
+    Null/missing ticker must NOT crash build_keyword_index."""
+    no_ticker = [{
+        "id": "asset-y", "ticker": None, "drug_name": "Veligrotug",
+        "generic_name": None, "sponsor_name": "Viridian Therapeutics",
+        "indication": "TED",
+    }]
+    idx = build_keyword_index(no_ticker)
+    assert "veligrotug" in idx
+
+
+def test_prefilter_ticker_hit_passes_label_source_gate():
+    """A dailymed label that mentions a tracked ticker (e.g. in the
+    'Manufactured by VNDA' footer) is high-signal — must pass even though
+    sponsor-only would normally fail the label-source gate."""
+    idx = build_keyword_index(_ticker_assets())
+    text = "Distributed by manufacturer code VNDA per FDA registration."
+    result = prefilter_doc(text, idx, source="dailymed",
+                           doc_type="drug_label")
+    assert len(result) == 1
+    assert result[0]["id"] == "asset-vnda"
+
+
+def test_prefilter_ticker_uses_word_boundary():
+    """Tickers must word-boundary-match: VNDA must not embed in 'VNDABLE'
+    or 'XVNDAX'. Particularly important for short uppercase identifiers."""
+    idx = build_keyword_index(_ticker_assets())
+    # Substring would match; word-boundary must not.
+    text = "The VNDABLE accounting concept is unrelated to any pharma stock."
+    assert prefilter_doc(text, idx, source="edgar", doc_type="8-K") == []
+    # Parenthesized form must still match (common in SEC tables).
+    text2 = "Vanda Pharmaceuticals (VNDA) filed an 8-K on the PDUFA."
+    assert len(prefilter_doc(text2, idx, source="edgar", doc_type="8-K")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Diversified-pharma gate — 2026-05-12: big-pharma sponsors require drug or
+# ticker co-occurrence (sponsor-name alone is too ambiguous given their
+# pipeline breadth)
+# ---------------------------------------------------------------------------
+
+def _diversified_sponsor_assets() -> List[Dict[str, Any]]:
+    """Asset list with one diversified-pharma sponsor (Pfizer) and one
+    single-drug sponsor (Vanda) so we can verify gate selectivity."""
+    return [
+        {
+            "id": "asset-hympavzi",
+            "ticker": "PFE",
+            "drug_name": "HYMPAVZI (marstacimab)",
+            "generic_name": None,
+            "sponsor_name": "Pfizer Inc.",
+            "indication": "Hemophilia",
+        },
+        {
+            "id": "asset-imsidolimab",
+            "ticker": "VNDA",
+            "drug_name": "Imsidolimab",
+            "generic_name": None,
+            "sponsor_name": "Vanda Pharmaceuticals",
+            "indication": "GPP",
+        },
+    ]
+
+
+def test_prefilter_blocks_diversified_pharma_sponsor_alone_on_sec():
+    """A Pfizer 8-K that mentions 'Pfizer Inc.' but NOT 'HYMPAVZI' or 'PFE'
+    is a corporate filing unlikely to discuss our tracked drug specifically.
+    Pre-2026-05-12 the prefilter would accept this on SEC (sponsor-only OK
+    for SEC sources) — now it requires drug/ticker co-occurrence."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = ("Pfizer Inc. announced Q1 earnings of $X billion driven by "
+            "Comirnaty and Paxlovid demand. No discussion of hemophilia.")
+    # Pfizer is the only match → blocked by diversified-pharma gate.
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert [a["id"] for a in result] == []
+
+
+def test_prefilter_passes_diversified_pharma_with_drug_cooccurrence():
+    """A Pfizer 8-K that mentions BOTH 'Pfizer' AND 'HYMPAVZI' is exactly
+    the high-signal SEC doc we want to fire Sonnet on. The diversified-
+    pharma gate must NOT block when a drug name is also present."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = ("Pfizer Inc. announced that the FDA accepted the sBLA for "
+            "HYMPAVZI (marstacimab) in pediatric hemophilia patients.")
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-hympavzi"}
+
+
+def test_prefilter_passes_diversified_pharma_with_ticker_cooccurrence():
+    """Ticker co-occurrence also satisfies the gate — 'Pfizer Inc. (PFE)'
+    in a doc title is a common SEC pattern and high precision."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = "Pfizer Inc. (PFE) Q1 earnings release covers oncology and rare disease."
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-hympavzi"}
+
+
+def test_prefilter_does_not_apply_diversified_gate_to_single_drug_sponsor():
+    """The gate is sponsor-specific — Vanda (one tracked drug, narrow
+    pipeline) must STILL accept sponsor-name-only matches on SEC sources.
+    Only the diversified-pharma allowlist is gated."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = "Vanda Pharmaceuticals announced quarterly earnings of $X."
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-imsidolimab"}
+
+
+# ---------------------------------------------------------------------------
 # load_documents_to_link — must filter on linker_classified_at IS NULL
 # ---------------------------------------------------------------------------
 
@@ -301,7 +505,7 @@ def test_classify_document_parse_ok_false_on_bad_json():
         return_value=_anthropic_response("not valid json at all")
     )
 
-    links, in_tok, out_tok, parse_ok = classify_document(
+    links, in_tok, out_tok, cache_read, cache_create, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )
@@ -317,7 +521,7 @@ def test_classify_document_parse_ok_true_on_valid_empty_links():
         return_value=_anthropic_response('{"links": []}')
     )
 
-    links, in_tok, out_tok, parse_ok = classify_document(
+    links, in_tok, out_tok, cache_read, cache_create, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )
@@ -338,7 +542,7 @@ def test_classify_document_parse_ok_true_on_valid_link():
     }]})
     a_client.messages.create = MagicMock(return_value=_anthropic_response(body))
 
-    links, _, _, parse_ok = classify_document(
+    links, _, _, _, _, parse_ok = classify_document(
         a_client, _doc(), _assets(),
         "some text", ["VRDN"],
     )

@@ -92,10 +92,20 @@ VALID_FACT_TYPES = {
 # Sonnet 4.5 pricing
 COST_INPUT_PER_M = 3.0
 COST_OUTPUT_PER_M = 15.0
+# Prompt caching (5-min ephemeral): write = 1.25× base, read = 0.1× base.
+COST_CACHE_WRITE_PER_M = COST_INPUT_PER_M * 1.25  # 3.75
+COST_CACHE_READ_PER_M = COST_INPUT_PER_M * 0.10   # 0.30
 
 
-def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
-    return (input_tokens * COST_INPUT_PER_M + output_tokens * COST_OUTPUT_PER_M) / 1_000_000
+def _estimate_cost(input_tokens: int, output_tokens: int,
+                   cache_read_tokens: int = 0,
+                   cache_creation_tokens: int = 0) -> float:
+    return (
+        input_tokens * COST_INPUT_PER_M
+        + cache_creation_tokens * COST_CACHE_WRITE_PER_M
+        + cache_read_tokens * COST_CACHE_READ_PER_M
+        + output_tokens * COST_OUTPUT_PER_M
+    ) / 1_000_000
 
 
 @dataclass
@@ -106,6 +116,8 @@ class ExtractStats:
     api_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
 
@@ -314,12 +326,13 @@ def extract_facts(
     doc: Dict[str, Any],
     asset: Dict[str, Any],
     link: Dict[str, Any],
-) -> tuple[List[Dict[str, Any]], int, int]:
+) -> tuple[List[Dict[str, Any]], int, int, int, int]:
     """Send a doc + asset context to Sonnet for fact extraction. Returns
-    (facts, input_tokens, output_tokens)."""
+    (facts, input_tokens, output_tokens, cache_read_tokens,
+     cache_creation_tokens)."""
     raw_text = doc.get("raw_text") or ""
     if not raw_text:
-        return [], 0, 0
+        return [], 0, 0, 0, 0
 
     sponsor_first = None
     sponsor = asset.get("sponsor_name") or ""
@@ -356,14 +369,27 @@ separated by […trim…]):
 {trimmed}
 """
 
+    # cache_control on the SYSTEM_PROMPT prefix. At current SYSTEM_PROMPT
+    # tokenization (~500 tokens per Anthropic's tokenizer) this is BELOW the
+    # 1024-token minimum for Sonnet caching and the API silently returns
+    # cache_*_input_tokens=0 — same situation as the asset_linker prefix.
+    # Kept as a forward-looking no-op: engages automatically once the prompt
+    # grows past the minimum (e.g. if VALID_FACT_TYPES guidance is expanded).
+    system_blocks = [
+        {"type": "text", "text": SYSTEM_PROMPT,
+         "cache_control": {"type": "ephemeral"}},
+    ]
+
     resp = a_client.messages.create(
         model=MODEL,
         max_tokens=4096,
-        system=SYSTEM_PROMPT,
+        system=system_blocks,
         messages=[{"role": "user", "content": user_content}],
     )
     in_tokens = resp.usage.input_tokens
     out_tokens = resp.usage.output_tokens
+    cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+    cache_create = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
 
     text_out = "".join(b.text for b in resp.content if b.type == "text")
     text_out = text_out.strip()
@@ -376,7 +402,7 @@ separated by […trim…]):
     except json.JSONDecodeError as exc:
         logger.warning("JSON parse failed for doc %s: %s — output[:200]: %s",
                        doc.get("id"), exc, text_out[:200])
-        return [], in_tokens, out_tokens
+        return [], in_tokens, out_tokens, cache_read, cache_create
 
     facts = parsed.get("facts", [])
     out: List[Dict[str, Any]] = []
@@ -407,7 +433,7 @@ separated by […trim…]):
             "citation_span": citation_span,
             "confidence": confidence,
         })
-    return out, in_tokens, out_tokens
+    return out, in_tokens, out_tokens, cache_read, cache_create
 
 
 # ---------------------------------------------------------------------------
@@ -451,9 +477,16 @@ def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="sonnet_fact_extractor")
     p.add_argument("--asset-id", default=None,
                    help="Restrict to one fda_asset (default: all material links)")
-    p.add_argument("--max", type=int, default=100,
-                   help="Max linked documents to extract this run")
-    p.add_argument("--budget-usd", type=float, default=30.0)
+    p.add_argument("--max", type=int, default=50,
+                   help="Max linked documents to extract this run (reduced "
+                        "from 100 on 2026-05-11 in the asset_linker incident "
+                        "hardening sweep — keep tight until per-doc cost is "
+                        "verified)")
+    p.add_argument("--budget-usd", type=float, default=5.0,
+                   help="Stop early if cumulative cost exceeds this (reduced "
+                        "from $30 on 2026-05-11; per-doc Sonnet 4.5 fact "
+                        "extraction is ~$0.05-0.15, so $5 gives 30-100 docs "
+                        "of headroom)")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
 
@@ -500,7 +533,8 @@ def main(argv: List[str] | None = None) -> int:
             continue
 
         try:
-            facts, in_tok, out_tok = extract_facts(a_client, doc, asset, link)
+            (facts, in_tok, out_tok, cache_read_tok,
+             cache_create_tok) = extract_facts(a_client, doc, asset, link)
         except anthropic.APIError as exc:
             logger.warning("API error for doc %s: %s", document_id, exc)
             stats.errors += 1
@@ -510,7 +544,13 @@ def main(argv: List[str] | None = None) -> int:
         stats.api_calls += 1
         stats.input_tokens += in_tok
         stats.output_tokens += out_tok
-        stats.cost_usd += _estimate_cost(in_tok, out_tok)
+        stats.cache_read_tokens += cache_read_tok
+        stats.cache_creation_tokens += cache_create_tok
+        stats.cost_usd += _estimate_cost(
+            in_tok, out_tok,
+            cache_read_tokens=cache_read_tok,
+            cache_creation_tokens=cache_create_tok,
+        )
         stats.docs_extracted += 1
 
         if not facts:
@@ -537,8 +577,11 @@ def main(argv: List[str] | None = None) -> int:
                 stats.docs_seen, stats.docs_extracted, stats.errors)
     logger.info("  facts_inserted=%d  api_calls=%d",
                 stats.facts_inserted, stats.api_calls)
-    logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
-                stats.input_tokens, stats.output_tokens, stats.cost_usd)
+    logger.info("  tokens: in=%d  out=%d  cache_read=%d  cache_create=%d  "
+                "cost_usd=$%.3f",
+                stats.input_tokens, stats.output_tokens,
+                stats.cache_read_tokens, stats.cache_creation_tokens,
+                stats.cost_usd)
     return 0
 
 
