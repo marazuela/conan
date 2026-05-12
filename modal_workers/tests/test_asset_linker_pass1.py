@@ -336,6 +336,78 @@ def test_prefilter_ticker_uses_word_boundary():
 
 
 # ---------------------------------------------------------------------------
+# Diversified-pharma gate — 2026-05-12: big-pharma sponsors require drug or
+# ticker co-occurrence (sponsor-name alone is too ambiguous given their
+# pipeline breadth)
+# ---------------------------------------------------------------------------
+
+def _diversified_sponsor_assets() -> List[Dict[str, Any]]:
+    """Asset list with one diversified-pharma sponsor (Pfizer) and one
+    single-drug sponsor (Vanda) so we can verify gate selectivity."""
+    return [
+        {
+            "id": "asset-hympavzi",
+            "ticker": "PFE",
+            "drug_name": "HYMPAVZI (marstacimab)",
+            "generic_name": None,
+            "sponsor_name": "Pfizer Inc.",
+            "indication": "Hemophilia",
+        },
+        {
+            "id": "asset-imsidolimab",
+            "ticker": "VNDA",
+            "drug_name": "Imsidolimab",
+            "generic_name": None,
+            "sponsor_name": "Vanda Pharmaceuticals",
+            "indication": "GPP",
+        },
+    ]
+
+
+def test_prefilter_blocks_diversified_pharma_sponsor_alone_on_sec():
+    """A Pfizer 8-K that mentions 'Pfizer Inc.' but NOT 'HYMPAVZI' or 'PFE'
+    is a corporate filing unlikely to discuss our tracked drug specifically.
+    Pre-2026-05-12 the prefilter would accept this on SEC (sponsor-only OK
+    for SEC sources) — now it requires drug/ticker co-occurrence."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = ("Pfizer Inc. announced Q1 earnings of $X billion driven by "
+            "Comirnaty and Paxlovid demand. No discussion of hemophilia.")
+    # Pfizer is the only match → blocked by diversified-pharma gate.
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert [a["id"] for a in result] == []
+
+
+def test_prefilter_passes_diversified_pharma_with_drug_cooccurrence():
+    """A Pfizer 8-K that mentions BOTH 'Pfizer' AND 'HYMPAVZI' is exactly
+    the high-signal SEC doc we want to fire Sonnet on. The diversified-
+    pharma gate must NOT block when a drug name is also present."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = ("Pfizer Inc. announced that the FDA accepted the sBLA for "
+            "HYMPAVZI (marstacimab) in pediatric hemophilia patients.")
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-hympavzi"}
+
+
+def test_prefilter_passes_diversified_pharma_with_ticker_cooccurrence():
+    """Ticker co-occurrence also satisfies the gate — 'Pfizer Inc. (PFE)'
+    in a doc title is a common SEC pattern and high precision."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = "Pfizer Inc. (PFE) Q1 earnings release covers oncology and rare disease."
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-hympavzi"}
+
+
+def test_prefilter_does_not_apply_diversified_gate_to_single_drug_sponsor():
+    """The gate is sponsor-specific — Vanda (one tracked drug, narrow
+    pipeline) must STILL accept sponsor-name-only matches on SEC sources.
+    Only the diversified-pharma allowlist is gated."""
+    idx = build_keyword_index(_diversified_sponsor_assets())
+    text = "Vanda Pharmaceuticals announced quarterly earnings of $X."
+    result = prefilter_doc(text, idx, source="edgar", doc_type="8-K")
+    assert {a["id"] for a in result} == {"asset-imsidolimab"}
+
+
+# ---------------------------------------------------------------------------
 # load_documents_to_link — must filter on linker_classified_at IS NULL
 # ---------------------------------------------------------------------------
 

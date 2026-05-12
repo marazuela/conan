@@ -433,6 +433,23 @@ PREFILTER_EXCLUDED_DOC_TYPES = frozenset({
     "S-1", "S-1/A", "S-3", "S-3/A",
 })
 
+# Sponsors with broad pipelines where sponsor-name match alone (no drug or
+# ticker hit) is too ambiguous to fire Sonnet — every SEC filing from these
+# companies mentions DOZENS of drugs, of which only one is in our watchlist.
+# Without co-occurrence, the prefilter wastes Sonnet on corporate filings
+# that don't actually discuss the tracked asset. Stored lowercased for
+# case-insensitive matching against asset.sponsor_name. Maintained as a
+# small frozenset rather than a config table because it changes slowly and
+# is reviewable in code.
+DIVERSIFIED_PHARMA_SPONSORS = frozenset({
+    "pfizer inc.", "pfizer inc",
+    "astrazeneca",
+    "bristol myers squibb", "bristol-myers squibb",
+    "gilead sciences",
+    "zai lab limited",
+    "lantheus holdings",
+})
+
 
 def _compile_keyword_patterns(keyword_index: Dict[str, Any]
                               ) -> Dict[str, "re.Pattern[str]"]:
@@ -487,7 +504,16 @@ def prefilter_doc(text: str, keyword_index: Dict[str, List[Dict[str, Any]]],
     for asset_id, fields in matched_fields.items():
         if not sponsor_only_ok and not (fields & specific_fields):
             continue
-        out.append(asset_by_id[asset_id])
+        # Diversified-pharma gate: applies on ALL sources (including SEC).
+        # Big-pharma sponsors have hundreds of drugs in their filings; a bare
+        # sponsor hit isn't specific enough to fire Sonnet. Require a drug,
+        # generic, or ticker hit alongside.
+        asset = asset_by_id[asset_id]
+        sponsor_lc = (asset.get("sponsor_name") or "").strip().lower()
+        if (sponsor_lc in DIVERSIFIED_PHARMA_SPONSORS
+                and not (fields & specific_fields)):
+            continue
+        out.append(asset)
     return out
 
 
