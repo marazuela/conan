@@ -25,6 +25,8 @@ COST_TABLE: dict[str, Tuple[float, float, float, float]] = {
     "claude-haiku-4-5-20251001": (1.00, 5.00, 1.25, 0.10),
     # Opus 4.7 — placeholder; bump when GA pricing is confirmed
     "claude-opus-4-7-20260101": (15.00, 75.00, 18.75, 1.50),
+    # Opus 4.7 alias (no date suffix) — matches DEFAULT_MODEL in client.py
+    "claude-opus-4-7": (15.00, 75.00, 18.75, 1.50),
 }
 
 
