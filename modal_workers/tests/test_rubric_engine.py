@@ -136,17 +136,17 @@ def test_build_scoring_meta_captures_resolution_state():
 
 
 # ----------------------------------------------------------------------
-# classify_band — exact threshold boundaries (30 / 20 / 10)
+# classify_band — exact threshold boundaries (35 / 25 / 15)
 # ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("score,expected", [
     (50.0, "immediate"),
-    (30.0, "immediate"),     # lower bound inclusive
-    (29.99, "watchlist"),
-    (20.0, "watchlist"),     # lower bound inclusive
-    (19.99, "archive"),
-    (10.0, "archive"),       # lower bound inclusive
-    (9.99, "discard"),
+    (35.0, "immediate"),     # lower bound inclusive
+    (34.99, "watchlist"),
+    (25.0, "watchlist"),     # lower bound inclusive
+    (24.99, "archive"),
+    (15.0, "archive"),       # lower bound inclusive
+    (14.99, "discard"),
     (0.0, "discard"),
 ])
 def test_classify_band_thresholds(score, expected):
@@ -668,26 +668,26 @@ def test_score_signal_produces_expected_shape():
 
 def test_score_signal_heuristic_provenance_damps_borderline_immediate_to_watchlist():
     """Heuristic-provenance scoring applies HEURISTIC_SCORE_MULTIPLIER (0.9)
-    before classify_band. Borderline-immediate case under D-035 thresholds:
-    short_positioning crowd=4,trend=3,catalyst=3,size_vs_float=3,
-    historical_analog=3,liquidity=3 scores 32.5 — just above the 30
-    immediate threshold. Damped to 29.25 → watchlist."""
+    before classify_band. Motivating case from 2026-04-23 ESMA same-day
+    distribution: short_positioning crowd=5,trend=3,catalyst=3,size_vs_float=4
+    (+ defaulted historical_analog=3, liquidity=3) scores ~36.5 — just above
+    the 35 immediate threshold. Damped to 32.85 → watchlist."""
     signal = {
         "scoring_profile": "short_positioning",
         "raw_data": {"dimensions": {
-            "crowding_intensity": 4, "trend_direction": 3, "catalyst_proximity": 3,
-            "size_vs_float": 3, "historical_analog": 3, "liquidity": 3,
+            "crowding_intensity": 5, "trend_direction": 3, "catalyst_proximity": 3,
+            "size_vs_float": 4, "historical_analog": 3, "liquidity": 3,
         }},
     }
     undamped = score_signal(signal)  # default provenance='scanner'
     damped = score_signal(signal, provenance="heuristic")
-    assert undamped["score"] == 32.5 and undamped["band"] == "immediate"
-    assert damped["score"] == 29.25 and damped["band"] == "watchlist"
+    assert undamped["score"] == 36.5 and undamped["band"] == "immediate"
+    assert damped["score"] == 32.85 and damped["band"] == "watchlist"
 
 
 def test_score_signal_heuristic_provenance_keeps_clearly_immediate_at_immediate():
     """Damping must not demote genuinely-high scores. All-5s on short_positioning
-    score 50 → 45 damped → still immediate (≥30)."""
+    score 50 → 45 damped → still immediate (≥35)."""
     signal = {
         "scoring_profile": "short_positioning",
         "raw_data": {"dimensions": {

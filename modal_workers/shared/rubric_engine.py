@@ -96,11 +96,11 @@ def weighted_total(dims: Dict[str, int], profile: str) -> float:
 
 
 def classify_band(score: float) -> str:
-    if score >= 30:
+    if score >= 35:
         return "immediate"
-    if score >= 20:
+    if score >= 25:
         return "watchlist"
-    if score >= 10:
+    if score >= 15:
         return "archive"
     return "discard"
 
