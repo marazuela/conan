@@ -122,7 +122,7 @@ def load_active_assets(client: SupabaseClient,
 
 def build_keyword_index(assets: List[Dict[str, Any]]
                         ) -> Dict[str, List[Dict[str, Any]]]:
-    """Map keyword (drug_name / generic_name / sponsor_name tokens) →
+    """Map keyword (drug_name / generic_name / sponsor_name / ticker tokens) →
     list of {"asset": a, "field": fld} entries. Used by the regex pre-filter.
 
     `indication` was previously indexed but caused 61% of docs to pass the
@@ -131,14 +131,20 @@ def build_keyword_index(assets: List[Dict[str, Any]]
     labels. Sonnet correctly rejects them but the prefilter pays the input
     bill. Dropped in response to the dailymed cost incident.
 
+    `ticker` is indexed (added 2026-05-12) as a high-precision signal in SEC
+    filings — tickers appear in tables and headers (e.g. "(VNDA)") and almost
+    never embed in unrelated identifiers given the 3-char minimum + word-
+    boundary matching downstream. Treated as a `drug_name`-equivalent field
+    so the source-aware sponsor-only gate accepts ticker hits.
+
     The {"field": fld} tag is consumed by prefilter_doc to enforce
-    source-aware gates: drug-label / trial sources require a drug_name or
-    generic_name hit (sponsor-only hits are the 2026-05-11 leak vector that
-    burned ~$40 on ~2400 false-positive dailymed labels).
+    source-aware gates: drug-label / trial sources require a drug_name,
+    generic_name, or ticker hit (sponsor-only hits are the 2026-05-11 leak
+    vector that burned ~$40 on ~2400 false-positive dailymed labels).
     """
     idx: Dict[str, List[Dict[str, Any]]] = {}
     for a in assets:
-        for fld in ("drug_name", "generic_name", "sponsor_name"):
+        for fld in ("drug_name", "generic_name", "sponsor_name", "ticker"):
             val = (a.get(fld) or "").strip()
             if not val:
                 continue
@@ -187,6 +193,13 @@ def _keywords_from(value: str, fld: str) -> List[str]:
         tokens = re.findall(r"\b[A-Z][\w-]{3,}\b", value)
         specific = [t for t in tokens if t not in SPONSOR_STOPWORDS]
         return specific[:2]
+    if fld == "ticker":
+        # 3-char minimum to avoid common 2-letter words (e.g. 'MS', 'GS')
+        # appearing in any English text. Tickers are typically 3-5 chars
+        # and uppercase; word-boundary regex downstream catches parenthesized
+        # forms like "(VNDA)".
+        token = value.strip().upper()
+        return [token] if len(token) >= 3 and re.match(r"^[A-Z][\w.-]*$", token) else []
     return []
 
 
@@ -465,9 +478,14 @@ def prefilter_doc(text: str, keyword_index: Dict[str, List[Dict[str, Any]]],
             matched_fields.setdefault(a["id"], set()).add(entry["field"])
 
     sponsor_only_ok = source not in SPONSOR_ONLY_INSUFFICIENT_SOURCES
+    # Fields that count as "specific enough to fire Sonnet" on label/trial
+    # sources. Ticker is included alongside drug_name/generic_name — a
+    # ticker hit on a dailymed label is just as specific as a drug-name hit
+    # (and far more specific than a sponsor-name hit).
+    specific_fields = {"drug_name", "generic_name", "ticker"}
     out: List[Dict[str, Any]] = []
     for asset_id, fields in matched_fields.items():
-        if not sponsor_only_ok and fields == {"sponsor_name"}:
+        if not sponsor_only_ok and not (fields & specific_fields):
             continue
         out.append(asset_by_id[asset_id])
     return out

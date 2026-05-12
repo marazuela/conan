@@ -267,6 +267,75 @@ def test_prefilter_word_boundary_is_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
+# Ticker matching — 2026-05-12: high-precision signal in SEC tables/headers
+# ---------------------------------------------------------------------------
+
+def _ticker_assets() -> List[Dict[str, Any]]:
+    return [{
+        "id": "asset-vnda",
+        "ticker": "VNDA",
+        "drug_name": "Imsidolimab",
+        "generic_name": None,
+        "sponsor_name": "Vanda Pharmaceuticals",
+        "indication": "GPP",
+    }]
+
+
+def test_keyword_index_includes_ticker():
+    idx = build_keyword_index(_ticker_assets())
+    assert "vnda" in idx
+    assert idx["vnda"][0]["field"] == "ticker"
+
+
+def test_keyword_index_drops_short_tickers():
+    """2-char tickers (e.g. 'MS', 'GS') would match too many English
+    fragments. Enforce a 3-char minimum."""
+    short = [{
+        "id": "asset-x", "ticker": "MS", "drug_name": "DrugX",
+        "generic_name": None, "sponsor_name": "X Corp", "indication": "y",
+    }]
+    idx = build_keyword_index(short)
+    assert "ms" not in idx
+    assert "drugx" in idx  # drug_name still indexed
+
+
+def test_keyword_index_handles_null_ticker():
+    """Some assets don't have tickers (private companies, foreign listings).
+    Null/missing ticker must NOT crash build_keyword_index."""
+    no_ticker = [{
+        "id": "asset-y", "ticker": None, "drug_name": "Veligrotug",
+        "generic_name": None, "sponsor_name": "Viridian Therapeutics",
+        "indication": "TED",
+    }]
+    idx = build_keyword_index(no_ticker)
+    assert "veligrotug" in idx
+
+
+def test_prefilter_ticker_hit_passes_label_source_gate():
+    """A dailymed label that mentions a tracked ticker (e.g. in the
+    'Manufactured by VNDA' footer) is high-signal — must pass even though
+    sponsor-only would normally fail the label-source gate."""
+    idx = build_keyword_index(_ticker_assets())
+    text = "Distributed by manufacturer code VNDA per FDA registration."
+    result = prefilter_doc(text, idx, source="dailymed",
+                           doc_type="drug_label")
+    assert len(result) == 1
+    assert result[0]["id"] == "asset-vnda"
+
+
+def test_prefilter_ticker_uses_word_boundary():
+    """Tickers must word-boundary-match: VNDA must not embed in 'VNDABLE'
+    or 'XVNDAX'. Particularly important for short uppercase identifiers."""
+    idx = build_keyword_index(_ticker_assets())
+    # Substring would match; word-boundary must not.
+    text = "The VNDABLE accounting concept is unrelated to any pharma stock."
+    assert prefilter_doc(text, idx, source="edgar", doc_type="8-K") == []
+    # Parenthesized form must still match (common in SEC tables).
+    text2 = "Vanda Pharmaceuticals (VNDA) filed an 8-K on the PDUFA."
+    assert len(prefilter_doc(text2, idx, source="edgar", doc_type="8-K")) == 1
+
+
+# ---------------------------------------------------------------------------
 # load_documents_to_link — must filter on linker_classified_at IS NULL
 # ---------------------------------------------------------------------------
 
