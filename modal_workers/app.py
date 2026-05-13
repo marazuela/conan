@@ -1,41 +1,42 @@
 """
-Modal app definition for Conan v2.
+Modal app definition for Conan v3 (FDA-only).
 
-Surface (Phase 3 — full scanner fleet):
+Surface:
   - `rubric_apply_caps`  — web endpoint RPC'd by the reactor edge function on every
     signals.INSERT to apply auto-caps without porting rubric logic to TypeScript.
+    (Will be retired in Phase 4 alongside the signals table.)
   - `health`             — trivial GET for dashboard + smoke tests.
-  - 19 scanner functions — each as `<name>_once` (on-demand callable).
-  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`, `dispatch_weekly`.
-    `dispatch_release_times` fires at 06/08/13/17/21 UTC and reads
-    `scanners.scheduled_hour_utc` from the registry to decide which daily
-    scanners to spawn at each tick. Per-scanner isolation preserved (each
-    scanner runs in its own container with its own timeout).
+  - Scanner functions    — each as `<name>_once` (on-demand callable). Only the
+    FDA-relevant scanners are still wired in (see the registry — non-FDA names
+    are status='deprecated' since 2026-05-13 per the v3-only adoption plan).
+  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`,
+    `dispatch_observability`. `dispatch_release_times` fires at
+    06/08/13/17/21 UTC and reads `scanners.scheduled_hour_utc` from the
+    registry to decide which daily scanners to spawn at each tick.
+    `dispatch_3h` keeps the FDA 3h-cadence scanners alive (e.g.
+    `fda_signal_bridge`). `dispatch_weekly` was removed 2026-05-13 — its only
+    bucket scanner (`takeover_candidate_scanner`) is now deprecated.
 
-NOT hosted here (by design, spec.md §7.4 revised 2026-04-20):
-  - `thesis_writer`      — runs as a Claude skill under Pedro's account via a Cowork
-    scheduled task (see `.claude/skills/thesis_writer.md`). Modal doesn't draft theses.
-  - `candidate_aging`    — same pattern; a separate skill.
+NOT hosted here:
+  - v2 Cowork skills (`thesis_writer`, `signal_resolver`, `candidate_aging`,
+    `challenger_retro`) are being retired as part of the v3-only adoption.
 
-Scheduled dispatch (2026-04-22 release-time amendment, spec.md §7):
-  - 3h:      edgar_filing_monitor (SEC filings land throughout US day)
-  - weekly:  takeover_candidate_scanner (Mon 12:00 UTC)
+Scheduled dispatch (post-2026-05-13 FDA-only state):
+  - 3h cadence — `fda_signal_bridge`.
   - daily release-time buckets — queried from registry per tick:
-      06 UTC  EU pre-open           (lse_rns, esma_short, bse_nse)
-      08 UTC  APAC post-close       (asx, tdnet, hkex, kind)
-      13 UTC  US pre-open / Americas (fda_pdufa, cvm, sedar_plus, bmv) + fetchers
-      17 UTC  US midday              (congressional_trading)
-      21 UTC  US post-close          (sec_enforcement, courtlistener)
+      06 UTC  openfda_corpus_ingest
+      13 UTC  fda_adcomm_pdufa (fetcher), fda_pdufa_pipeline, fed_register_adcom,
+              edgar_8k_pdufa, pre_phase3_readout_scanner
+      17 UTC  anthropic_files_backfill
+      21 UTC  fda_pdufa_pipeline (secondary slot for late-US CRLs)
 
 Only rows with `status='operational'` fire; paused rows are skipped inside
 `_dispatch`. Adding a new scanner = INSERT row with a `scheduled_hour_utc`;
 no code redeploy needed for timing tweaks.
 
 Secret requirements (populate via `modal secret create scanner-secrets ...`):
-  - SEC_USER_AGENT          — required by edgar, fda_pdufa, takeover_candidate,
-                              sec_enforcement. Must be a valid contact string.
-  - COURTLISTENER_TOKEN     — optional; courtlistener emits auth_required without it.
-  - OPENDART_KEY            — optional; kind_scanner emits auth_required without it.
+  - SEC_USER_AGENT          — required by fda_pdufa_pipeline, edgar_8k_pdufa.
+                              Must be a valid contact string.
   - OPENFIGI_API_KEY        — optional; openfigi_resolver falls back to anonymous tier.
 
 Deploy:   modal deploy modal_workers/app.py
@@ -659,11 +660,12 @@ def fda_adcomm_pdufa_once() -> dict:
     return _run_fetcher("fda_adcomm_pdufa", days_back=7)
 
 
-@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
-def sec_8k_mna_once() -> dict:
-    """EDGAR 8-K items 1.01 / 2.01 → catalyst_universe (mna_announce / mna_close).
-    Requires SEC_USER_AGENT from scanner-secrets."""
-    return _run_fetcher("sec_8k_mna", days_back=7)
+# sec_8k_mna fetcher removed 2026-05-13 as part of v3-only adoption (FDA-only
+# strategic pivot). merger_arb was the last non-FDA scoring profile still
+# operational; deprecating its only producing scanner (sec_8k_mna) eliminates
+# all non-FDA emission. See plan: are-the-skills-working-streamed-widget.md
+# Phase 1. The companion DB-side deprecation lives in migration
+# 20260522000000_v3_only_phase1_deprecate_non_fda.sql.
 
 
 # ==========================================================================
@@ -692,18 +694,30 @@ def reporting_weekly_once() -> dict:
 
 
 # ==========================================================================
-# 3 dispatcher crons — the only scheduled functions in the app. Each spawns
-# the `_once` variants of its bucket in parallel so per-scanner isolation
-# (container, timeout) is preserved. Dispatcher returns as soon as all spawns
-# are queued; spawned functions run independently.
+# Dispatcher crons — scheduled functions in the app. Each spawns the `_once`
+# variants of its bucket in parallel so per-scanner isolation (container,
+# timeout) is preserved. Dispatcher returns as soon as all spawns are queued;
+# spawned functions run independently.
+#
+# 2026-05-13 (v3-only adoption):
+#   - `dispatch_weekly` removed. Its only bucket scanner (takeover_candidate)
+#     is deprecated; no operational weekly scanners remain.
+#   - Hardcoded fallback lists below are now empty. The lists were the source
+#     of the 5/11 audit's "deprecated scanners still emitting" bug — on
+#     Supabase reachability errors, `_load_cadence_names` fell back to the
+#     static list without re-checking status. Empty fallback ⇒ on registry
+#     failure the dispatcher spawns nothing rather than a stale set.
+#   - `dispatch_3h` retained because `fda_signal_bridge` (FDA, operational,
+#     cadence=3h) still needs it. The registry filter inside `_dispatch`
+#     already gates by status='operational', so only FDA scanners actually fire.
 # ==========================================================================
 
-_DEFAULT_SCANNERS_3H: List[str] = [
-    "edgar_filing_monitor",
-]
-_DEFAULT_SCANNERS_WEEKLY: List[str] = [
-    "takeover_candidate_scanner",
-]
+# Hardcoded fallback lists for `_load_cadence_names`. Used only if the Supabase
+# registry GET fails — in that case the dispatcher spawns nothing for the bucket
+# (vs the pre-2026-05-13 behavior of falling back to a static set that might
+# include deprecated scanners). Kept as empty lists for API stability.
+_DEFAULT_SCANNERS_3H: List[str] = []
+_DEFAULT_SCANNERS_WEEKLY: List[str] = []
 
 
 def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], Optional[str]]:
@@ -727,7 +741,7 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa", "sec_8k_mna"],
+    13: ["fda_adcomm_pdufa"],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top
@@ -856,16 +870,6 @@ def dispatch_release_times() -> dict:
         deduped.append(n)
     envelope = _dispatch(deduped)
     envelope["hour_utc"] = hour
-    if registry_error:
-        envelope["registry_error"] = registry_error
-    return envelope
-
-
-@app.function(image=image, schedule=modal.Cron("0 12 * * 1"), timeout=60,
-              secrets=[scanner_secrets, supabase_secrets])
-def dispatch_weekly() -> dict:
-    names, registry_error = _load_cadence_names("weekly", _DEFAULT_SCANNERS_WEEKLY)
-    envelope = _dispatch(names)
     if registry_error:
         envelope["registry_error"] = registry_error
     return envelope
