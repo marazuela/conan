@@ -29,6 +29,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -216,20 +217,47 @@ def _keywords_from(value: str, fld: str) -> List[str]:
 # Document loading
 # ---------------------------------------------------------------------------
 
+def _active_asset_set_hash(client: SupabaseClient) -> str:
+    """md5 of the sorted active fda_asset id list. Stamped onto every
+    classified doc so a later change to the asset set (add/remove) auto-
+    invalidates the cached classification and pass-1 re-evaluates the doc.
+
+    The hash is over the FULL active set, not the filtered set used by an
+    operator `--asset-id` override — otherwise manual single-asset runs would
+    write a different hash than the cron, and the cron would then perpetually
+    re-process docs the manual run had already touched.
+    """
+    rows = client._rest(
+        "GET", "fda_assets",
+        params={"select": "id", "is_active": "eq.true"},
+    ) or []
+    ids = sorted(r["id"] for r in rows)
+    payload = "\n".join(ids).encode("utf-8")
+    return hashlib.md5(payload).hexdigest()
+
+
 def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
-                           doc_ids: Optional[List[str]] = None
+                           doc_ids: Optional[List[str]] = None,
+                           asset_set_hash: Optional[str] = None,
                            ) -> List[Dict[str, Any]]:
-    """Pull documents that have not yet been classified by pass-1. Newest-first
-    so the most recent material lands quickly during a backfill.
+    """Pull documents that need pass-1 evaluation. Newest-first so the most
+    recent material lands quickly during a backfill.
 
-    `doc_ids` is an operator-only override that bypasses the unclassified
-    filter and pulls the specified rows directly — used by the cache-validation
-    test path. The cron path never sets it.
+    A doc needs evaluation when ANY of:
+      - linker_classified_at IS NULL (never classified, or transient API
+        error left it unmarked),
+      - linker_classified_asset_set_hash IS NULL (legacy pre-hash stamp from
+        before PR introducing this column),
+      - linker_classified_asset_set_hash <> `asset_set_hash` (the active
+        fda_assets set has changed since this doc was classified — cached
+        no_match may now match a newly-added asset).
 
-    Uses documents.linker_classified_at IS NULL (backed by the partial index
-    documents_linker_unclassified_idx). A terminal outcome — linked, no_match,
-    or parse_error — sets linker_classified_at; transient API errors leave it
-    NULL so the next run retries.
+    `doc_ids` is an operator-only override that bypasses all filters and
+    pulls the specified rows directly — used by the cache-validation test
+    path. The cron path never sets it.
+
+    `asset_set_hash` is the md5 produced by _active_asset_set_hash. Required
+    in cron mode; ignored when `doc_ids` is set.
     """
     select = ",".join([
         "id", "source", "doc_type", "title", "url",
@@ -245,11 +273,19 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
             },
         ) or []
         return rows
+    if not asset_set_hash:
+        raise ValueError("asset_set_hash is required when doc_ids is not set")
+    # PostgREST OR: ?or=(cond1,cond2,cond3) where each cond is col.op.value.
+    or_value = (
+        f"(linker_classified_at.is.null,"
+        f"linker_classified_asset_set_hash.is.null,"
+        f"linker_classified_asset_set_hash.neq.{asset_set_hash})"
+    )
     rows = client._rest(
         "GET", "documents",
         params={
             "select": select,
-            "linker_classified_at": "is.null",
+            "or": or_value,
             "order": "published_at.desc",
             "limit": str(max_docs),
         },
@@ -257,9 +293,10 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
     return rows
 
 
-def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> bool:
-    """Stamp documents.linker_classified_at + result for a terminal pass-1
-    outcome. `result` is one of: linked, no_match, parse_error.
+def _mark_classified(client: SupabaseClient, doc_id: str, result: str,
+                     asset_set_hash: str) -> bool:
+    """Stamp documents.linker_classified_at + result + asset_set_hash for a
+    terminal pass-1 outcome. `result` is one of: linked, no_match, parse_error.
 
     Returns True on success, False on PATCH failure. Caller MUST increment
     `LinkerStats.marker_failures` on False — a silent failure here would
@@ -274,6 +311,7 @@ def _mark_classified(client: SupabaseClient, doc_id: str, result: str) -> bool:
             json_body={
                 "linker_classified_at": datetime.now(timezone.utc).isoformat(),
                 "linker_classified_result": result,
+                "linker_classified_asset_set_hash": asset_set_hash,
             },
         )
         return True
@@ -856,6 +894,12 @@ def main(argv: List[str] | None = None) -> int:
             return 1
         logger.info("Loaded %d active asset(s)", len(assets))
 
+        # Hash over the FULL active asset set — not filtered by --asset-id.
+        # Stamped onto every classified doc; the load filter pulls docs whose
+        # stamp differs from this hash, so add/remove asset → auto re-eval.
+        asset_set_hash = _active_asset_set_hash(sb)
+        logger.info("Active asset-set hash: %s", asset_set_hash)
+
         keyword_index = build_keyword_index(assets)
         keyword_patterns = _compile_keyword_patterns(keyword_index)
         logger.info("Built keyword index with %d unique keywords (compiled "
@@ -863,7 +907,8 @@ def main(argv: List[str] | None = None) -> int:
 
         doc_ids = ([d.strip() for d in args.doc_ids.split(",") if d.strip()]
                    if args.doc_ids else None)
-        docs = load_documents_to_link(sb, max_docs=args.max, doc_ids=doc_ids)
+        docs = load_documents_to_link(sb, max_docs=args.max, doc_ids=doc_ids,
+                                      asset_set_hash=asset_set_hash)
         logger.info("Loaded %d unlinked document(s)", len(docs))
         stats.docs_seen = len(docs)
 
@@ -886,11 +931,13 @@ def main(argv: List[str] | None = None) -> int:
                                        keyword_patterns=keyword_patterns)
             if not candidates:
                 stats.docs_prefilter_skipped += 1
-                # Prefilter is deterministic given the current active asset set —
-                # mark as no_match so the doc doesn't reappear next cron run. If
-                # new assets are added later, a separate trigger should reset
-                # linker_classified_at = NULL for docs needing re-evaluation.
-                if not args.dry_run and not _mark_classified(sb, doc["id"], "no_match"):
+                # Prefilter is deterministic given the current active asset set.
+                # Stamp result=no_match + asset_set_hash so the doc is skipped
+                # by next runs UNTIL the asset set changes — at which point
+                # load_documents_to_link re-pulls it for re-evaluation against
+                # the new universe.
+                if not args.dry_run and not _mark_classified(
+                        sb, doc["id"], "no_match", asset_set_hash):
                     stats.marker_failures += 1
                 continue
             stats.docs_prefilter_passed += 1
@@ -940,7 +987,8 @@ def main(argv: List[str] | None = None) -> int:
                 # Sonnet returned malformed JSON. The call was paid for; retrying
                 # almost certainly produces the same garbage. Mark to stop the loop.
                 stats.errors += 1
-                if not args.dry_run and not _mark_classified(sb, doc["id"], "parse_error"):
+                if not args.dry_run and not _mark_classified(
+                        sb, doc["id"], "parse_error", asset_set_hash):
                     stats.marker_failures += 1
                 continue
 
@@ -948,7 +996,8 @@ def main(argv: List[str] | None = None) -> int:
                 logger.info("doc %s [%s] %s — no links emitted (cost so far $%.3f)",
                             doc["id"], doc.get("source"), doc.get("doc_type"),
                             stats.cost_usd)
-                if not args.dry_run and not _mark_classified(sb, doc["id"], "no_match"):
+                if not args.dry_run and not _mark_classified(
+                        sb, doc["id"], "no_match", asset_set_hash):
                     stats.marker_failures += 1
                 continue
 
@@ -964,7 +1013,7 @@ def main(argv: List[str] | None = None) -> int:
             inserted, skipped = insert_links(sb, doc["id"], links)
             stats.links_inserted += inserted
             stats.links_dedup_skipped += skipped
-            if not _mark_classified(sb, doc["id"], "linked"):
+            if not _mark_classified(sb, doc["id"], "linked", asset_set_hash):
                 stats.marker_failures += 1
             logger.info(
                 "doc %s [%s] %s -> %d link(s) inserted, %d skipped (cost $%.3f)",
