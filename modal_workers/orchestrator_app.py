@@ -28,10 +28,39 @@ Endpoints:
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import modal
+
+logger = logging.getLogger(__name__)
+
+# Wave 3.2 — trigger → (ensemble_n, ensemble_mode) selection table.
+# Keep streaming everywhere until the batch async-drain pattern exists
+# (batch ensemble blocks the cron worker for up to 1h synchronously, which
+# breaks the */5 drain cadence). When batch async drain ships, switch
+# 'scheduled' and 'tier2_escalation' to ("batch", 7).
+#
+# Cost note: bumping scheduled from N=1 to N=3 ~triples the orchestrator
+# spend per scheduled run. We keep scheduled at N=1 today; flip when the
+# operator opts in (e.g. via orchestrator_runs.config_overrides, Wave 9).
+TRIGGER_ENSEMBLE_TABLE: Dict[str, Tuple[int, str]] = {
+    "cross_source":     (3, "streaming"),
+    "market_move":      (3, "streaming"),
+    "operator_refresh": (3, "streaming"),
+    "new_doc":          (3, "streaming"),
+    "scheduled":        (1, "streaming"),   # cost guard; bump via config_overrides
+    "tier2_escalation": (1, "streaming"),   # cost guard; bump via config_overrides
+    "manual":           (1, "streaming"),
+}
+DEFAULT_TRIGGER_ENSEMBLE: Tuple[int, str] = (1, "streaming")
+
+
+def select_ensemble_for_trigger(trigger: str) -> Tuple[int, str]:
+    """Look up (ensemble_n, ensemble_mode) for a given orchestrator trigger.
+    Falls back to single-shot streaming for unknown triggers."""
+    return TRIGGER_ENSEMBLE_TABLE.get(trigger, DEFAULT_TRIGGER_ENSEMBLE)
 
 # Distinct Modal app name. Coexists with conan-v2 in the same Modal workspace.
 app = modal.App("conan-v3-orchestrator")
@@ -360,7 +389,9 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         BudgetExceededError, DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL,
         OrchestratorClient,
     )
-    from orchestrator_runtime.runtime import run_one
+    from orchestrator_runtime.runtime import (
+        ConstitutionalFailure, Stage9ParseError, run_one,
+    )
 
     sb = SupabaseClient()
 
@@ -370,7 +401,8 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     halt_status = check_orchestrator_hard_halt(sb)
     if halt_status["halt"]:
         return {
-            "drained": 0, "completed": 0, "failed": 0, "killed_budget": 0,
+            "drained": 0, "completed": 0, "failed": 0,
+            "failed_constitutional": 0, "killed_budget": 0,
             "halted": True,
             "orchestrator_24h_usd": halt_status["total_24h_usd"],
         }
@@ -391,6 +423,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     drained = 0
     completed = 0
     failed = 0
+    failed_constitutional = 0
     killed_budget = 0
 
     for run_row in pending:
@@ -409,6 +442,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         )
 
         a_client = OrchestratorClient()
+        ensemble_n, ensemble_mode = select_ensemble_for_trigger(trigger)
         try:
             aid = run_one(
                 sb, a_client,
@@ -416,9 +450,8 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 trigger_type=trigger,
                 model=DEFAULT_MODEL,
                 extractor_model=DEFAULT_EXTRACTOR_MODEL,
-                ensemble_n=3 if trigger in {"cross_source", "market_move",
-                                            "operator_refresh"} else 1,
-                ensemble_mode="streaming",
+                ensemble_n=ensemble_n,
+                ensemble_mode=ensemble_mode,
                 run_constitutional=True,
                 run_id=run_id,
                 hard_kill_usd=PER_RUN_HARD_KILL_USD,
@@ -461,6 +494,82 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 },
             )
             killed_budget += 1
+        except ConstitutionalFailure as exc:
+            # D-117: Stage 7 gate fired. The run paid for Stages 1-7 of
+            # compute; persist that as cost_actual_usd so dashboards stay
+            # accurate. No convergence_assessments row exists for this run.
+            partial_cost = a_client.get_accumulated_cost()
+            sb._rest(
+                "PATCH", "orchestrator_runs",
+                params={"id": f"eq.{run_id}"},
+                json_body={
+                    "status": "failed_constitutional",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "cost_actual_usd": round(partial_cost, 4),
+                    "error_message": str(exc)[:1000],
+                },
+            )
+            # Wave 2.1 — also emit an operator_flag so the dashboard's
+            # operator-surface picks this up. orchestrator_runs.status alone
+            # is invisible to the flags page. severity='warn' (not 'critical')
+            # because a constitutional fail is an expected gate, not breakage.
+            try:
+                finding_checks = sorted({
+                    getattr(f, "check", None) or
+                    (f.get("check") if isinstance(f, dict) else None)
+                    for f in (exc.findings or [])
+                    if getattr(f, "check", None) or
+                       (isinstance(f, dict) and f.get("check"))
+                })
+                # entity_id has FK → v2 entities(id) so we cannot stamp the
+                # fda_assets.id there. asset_id lives in evidence jsonb for
+                # filtering; dashboard joins on evidence->>'asset_id'.
+                sb._rest(
+                    "POST", "operator_flags",
+                    json_body={
+                        "severity": "warn",
+                        "source": "constitutional_check",
+                        "kind": "stage_7_gate",
+                        "title": (
+                            f"Stage 7 gate fired ({len(exc.findings or [])} "
+                            f"error finding(s))"
+                        ),
+                        "body": str(exc)[:1000],
+                        "evidence": {
+                            "orchestrator_run_id": run_id,
+                            "asset_id": asset_id,
+                            "trigger_type": trigger,
+                            "partial_cost_usd": round(partial_cost, 4),
+                            "finding_checks": finding_checks,
+                            "n_findings": len(exc.findings or []),
+                        },
+                    },
+                )
+            except Exception as flag_exc:  # noqa: BLE001
+                # Telemetry must never break drain progression. Log loudly,
+                # don't re-raise — the orchestrator_runs status patch is the
+                # canonical record; this flag is convenience for the dashboard.
+                logger.warning(
+                    "constitutional operator_flag emit failed for run %s: %s",
+                    run_id, flag_exc,
+                )
+            failed_constitutional += 1
+        except Stage9ParseError as exc:
+            # Stage 9 produced unparseable JSON. Previously this returned
+            # None and was silently marked 'completed' with assessment_id=null
+            # — now it cleanly lands as status='failed' with a specific tag.
+            partial_cost = a_client.get_accumulated_cost()
+            sb._rest(
+                "PATCH", "orchestrator_runs",
+                params={"id": f"eq.{run_id}"},
+                json_body={
+                    "status": "failed",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "cost_actual_usd": round(partial_cost, 4),
+                    "error_message": f"stage_9_parse_error: {exc}"[:1000],
+                },
+            )
+            failed += 1
         except Exception as exc:
             sb._rest(
                 "PATCH", "orchestrator_runs",
@@ -486,6 +595,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         "drained": drained,
         "completed": completed,
         "failed": failed,
+        "failed_constitutional": failed_constitutional,
         "killed_budget": killed_budget,
     }
 
