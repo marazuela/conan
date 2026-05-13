@@ -42,14 +42,12 @@ import requests
 # --------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-V1_ROOT = REPO_ROOT / "unified_system" / "unified_system"
-CONFIG_DIR = V1_ROOT / "config"
-CANDIDATES_DIR = V1_ROOT / "candidates"
+DATA_DIR = REPO_ROOT / "data" / "legacy"
 
-SCANNER_REGISTRY = CONFIG_DIR / "scanner_registry.json"
-PE_FILER_ALLOWLIST = CONFIG_DIR / "pe_filer_allowlist.json"
-PHASE3_BASE_RATES = CONFIG_DIR / "phase3_approval_base_rates.json"
-CURATED_RATIONALES = CANDIDATES_DIR / "_curated_rationales.json"
+SCANNER_REGISTRY = DATA_DIR / "scanner_registry.json"
+PE_FILER_ALLOWLIST = DATA_DIR / "pe_filer_allowlist.json"
+PHASE3_BASE_RATES = DATA_DIR / "phase3_approval_base_rates.json"
+CURATED_RATIONALES = DATA_DIR / "_curated_rationales.json"
 
 # Import WEIGHTS from the ported module — single source of truth.
 sys.path.insert(0, str(REPO_ROOT))

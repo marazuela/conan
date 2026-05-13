@@ -4,7 +4,7 @@ Seeds `catalyst_universe` rows for the four known v1 archived post-edge cases
 (TVTX, AVNS, GSAT, SEM) so the future coverage auditor has anchors to test
 recall against. The v1 archive JSON at:
 
-    unified_system/unified_system/candidates/_curated_rationales.json
+    data/legacy/_curated_rationales.json
 
 contains the `_archived` block these entries were moved into on 2026-04-17
 under D-013 (pre-edge-only mandate). Each archived entry carries the catalyst
@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-V1_ARCHIVE = REPO_ROOT / "unified_system" / "unified_system" / "candidates" / "_curated_rationales.json"
+V1_ARCHIVE = REPO_ROOT / "data" / "legacy" / "_curated_rationales.json"
 
 sys.path.insert(0, str(REPO_ROOT))
 from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError  # noqa: E402
