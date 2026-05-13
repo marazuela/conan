@@ -45,10 +45,13 @@ from modal_workers.shared.supabase_client import SupabaseClient
 logger = logging.getLogger(__name__)
 
 # Pass-1 is keyword-prefiltered triage ("is this doc about asset X?"), not high-stakes
-# judgement — Haiku has been adequate for pass-2 verification (D-125) and is cheaper.
-# Override with ASSET_LINKER_PASS1_MODEL env var if recall regresses; falling back to
-# Sonnet is a one-env-var change.
-MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-haiku-4-5-20251001")
+# judgement — but a 2026-05-13 production A/B vs the prior Sonnet baseline showed
+# Haiku at ~1.32% yield/call (vs Sonnet ~6.67%) and ~$0.63/link (vs Sonnet ~$0.32),
+# net 2× worse cost-per-link despite Haiku's per-token discount. Reverted to Sonnet
+# pending a gold-set eval (plans/asset-linker-yield-optimization.md Phase 1). The
+# env var override path is preserved — set ASSET_LINKER_PASS1_MODEL=claude-haiku-...
+# in the anthropic-orchestrator Modal secret to switch back without a redeploy.
+MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-sonnet-4-5-20250929")
 
 # For huge docs, we trim around matches to keep cost bounded. 80k context is
 # plenty for asset linking (which doesn't need every paragraph — just the
