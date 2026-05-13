@@ -95,6 +95,45 @@ logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_VERSION = "orch-v0.4.0-mvp"
 
+
+# ===========================================================================
+# Abort-path exceptions
+#
+# Both are caught by modal_workers.orchestrator_app.drain_queue and converted
+# to orchestrator_runs.status patches BEFORE the catch-all `except Exception`.
+# Using dedicated types keeps these abort paths distinguishable in dashboards
+# and prevents the silent "run_one returned None → status='completed' with
+# assessment_id=null" misclassification that the old return-None contract
+# allowed.
+# ===========================================================================
+
+
+class ConstitutionalFailure(Exception):
+    """Raised when Stage 7 constitutional check returns pass_=False.
+
+    D-117 requires structural Stage 2/3 errors and unresolved citations to
+    gate the assessment. The catcher writes status='failed_constitutional'.
+    No convergence_assessments row exists when this fires; partial cost is
+    persisted via OrchestratorClient.get_accumulated_cost().
+    """
+
+    def __init__(self, findings: Optional[List[Any]] = None, message: str = ""):
+        self.findings = findings or []
+        super().__init__(
+            message
+            or f"constitutional check failed ({len(self.findings)} error finding(s))"
+        )
+
+
+class Stage9ParseError(Exception):
+    """Raised when Stage 9 structured extraction returns unparseable JSON.
+
+    Replaces the legacy `return None` contract — that path was silently
+    classified as a successful run by orchestrator_app.drain_queue. The
+    catcher writes status='failed' with error_message='stage_9_parse_error'.
+    """
+
+
 # Stream 3.6: Stage 1 sub-agent dispatch is feature-flagged. When ON, Stage 1
 # runs an Anthropic tool-use loop with `dispatch_sub_agent` available. Default
 # OFF to minimize risk of regressions; enable per-assessment via env or by
@@ -125,10 +164,27 @@ CACHEABLE_PREFIX_HEADER = (
 ALL_FALSIFIED_CONVICTION_CEILING = 30.0
 
 # Per-asset doc-buffer construction caps (keep below Tier-1 rate limit
-# of 30k input tokens/min on the new API key)
-MAX_FACTS_IN_PROMPT = 80
-MAX_DOC_EXCERPTS = 8
-DOC_EXCERPT_CHARS = 4000
+# of 30k input tokens/min on the new API key). Env-overridable for A/B
+# without code change — see plan-this-for-optimal-zippy-allen.md Wave 1.4.
+MAX_FACTS_IN_PROMPT = int(os.environ.get("ORCH_MAX_FACTS_IN_PROMPT", "80"))
+MAX_DOC_EXCERPTS = int(os.environ.get("ORCH_MAX_DOC_EXCERPTS", "8"))
+DOC_EXCERPT_CHARS = int(os.environ.get("ORCH_DOC_EXCERPT_CHARS", "4000"))
+
+# Number of prior non-superseded convergence_assessments to surface in the
+# cached system prefix. Stage 1 sees them so it can ground "what did we
+# previously think?" without a separate tool call.
+MAX_PRIOR_ASSESSMENTS = int(os.environ.get("ORCH_MAX_PRIOR_ASSESSMENTS", "3"))
+
+# Wave 1.1 composite ranking — higher = more important; ties break by
+# extraction_confidence DESC, then created_at DESC. The asset_documents
+# CHECK constraint enumerates these five link_types.
+LINK_TYPE_PRIORITY: Dict[str, int] = {
+    "primary": 5,
+    "safety_signal": 4,
+    "pipeline_context": 3,
+    "mentions": 2,
+    "literature": 1,
+}
 
 # Band thresholds (derived from conviction_pct). Plan §"probabilistic +
 # calibrated, not categorical" — these are configurable, not hardcoded
@@ -200,16 +256,38 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         },
     ) or []
 
-    # Pull material documents linked to this asset, newest-first
+    # Pull material documents linked to this asset, then rank by
+    # link_type priority → extraction_confidence → created_at (Wave 1.1).
+    # Pure recency-ordering (the prior implementation) let recent boilerplate
+    # displace older 'primary' filings, starving Stage 1 of high-signal text.
     asset_docs = client._rest(
         "GET", "asset_documents",
         params={
-            "select": "document_id,link_type,extraction_confidence,extracted_spans",
+            "select": ("document_id,link_type,extraction_confidence,"
+                       "extracted_spans,created_at"),
             "asset_id": f"eq.{asset_id}",
             "is_material": "is.true",
             "order": "created_at.desc",
         },
     ) or []
+
+    def _doc_rank_key(row: Dict[str, Any]) -> tuple:
+        # Sorted ascending → best first. ISO-8601 strings sort
+        # lexicographically; placing negative ord-1 makes newer-first,
+        # but it's simpler to pre-flip the asset_docs list (already
+        # ordered newest-first by PostgREST) then use Python's stable
+        # sort with just the two non-temporal keys.
+        link_pri = LINK_TYPE_PRIORITY.get(row.get("link_type") or "", 0)
+        conf = row.get("extraction_confidence")
+        try:
+            conf_f = float(conf) if conf is not None else 0.0
+        except (TypeError, ValueError):
+            conf_f = 0.0
+        return (-link_pri, -conf_f)
+
+    # PostgREST already returned newest-first; Python's sort is stable, so
+    # rows that tie on (link_priority, confidence) retain that recency order.
+    asset_docs.sort(key=_doc_rank_key)
     doc_ids = [r["document_id"] for r in asset_docs[:MAX_DOC_EXCERPTS]]
 
     docs: List[Dict[str, Any]] = []
@@ -247,12 +325,31 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
     if memory_text is None:
         legacy_path = asset.get("memory_path")
         if legacy_path:
+            # Wave 1.3 — narrow from blanket Exception. Real failure modes here
+            # are storage-not-found (treat as empty), permission/UTF-8 decoding;
+            # everything else (e.g. an SDK bug) should surface, not get buried.
             try:
                 blob = client.read_cache("memory", legacy_path.lstrip("/"))
                 if blob:
                     memory_text = blob.decode("utf-8", errors="replace")
-            except Exception as exc:
+            except (IOError, KeyError, UnicodeDecodeError) as exc:
                 logger.debug("legacy memory %s not found: %s", legacy_path, exc)
+
+    # Wave 1.2 — surface the most recent N convergence_assessments for this
+    # asset so Stage 1's cached prefix carries "what did we previously
+    # conclude?" context. Only non-superseded rows; ordered newest-first.
+    prior_assessments = client._rest(
+        "GET", "convergence_assessments",
+        params={
+            "select": ("created_at,thesis_direction,conviction_pct,"
+                       "conviction_pct_calibrated,band,evidence_quality,"
+                       "pre_mortem_verdict"),
+            "asset_id": f"eq.{asset_id}",
+            "superseded_at": "is.null",
+            "order": "created_at.desc",
+            "limit": str(MAX_PRIOR_ASSESSMENTS),
+        },
+    ) or []
 
     return {
         "asset": asset,
@@ -261,6 +358,7 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         "memory_text": memory_text,
         "memory_blobs": memory_blobs,
         "asset_doc_links": asset_docs,
+        "prior_assessments": prior_assessments,
         "reference_class_anchor": None,  # populated by stage_4_anchor
     }
 
@@ -759,7 +857,11 @@ def stage_10_persist(
     if evidence_quality is not None:
         evidence_quality = max(0.0, min(1.0, evidence_quality))
 
-    # Stage 8 — isotonic calibration if a curve is active
+    # Stage 8 — isotonic calibration if a curve is active.
+    # `conviction` is the RAW model conviction here (B4 fix: the Stage 3
+    # all_falsified branch no longer mutates parsed["conviction_pct"];
+    # instead it sets ctx["conviction_capped_by_premortem"] and stages
+    # the raw value on ctx["pre_premortem_conviction"]).
     active_curve = get_active_calibration_curve(sb)
     if active_curve and active_curve.get("curve_data"):
         calibrated = apply_isotonic_calibration(
@@ -769,6 +871,21 @@ def stage_10_persist(
     else:
         calibrated = conviction
         calibration_curve_version = None
+
+    # B4: apply the Stage 3 all_falsified cap AFTER calibration. Capping
+    # before calibration distorted conviction_pct_calibrated for the
+    # all_falsified case: it produced isotonic(min(raw, 30)/100) instead of
+    # the correct min(isotonic(raw/100), 30). The raw value still flows
+    # into raw_conviction_pct via ctx["pre_premortem_conviction"] so the
+    # feedback loop sees the un-capped model output (D-117 invariant).
+    if ctx.get("conviction_capped_by_premortem"):
+        pre_cap_calibrated = calibrated
+        calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
+        if calibrated < pre_cap_calibrated:
+            logger.info(
+                "Stage 10: all_falsified cap applied AFTER calibration "
+                "(%.2f -> %.2f)", pre_cap_calibrated, calibrated,
+            )
 
     band = derive_band(calibrated)
 
@@ -1171,6 +1288,35 @@ def build_shared_system_prefix(ctx: Dict[str, Any]) -> str:
     anchor_block = format_anchor_for_prompt(anchor) if anchor is not None else None
     anchor_section = (f"\n## Reference-class anchor\n\n{anchor_block}\n\n"
                       if anchor_block else "")
+
+    # Wave 1.2 — render prior assessments (most recent non-superseded N).
+    # Empty for cold-start assets; section header omitted in that case so
+    # we don't waste a cache line on "(none)".
+    prior = ctx.get("prior_assessments") or []
+    if prior:
+        prior_lines = []
+        for row in prior:
+            day = (row.get("created_at") or "")[:10]
+            direction = row.get("thesis_direction") or "?"
+            conv = row.get("conviction_pct_calibrated")
+            if conv is None:
+                conv = row.get("conviction_pct")
+            conv_str = f"{float(conv):.0f}%" if conv is not None else "?"
+            band = row.get("band") or "?"
+            ev = row.get("evidence_quality")
+            ev_str = f"{float(ev):.2f}" if ev is not None else "?"
+            verdict = row.get("pre_mortem_verdict") or "?"
+            prior_lines.append(
+                f"- {day}: {direction}, conviction {conv_str} "
+                f"(band={band}, evidence={ev_str}, pre_mortem={verdict})"
+            )
+        prior_section = (
+            "\n## Prior assessments (most recent {n}, non-superseded)\n\n"
+            "{lines}\n\n"
+        ).format(n=len(prior_lines), lines="\n".join(prior_lines))
+    else:
+        prior_section = ""
+
     return f"""{CACHEABLE_PREFIX_HEADER}
 ## Tracked asset
 
@@ -1184,8 +1330,7 @@ def build_shared_system_prefix(ctx: Dict[str, Any]) -> str:
   reference_class: {asset.get('reference_class_signature') or '(unknown)'}
   application_number: {asset.get('application_number') or '(unknown)'}
   program_status: {asset.get('program_status') or '(unknown)'}
-{anchor_section}
-## Structured fact layer ({len(facts)} facts, ranked by confidence then \
+{anchor_section}{prior_section}## Structured fact layer ({len(facts)} facts, ranked by confidence then \
 recency)
 
 {facts_section}"""
@@ -1512,15 +1657,26 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 "dispersion": ensemble.dispersion,
                 "shrinkage_factor": ensemble.shrinkage_factor,
                 "final_conviction": ensemble.final_conviction,
+                # Wave 3.3 — observability for the retry path
+                "n_attempted": ensemble.n_attempted,
+                "retries_used": ensemble.retries_used,
+                "degraded": ensemble.degraded,
             },
         ))
-        logger.info("Ensemble: dist=%s mean=%.1f dispersion=%.1f final=%.1f cost=$%.3f",
-                    ensemble.direction_distribution, ensemble.raw_mean_conviction,
-                    ensemble.dispersion, ensemble.final_conviction,
-                    ensemble.total_cost_usd)
+        logger.info(
+            "Ensemble: dist=%s mean=%.1f dispersion=%.1f final=%.1f "
+            "cost=$%.3f (successful=%d/%d retries=%d degraded=%s)",
+            ensemble.direction_distribution, ensemble.raw_mean_conviction,
+            ensemble.dispersion, ensemble.final_conviction,
+            ensemble.total_cost_usd, ensemble.n, ensemble.n_attempted,
+            ensemble.retries_used, ensemble.degraded,
+        )
         # Stash ensemble_runs payload for Stage 10
         run_ensemble_payload = {
             "n": ensemble.n,
+            "n_attempted": ensemble.n_attempted,
+            "retries_used": ensemble.retries_used,
+            "degraded": ensemble.degraded,
             "mode": ensemble.mode,
             "direction_distribution": ensemble.direction_distribution,
             "raw_mean": ensemble.raw_mean_conviction,
@@ -1545,8 +1701,15 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         parsed, m9 = stage_9_extract(a_client, cited_prose, extractor_model)
         run.stage_metrics.append(m9)
         if not parsed:
-            logger.error("Stage 9 failed to parse JSON; aborting")
-            return None
+            # Replaces the legacy `return None` contract — orchestrator_app
+            # silently classified a None return as a successful run with
+            # assessment_id=null. Raising lets the caller route this to
+            # status='failed' with a specific error_message.
+            logger.error("Stage 9 failed to parse JSON; aborting before Stage 10")
+            raise Stage9ParseError(
+                "Stage 9 produced unparseable JSON for cited prose; "
+                f"output token count={m9.output_tokens}"
+            )
         logger.info("Stage 9: %dms / %d in / %d out / $%.3f / direction=%s conviction=%s",
                     m9.latency_ms, m9.input_tokens, m9.output_tokens, m9.cost_usd,
                     parsed.get("thesis_direction"), parsed.get("conviction_pct"))
@@ -1585,6 +1748,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             model=model,
             input_tokens=hypothesis_result.input_tokens,
             output_tokens=hypothesis_result.output_tokens,
+            cache_read_tokens=hypothesis_result.cache_read_tokens,
+            cache_creation_tokens=hypothesis_result.cache_creation_tokens,
             cost_usd=hypothesis_result.cost_usd,
             latency_ms=hypothesis_result.latency_ms,
             status="completed" if hypothesis_result.pass_ else "failed",
@@ -1629,6 +1794,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 model=model,
                 input_tokens=premortem_result.input_tokens,
                 output_tokens=premortem_result.output_tokens,
+                cache_read_tokens=premortem_result.cache_read_tokens,
+                cache_creation_tokens=premortem_result.cache_creation_tokens,
                 cost_usd=premortem_result.cost_usd,
                 latency_ms=premortem_result.latency_ms,
                 status="completed" if premortem_result.pass_ else "failed",
@@ -1653,25 +1820,28 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 len(premortem_result.findings), premortem_result.cost_usd,
             )
 
-            # Apply Stage 9 post-hoc cap on all_falsified.
-            # IMPORTANT: stash the pre-cap value so Stage 10 records the
-            # genuine raw_conviction_pct (per schema comment "Stage 5/6
-            # output"). The cap flows into conviction_pct_calibrated /
-            # conviction_pct only. D-117.
+            # B4 (was D-117): on all_falsified, signal Stage 10 to cap AFTER
+            # isotonic calibration — do NOT mutate parsed["conviction_pct"]
+            # here. Capping before calibration hid the raw model output from
+            # the curve and made conviction_pct_calibrated = isotonic(min(raw,
+            # 30)) instead of min(isotonic(raw), 30). Stash the raw value on
+            # ctx so stage_10_persist writes raw_conviction_pct correctly
+            # and applies the cap to the calibrated output.
             if premortem_result.overall_verdict == "all_falsified":
                 try:
                     raw_conv = float(parsed.get("conviction_pct") or 0.0)
                 except (TypeError, ValueError):
                     raw_conv = 0.0
-                capped = min(raw_conv, ALL_FALSIFIED_CONVICTION_CEILING)
-                if capped < raw_conv:
+                if raw_conv > ALL_FALSIFIED_CONVICTION_CEILING:
                     logger.warning(
-                        "Stage 3 all_falsified: capping conviction_pct %.1f -> %.1f",
-                        raw_conv, capped,
+                        "Stage 3 all_falsified: conviction %.1f will be capped "
+                        "to %.1f AFTER Stage 8 calibration in stage_10_persist",
+                        raw_conv, ALL_FALSIFIED_CONVICTION_CEILING,
                     )
-                    ctx["pre_premortem_conviction"] = raw_conv
                     ctx["conviction_capped_by_premortem"] = True
-                parsed["conviction_pct"] = capped
+                # Always set pre_premortem_conviction so raw_conviction_pct
+                # writeback is consistent whether or not the cap binds.
+                ctx["pre_premortem_conviction"] = raw_conv
         else:
             logger.warning("Stage 2 emitted no hypotheses; skipping Stage 3.")
 
@@ -1731,8 +1901,28 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     # the persistence gate. dict.update() preserves the caller's reference
     # so they can read it after run_one returns.
     if parsed_out is not None:
+        # Filled below as well — also fill it here so a constitutional-fail
+        # abort still hands the parsed payload back to the replay harness for
+        # inspection (the test harness uses dry_run + parsed_out together).
         parsed_out.clear()
         parsed_out.update(parsed)
+
+    # D-117 enforcement: Stage 7 hard fail aborts the pipeline BEFORE Stage 10.
+    # Persisting an assessment with unresolved citations or structural Stage 2/3
+    # errors would taint convergence_assessments and downstream calibration —
+    # the docstring promise that constitutional findings gate the run is now
+    # enforced. The catcher in orchestrator_app.drain_queue writes
+    # status='failed_constitutional' on this exception.
+    if constitutional_result and not constitutional_result.pass_:
+        error_findings = [
+            f for f in constitutional_result.findings if f.severity == "error"
+        ]
+        logger.error(
+            "Stage 7 constitutional fail (%d error finding(s)); "
+            "aborting before Stage 10",
+            len(error_findings),
+        )
+        raise ConstitutionalFailure(error_findings)
 
     if dry_run:
         logger.info("[dry-run] would persist; assessment summary:")
