@@ -219,13 +219,19 @@ def test_load_context_raises_on_missing_assessment(monkeypatch):
 
 def test_load_context_raises_when_no_specialists_present(monkeypatch):
     """Refusing to synthesize an IC memo with zero specialist inputs is
-    safer than silently emitting a vague memo."""
+    safer than silently emitting a vague memo. Must be empty in BOTH
+    sub_agent_calls (4-role) AND fda_agent_reviews (Phase 0 fallback)."""
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
         if method == "GET" and path == "convergence_assessments":
             return [_make_assessment_row()]
         if method == "GET" and path == "fda_assets":
             return [_make_asset_row()]
         if method == "GET" and path == "sub_agent_calls":
+            return []
+        # Phase 0 fallback also returns nothing — no events, no reviews
+        if method == "GET" and path == "fda_regulatory_events":
+            return []
+        if method == "GET" and path == "fda_agent_reviews":
             return []
         return []
 
@@ -235,6 +241,103 @@ def test_load_context_raises_when_no_specialists_present(monkeypatch):
     with pytest.raises(ic_memo_runner.ICMemoOrchestrationError,
                        match="no schema-passing specialist"):
         ic_memo_runner.load_ic_memo_context(sb, "assess-1")
+
+
+def test_load_context_falls_back_to_phase0_fda_agent_reviews(monkeypatch):
+    """When sub_agent_calls is empty for an assessment but the asset has
+    completed Phase 0 reviews on fda_agent_reviews, the loader bridges
+    the 3-role → 4-role taxonomy and returns those payloads. Unblocks
+    IC memo synthesis while sub-agent dispatch is gated off."""
+    captured: List[Dict[str, Any]] = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "params": params})
+        if method == "GET" and path == "convergence_assessments":
+            return [_make_assessment_row()]
+        if method == "GET" and path == "fda_assets":
+            return [_make_asset_row()]
+        if method == "GET" and path == "sub_agent_calls":
+            return []  # 4-role path empty — trigger fallback
+        if method == "GET" and path == "fda_regulatory_events":
+            return [{"id": "evt-1"}, {"id": "evt-0-older"}]
+        if method == "GET" and path == "fda_agent_reviews":
+            return [
+                # Newest per role — these should win
+                {"agent_kind": "medical",
+                 "structured_output": {"summary": "medical NEW"},
+                 "status": "completed",
+                 "ran_at": "2026-05-13T08:00:00Z"},
+                {"agent_kind": "regulatory",
+                 "structured_output": {"summary": "regulatory NEW"},
+                 "status": "completed",
+                 "ran_at": "2026-05-13T08:01:00Z"},
+                {"agent_kind": "microstructure",
+                 "structured_output": {"summary": "microstructure NEW"},
+                 "status": "completed",
+                 "ran_at": "2026-05-13T08:02:00Z"},
+                # Older medical for the prior event — must NOT override
+                {"agent_kind": "medical",
+                 "structured_output": {"summary": "medical OLD"},
+                 "status": "completed",
+                 "ran_at": "2026-05-10T08:00:00Z"},
+            ]
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = _stub_client(fake_rest)
+
+    ctx = ic_memo_runner.load_ic_memo_context(sb, "assess-1")
+
+    # Phase 0 roles remapped to the new 4-role taxonomy keys
+    assert set(ctx["specialists"].keys()) == {
+        "literature", "regulatory_history", "options_microstructure",
+    }
+    # competitive has no Phase 0 equivalent — left absent (build_user_content
+    # will render the placeholder text)
+    assert "competitive" not in ctx["specialists"]
+    # Newest-per-role wins (asset has reviews from two events, medical from
+    # 2026-05-13 should beat 2026-05-10)
+    assert ctx["specialists"]["literature"]["summary"] == "medical NEW"
+    assert ctx["specialists"]["regulatory_history"]["summary"] == "regulatory NEW"
+    assert ctx["specialists"]["options_microstructure"]["summary"] == "microstructure NEW"
+
+    # The fallback fired only after sub_agent_calls returned empty
+    paths = [c["path"] for c in captured if c["method"] == "GET"]
+    assert paths.index("sub_agent_calls") < paths.index("fda_regulatory_events")
+
+    # fda_agent_reviews query targeted only completed Phase-0 roles
+    review_call = next(c for c in captured
+                       if c["method"] == "GET" and c["path"] == "fda_agent_reviews")
+    assert review_call["params"]["status"] == "eq.completed"
+    assert "medical" in review_call["params"]["agent_kind"]
+    assert "regulatory" in review_call["params"]["agent_kind"]
+    assert "microstructure" in review_call["params"]["agent_kind"]
+
+
+def test_load_context_skips_phase0_fallback_when_sub_agent_calls_has_rows(monkeypatch):
+    """Don't read fda_agent_reviews when sub_agent_calls already has data —
+    sub_agent_calls is the canonical 4-role path; Phase 0 is the bridge."""
+    captured: List[Dict[str, Any]] = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path})
+        if method == "GET" and path == "convergence_assessments":
+            return [_make_assessment_row()]
+        if method == "GET" and path == "fda_assets":
+            return [_make_asset_row()]
+        if method == "GET" and path == "sub_agent_calls":
+            return [_make_specialist("literature", "from sub_agent_calls")]
+        # If the fallback fires, this would shadow sub_agent_calls — but it shouldn't fire
+        if method == "GET" and path == "fda_regulatory_events":
+            pytest.fail("Phase 0 fallback fired even though sub_agent_calls had rows")
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = _stub_client(fake_rest)
+
+    ctx = ic_memo_runner.load_ic_memo_context(sb, "assess-1")
+    assert ctx["specialists"]["literature"]["summary"] == "from sub_agent_calls"
+    assert "fda_regulatory_events" not in [c["path"] for c in captured]
 
 
 def test_load_context_handles_missing_anchor(monkeypatch):

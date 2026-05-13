@@ -55,11 +55,89 @@ DEFAULT_IC_MEMO_QUESTION = (
     "sources via the citations[] array."
 )
 
+# Phase 0 (`fda_agent_reviews.agent_kind`) → Phase 4B (`sub_agent_calls.role`) bridge.
+# Used by load_ic_memo_context when sub_agent_calls is empty for the assessment
+# but the asset has completed Phase 0 reviews on fda_agent_reviews. Keeping the
+# IC memo unblocked while the orchestrator's sub-agent dispatch is still gated
+# on Phase 2C (ORCH_ENABLE_SUB_AGENTS_DEFAULT=0).
+#
+# Mapping is intentionally 1:1 and conservative:
+#   - medical        → literature             (Phase 0 medical covers efficacy/
+#                                              safety/mechanism/AE; closest in
+#                                              spirit to the new literature
+#                                              specialist)
+#   - regulatory     → regulatory_history     (1:1 semantic)
+#   - microstructure → options_microstructure (1:1 semantic)
+#   - competitive    → (no Phase 0 equivalent — left empty; build_user_content
+#                       renders a "no review available" placeholder)
+PHASE0_TO_PHASE4B_ROLES = {
+    "medical": "literature",
+    "regulatory": "regulatory_history",
+    "microstructure": "options_microstructure",
+}
+
 
 class ICMemoOrchestrationError(RuntimeError):
     """Raised when the orchestration cannot proceed (missing assessment,
     missing all four specialists, etc.). Distinct from
     SubAgentSchemaError, which means the LLM produced bad JSON."""
+
+
+def _load_phase0_specialists(
+    sb: SupabaseClient,
+    asset_id: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Phase 0 fallback specialist loader.
+
+    Walks `convergence_assessments.asset_id → fda_regulatory_events.asset_id →
+    fda_regulatory_events.id → fda_agent_reviews.event_id` and returns the
+    latest schema-passing review per Phase 0 role, remapped to the new 4-role
+    taxonomy via PHASE0_TO_PHASE4B_ROLES.
+
+    Returns an empty dict (NOT raises) when the asset has no fda_regulatory_events
+    rows OR no completed reviews — the caller upgrades that to ICMemoOrchestrationError
+    after both lookups have failed.
+
+    Multiple events per asset is the common case (one per catalyst). We take the
+    union of completed reviews across all of the asset's events, keeping the
+    newest review per role. Older catalysts' reviews are still informative for
+    IC synthesis — the build_user_content layer doesn't know or care which
+    event a payload originated from.
+    """
+    events = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id",
+            "asset_id": f"eq.{asset_id}",
+            "order": "created_at.desc",
+        },
+    ) or []
+    if not events:
+        return {}
+    event_ids = [e["id"] for e in events]
+
+    reviews = sb._rest(
+        "GET", "fda_agent_reviews",
+        params={
+            "select": "agent_kind,structured_output,status,ran_at",
+            "event_id": f"in.({','.join(event_ids)})",
+            "status": "eq.completed",
+            "agent_kind": f"in.({','.join(PHASE0_TO_PHASE4B_ROLES.keys())})",
+            "order": "ran_at.desc.nullslast",
+        },
+    ) or []
+
+    # Newest-per-role wins (same dedup semantics as the sub_agent_calls path).
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in reviews:
+        old_role = r.get("agent_kind")
+        new_role = PHASE0_TO_PHASE4B_ROLES.get(old_role)
+        if not new_role or new_role in out:
+            continue
+        payload = r.get("structured_output")
+        if isinstance(payload, dict) and payload:
+            out[new_role] = payload
+    return out
 
 
 def load_ic_memo_context(
@@ -153,10 +231,20 @@ def load_ic_memo_context(
             specialists[role] = out
 
     if not specialists:
+        # Phase 0 fallback: production (2026-05-13) still writes specialist
+        # reviews into fda_agent_reviews with the 3-role taxonomy (medical/
+        # regulatory/microstructure). The orchestrator's Stage 1 dispatch path
+        # (which populates sub_agent_calls with the 4-role taxonomy) is gated
+        # OFF behind ORCH_ENABLE_SUB_AGENTS_DEFAULT until Phase 2C. Bridge the
+        # gap so IC memo synthesis works on whichever specialists are live —
+        # without this, every operator "Generate IC memo" click fails.
+        specialists = _load_phase0_specialists(sb, asset_id)
+
+    if not specialists:
         raise ICMemoOrchestrationError(
             f"assessment {assessment_id} has no schema-passing specialist "
-            f"sub_agent_calls rows; refusing to synthesize IC memo with "
-            f"zero inputs"
+            f"rows in sub_agent_calls (4-role) or fda_agent_reviews (Phase 0 "
+            f"3-role); refusing to synthesize IC memo with zero inputs"
         )
 
     thesis: Dict[str, Any] = {
