@@ -410,7 +410,10 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     pending = sb._rest(
         "GET", "orchestrator_runs",
         params={
-            "select": "id,asset_id,trigger_type,trigger_doc_id,tier",
+            # Wave 9.1 — also pull config_overrides so per-run knobs (e.g.
+            # sub_agent_max_turns, ensemble_n bumps) plumb through to runtime.
+            "select": ("id,asset_id,trigger_type,trigger_doc_id,tier,"
+                       "config_overrides"),
             "status": "eq.pending",
             "tier": "eq.1",
             "order": "scheduled_at.asc",
@@ -430,6 +433,9 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         run_id = run_row["id"]
         asset_id = run_row["asset_id"]
         trigger = run_row["trigger_type"]
+        # Wave 9.1 — config_overrides is jsonb-nullable; coerce to dict so
+        # the runtime never needs to distinguish "absent" from "empty".
+        config_overrides = run_row.get("config_overrides") or {}
 
         # Mark running
         sb._rest(
@@ -443,6 +449,12 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
 
         a_client = OrchestratorClient()
         ensemble_n, ensemble_mode = select_ensemble_for_trigger(trigger)
+        # Wave 9.1 — config_overrides can bump these too. ensemble_n/mode wins
+        # over the trigger-mapped default when explicitly set.
+        if isinstance(config_overrides.get("ensemble_n"), int):
+            ensemble_n = max(1, min(15, config_overrides["ensemble_n"]))
+        if config_overrides.get("ensemble_mode") in {"streaming", "batch"}:
+            ensemble_mode = config_overrides["ensemble_mode"]
         try:
             aid = run_one(
                 sb, a_client,
@@ -455,6 +467,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 run_constitutional=True,
                 run_id=run_id,
                 hard_kill_usd=PER_RUN_HARD_KILL_USD,
+                config_overrides=config_overrides,
             )
             # cost_actual_usd lookup — convergence_assessments.cost_usd is
             # already populated by runtime.run_one() at line 638.

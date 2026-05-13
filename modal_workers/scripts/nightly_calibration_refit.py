@@ -164,6 +164,12 @@ def run_nightly_refit(
     # Always log the eval run for audit.
     _insert_eval_run(sb, version=version, gate=gate, activated=activated)
 
+    # Wave 8.3 — when the D-103 gate FAILS for any reason other than
+    # cold-start ("no_baseline" = no prior curve, expected on first run),
+    # emit an operator_flag so the dashboard surfaces the stuck-curve risk.
+    # On gate pass, resolve any open flag to keep noise low.
+    _surface_d103_gate_status(sb, version=version, gate=gate, n_training=n)
+
     return RefitResult(
         n_training=n,
         new_curve_version=version,
@@ -490,6 +496,102 @@ def _insert_eval_run(
     }
     sb._rest_with_retry("POST", "eval_runs", json_body=body,
                         prefer="return=minimal")
+
+
+# ---------------------------------------------------------------------------
+# Wave 8.3 — D-103 gate observability
+#
+# When the nightly refit ships a candidate curve that FAILS the D-103
+# paired-bootstrap gate, the prior is_active=true curve keeps serving the
+# orchestrator. That's the correct behavior — but until this hook existed
+# the operator had no visible signal that fresh data was failing to pass
+# the gate, so a stale curve could remain "active" indefinitely.
+#
+# This helper upserts an open flag when the gate fails (and the failure
+# isn't the cold-start no_baseline state), and resolves any open flag when
+# the gate passes again. Source 'calibration_refit' is new and added to the
+# operator_flags.source CHECK whitelist by the Wave 8 migration.
+# ---------------------------------------------------------------------------
+
+CALIBRATION_REFIT_FLAG_SOURCE = "calibration_refit"
+CALIBRATION_REFIT_FLAG_KIND = "d103_gate_failed"
+
+
+def _surface_d103_gate_status(
+    sb: SupabaseClient,
+    *,
+    version: str,
+    gate: GateEvaluation,
+    n_training: int,
+) -> None:
+    """Emit/resolve the D-103 gate operator_flag based on `gate.passed`.
+
+    Wrapped in try/except so a flag write failure (e.g. constraint mismatch,
+    network) never breaks the nightly refit. The eval_runs row is the source
+    of truth; this flag is operator-surface convenience.
+    """
+    try:
+        from modal_workers.observability import _resolve_flag, _upsert_flag
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("d103_gate flag helpers unavailable: %s", exc)
+        return
+
+    try:
+        if gate.passed:
+            _resolve_flag(
+                sb,
+                source=CALIBRATION_REFIT_FLAG_SOURCE,
+                kind=CALIBRATION_REFIT_FLAG_KIND,
+                note=(
+                    f"auto-resolved: gate passed at version={version} "
+                    f"(brier_new={gate.brier_new}, delta={gate.brier_delta}, "
+                    f"n_eval={gate.n_eval_cases})"
+                ),
+            )
+            return
+
+        if gate.gate_reason == "no_baseline":
+            # Cold-start: no prior curve exists. The orchestrator runs with
+            # calibration_status='no_active_curve' and that's the expected
+            # state until enough resolved post-mortems land. Not actionable.
+            return
+
+        _upsert_flag(
+            sb,
+            severity="warn",
+            source=CALIBRATION_REFIT_FLAG_SOURCE,
+            kind=CALIBRATION_REFIT_FLAG_KIND,
+            title=(
+                f"D-103 calibration gate failed: {gate.gate_reason} "
+                f"(version={version})"
+            ),
+            body=(
+                "Nightly isotonic refit produced a candidate curve that did "
+                "not beat the production curve under D-103's paired-bootstrap "
+                "gate. The production curve remains active. Investigate the "
+                "gate_reason and the n_eval_cases context; manual promotion "
+                "via fda_calibration_activate(p_version) is available if you "
+                "believe the gate is overly conservative."
+            ),
+            evidence={
+                "candidate_version": version,
+                "gate_reason": gate.gate_reason,
+                "n_eval_cases": gate.n_eval_cases,
+                "n_training": n_training,
+                "brier_prod": gate.brier_prod,
+                "brier_new": gate.brier_new,
+                "brier_delta": gate.brier_delta,
+                "paired_bootstrap_p": gate.paired_bootstrap_p,
+                "ranking_auc_delta": gate.ranking_auc_delta,
+                "max_single_asset_contribution_pct":
+                    gate.max_single_asset_contribution_pct,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "d103_gate flag emission failed (version=%s, reason=%s): %s",
+            version, gate.gate_reason, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
