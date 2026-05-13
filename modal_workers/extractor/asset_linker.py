@@ -60,6 +60,31 @@ MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-sonnet-4-5-20250929")
 MAX_DOC_TOKENS_FOR_LINKER = 80_000
 TRIM_WINDOW_CHARS = 4_000  # window around each regex hit when trimming
 
+# Source allowlist for pass-1. Derived from a 2026-05-13 gold-set evaluation
+# (500 docs, stratified by source, Sonnet 4.6 labeler against active fda_assets):
+#
+#     source            labeled  positives  rate
+#     dailymed              150          0   0.0%
+#     edgar                 100          0   0.0%
+#     openfda               100          0   0.0%
+#     federal_register       75          0   0.0%
+#     clinicaltrials         75         14  18.7%
+#
+# With the current 35-active-asset universe (heavily weighted toward AXS-05
+# and other trial-stage drugs), only clinicaltrials produces real links.
+# Spot-checks of 24 zero-label dailymed + 24 from edgar/openfda/fed_register
+# confirmed the labels: dailymed is OTC + generics, edgar is dominated by
+# Morgan Stanley structured-finance filings, openfda is ANDAs for generics,
+# federal_register is mostly Medicare/NOAA/HUD non-drug content. None of it
+# overlaps with the active universe.
+#
+# TODO: when post-approval assets enter fda_assets (program_status in
+# {'approved','post_marketing'}), broaden the allowlist to include dailymed
+# + openfda + federal_register. Eventually this should be derived from
+# fda_assets.program_status instead of hardcoded. The eligibility table
+# pattern lives in `~/.claude/plans/asset-linker-yield-optimization.md`.
+SOURCE_ALLOWLIST = ("clinicaltrials",)
+
 # Pydantic-ish output schema for the model
 LINK_TYPES = {"primary", "mentions", "pipeline_context", "safety_signal", "literature"}
 
@@ -284,11 +309,17 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
         f"linker_classified_asset_set_hash.is.null,"
         f"linker_classified_asset_set_hash.neq.{asset_set_hash})"
     )
+    # Source allowlist: avoid paying Sonnet to classify docs whose source
+    # genuinely has no overlap with the active fda_assets universe (gold-set
+    # evidence above SOURCE_ALLOWLIST). PostgREST `in.(...)` accepts a
+    # comma-separated list.
+    source_filter = f"in.({','.join(SOURCE_ALLOWLIST)})"
     rows = client._rest(
         "GET", "documents",
         params={
             "select": select,
             "or": or_value,
+            "source": source_filter,
             "order": "published_at.desc",
             "limit": str(max_docs),
         },
