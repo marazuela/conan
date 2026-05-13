@@ -19,6 +19,7 @@ from modal_workers.scripts.nightly_calibration_refit import (
     GATE_MIN_AUC_DELTA,
     GATE_MIN_N,
     GateEvaluation,
+    _apply_marker_policy,
     _direction_aligned_outcome,
     _per_asset_brier_contribution,
     evaluate_gate,
@@ -249,3 +250,91 @@ def test_evaluate_gate_input_length_mismatch_raises():
             pred_prod=[0.5, 0.5], pred_new=[0.5, 0.5],
             min_n=2, bootstrap_resamples=10, rng_seed=0,
         )
+
+
+# ---------------------------------------------------------------------------
+# Wave 4 deep-fix Phase C.3 — catalyst marker policy applied during refit
+# ---------------------------------------------------------------------------
+
+
+def _fake_pairs():
+    """A 5-row training set spanning every marker class. Order matters
+    only for stability checks — the policy preserves input order."""
+    raw = [0.30, 0.55, 0.80, 0.20, 0.65]
+    realized = [0, 1, 1, 0, 1]
+    asset_ids = ["a1", "a2", "a3", "a1", "a4"]
+    markers = [
+        "pdufa:evt-1",                  # anchored
+        "advisory_committee:evt-2",     # anchored
+        "default_60d_fallback",         # low-signal default
+        "unknown_legacy",               # backfill sentinel, low-signal
+        None,                           # legacy pre-column row, low-signal
+    ]
+    return raw, realized, asset_ids, markers
+
+
+def test_apply_marker_policy_default_keeps_everything_counts_split():
+    raw, realized, asset_ids, markers = _fake_pairs()
+    kept_raw, kept_y, kept_aids, n_anchored, n_default = _apply_marker_policy(
+        raw, realized, asset_ids, markers, exclude_default_window=False,
+    )
+    # Nothing is dropped in the default policy.
+    assert len(kept_raw) == 5
+    assert kept_raw == raw
+    assert kept_y == realized
+    assert kept_aids == asset_ids
+    # Counts reflect the marker distribution.
+    assert n_anchored == 2
+    assert n_default == 3
+
+
+def test_apply_marker_policy_exclude_drops_default_unknown_and_null():
+    raw, realized, asset_ids, markers = _fake_pairs()
+    kept_raw, kept_y, kept_aids, n_anchored, n_default = _apply_marker_policy(
+        raw, realized, asset_ids, markers, exclude_default_window=True,
+    )
+    # Only the two anchored rows survive (indices 0 + 1).
+    assert kept_raw == [0.30, 0.55]
+    assert kept_y == [0, 1]
+    assert kept_aids == ["a1", "a2"]
+    assert n_anchored == 2
+    assert n_default == 3
+
+
+def test_apply_marker_policy_handles_empty_input():
+    kept_raw, kept_y, kept_aids, n_anchored, n_default = _apply_marker_policy(
+        [], [], [], [], exclude_default_window=True,
+    )
+    assert kept_raw == []
+    assert kept_y == []
+    assert kept_aids == []
+    assert n_anchored == 0
+    assert n_default == 0
+
+
+def test_apply_marker_policy_treats_all_anchored_event_types_equally():
+    """pdufa, advisory_committee, eop2, readout — all anchored."""
+    raw, realized, asset_ids, markers = [], [], [], []
+    for et in ("pdufa:e1", "advisory_committee:e2", "eop2:e3", "readout:e4"):
+        raw.append(0.5)
+        realized.append(1)
+        asset_ids.append("a")
+        markers.append(et)
+    _, _, _, n_anchored, n_default = _apply_marker_policy(
+        raw, realized, asset_ids, markers, exclude_default_window=True,
+    )
+    assert n_anchored == 4
+    assert n_default == 0
+
+
+def test_apply_marker_policy_default_prefix_match_any_window_size():
+    """default_30d_fallback / default_60d_fallback / default_90d_fallback —
+    all classified as low-signal by the `default_` prefix match."""
+    markers = ["default_30d_fallback", "default_60d_fallback",
+               "default_90d_fallback", "default_120d_fallback"]
+    _, _, _, n_anchored, n_default = _apply_marker_policy(
+        [0.5] * 4, [0] * 4, ["a"] * 4, markers,
+        exclude_default_window=False,
+    )
+    assert n_anchored == 0
+    assert n_default == 4

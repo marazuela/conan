@@ -140,22 +140,40 @@ def _constitutional_result_passing():
 
 class _MockSupabase:
     """Captures the POST body sent to convergence_assessments so tests can
-    inspect conviction_pct, conviction_pct_calibrated, raw_conviction_pct."""
+    inspect conviction_pct, conviction_pct_calibrated, raw_conviction_pct.
+
+    Wave 4 deep-fix Phase B — Stage 10 now POSTs a single RPC at
+    rpc/persist_assessment_v3 with the assessment row nested under
+    payload.payload.assessment. We unwrap it here so the existing assertions
+    on `posted_assessment` keep working without per-test rewrites."""
 
     def __init__(self):
         self.posted_assessment: Optional[Dict[str, Any]] = None
         self.post_count: Dict[str, int] = {}
+        self.posted_rpc_payload: Optional[Dict[str, Any]] = None
 
     def _rest(self, method: str, table: str, **kwargs) -> Any:
         # Track every POST so we can assert what's in each table
         if method == "POST":
             self.post_count[table] = self.post_count.get(table, 0) + 1
+            if table == "rpc/persist_assessment_v3":
+                # Capture the full RPC payload AND unwrap the inner assessment
+                # row for backwards compatibility with assertions that target
+                # `posted_assessment`.
+                body = kwargs.get("json_body") or {}
+                self.posted_rpc_payload = body
+                inner = body.get("payload") or {}
+                self.posted_assessment = inner.get("assessment") or {}
+                # RPC returns the new assessment id as a bare uuid scalar.
+                return "assessment-uuid-test"
             if table == "convergence_assessments":
+                # Legacy path kept for any tests still mocking the direct
+                # INSERT route — current Stage 10 uses the RPC above.
                 self.posted_assessment = kwargs.get("json_body") or {}
                 return [{"id": "assessment-uuid-test"}]
             return [{"id": f"{table}-row-id"}]
         if method == "GET":
-            # Stub for the PDUFA lookup in stage_10_persist
+            # Stub for the catalyst-event lookup in _resolve_catalyst_window
             if table == "fda_regulatory_events":
                 return []
             return []

@@ -688,3 +688,27 @@ Implementation:
 Operator step after deploy: `UPDATE internal_config SET value=<deployed compute-v3 URL> WHERE key='modal_url_compute_v3'` — the migration seeds an unreachable placeholder so accidental pre-seed RPC calls fail loudly with a pg_net transport error rather than routing somewhere unintended. With this in place, the Cowork `bulk_orchestrator_run` skill can retire its direct-insert fallback once the operator has run `modal deploy modal_workers/app.py` (releases the v2 `health` slot) + `modal deploy modal_workers/orchestrator_app.py` (claims the slot for compute-v3) + the secret-update step.
 
 **Deployed live 2026-05-08:** Both Modal apps redeployed (conan-v2 7 endpoints, conan-v3-orchestrator 1 endpoint = 8/8). All three Phase 4B migrations applied to project xvwvwbnxdsjpnealarkh (`v3_phase_4b_convergence_assessments_tier`, `v3_phase_4b_sub_agent_calls_ic_memo_role`, `v3_phase_4b_compute_rpcs`). The compute-v3 URL `https://marazuela--compute-v3.modal.run` is wired into `internal_config.modal_url_compute_v3`. End-to-end smoke verified: `select rpc_tier2_bulk_enqueue(ARRAY[]::text[])` returned request_id 8580; `select rpc_compute_collect(8580, 60000)` returned `{"failed":[],"enqueued":[],"failed_count":0,"enqueued_count":0}` — the empty-list happy path through SQL → pg_net → Modal auth → dispatch → `enqueue_tier2_bulk(sb, [])` → response. Phase 4B is functionally live; the only remaining piece is Cowork scheduling the `bulk_orchestrator_run` cron entry against priority=1 and priority=2 cadences.
+
+---
+
+## D-WAVE4 — Wave 4 deploy ordering: migration FIRST, then Modal (2026-05-13)
+
+**Context.** Wave 4.3 added a `catalyst_resolution_marker text` column to `post_mortem_queue` via [supabase/migrations/20260526000010_add_post_mortem_catalyst_marker.sql](supabase/migrations/20260526000010_add_post_mortem_catalyst_marker.sql). The runtime code at [orchestrator_runtime/runtime.py:1395-1428](orchestrator_runtime/runtime.py:1395) INSERTs into that column. The migration is currently on disk but NOT applied in the live DB (`SELECT column_name FROM information_schema.columns WHERE table_name='post_mortem_queue' AND column_name='catalyst_resolution_marker'` returns 0 rows as of 2026-05-13). The current Modal deploy is running an older revision without the new INSERT field, so production is unbroken.
+
+**Decision.** **The Wave 4.3 migration MUST land in Supabase before the next `modal deploy modal_workers/orchestrator_app.py`.** Reverse order = every Stage 10 fails at the post_mortem_queue INSERT with PostgREST 23703 (column not found), and Wave 4.1's rollback path will DELETE the parent `convergence_assessments`. Result: assessments stop landing entirely until the migration deploys.
+
+**Operator preflight (mandatory before any Modal redeploy that touches the orchestrator path):**
+
+```bash
+# 1. From the worktree:
+supabase db push   # applies 20260526000010 + any other unapplied disk migrations
+
+# 2. Verify the column lands:
+psql -h <conan host> -c "\d post_mortem_queue" | grep catalyst_resolution_marker
+# expected: catalyst_resolution_marker | text |
+
+# 3. Only AFTER step 2 succeeds, run:
+modal deploy modal_workers/orchestrator_app.py
+```
+
+**Future Wave-4 work that extends this:** Phase B's `persist_assessment_v3` RPC + `convergence_assessments.orchestrator_run_id` (idempotency key + supersedence) and Phase C's event-type expansion + `catalyst_resolution_marker` backfill all share the same constraint: migrations land first. The plan in [.claude/plans/plan-this-for-optimal-zippy-allen.md](../../.claude/plans/plan-this-for-optimal-zippy-allen.md) is the canonical sequencing source for these PRs.

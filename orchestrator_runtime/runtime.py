@@ -236,6 +236,11 @@ class AssessmentRun:
     asset_id: str
     trigger_type: str
     trigger_doc_id: Optional[str] = None
+    # Wave 4 deep-fix Phase B.2 — idempotency key passed to persist_assessment_v3.
+    # When set, a retried run resolves to the existing convergence_assessments
+    # row instead of inserting a duplicate. None for ad-hoc CLI runs (which
+    # aren't gated by orchestrator_runs and don't need retry-safety).
+    orchestrator_run_id: Optional[str] = None
     document_window_start: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc) - timedelta(days=180))
     document_window_end: datetime = field(
@@ -1211,47 +1216,57 @@ def stage_10_persist(
         "latency_ms": total_latency,
     }
 
-    rows = sb._rest(
-        "POST", "convergence_assessments",
-        json_body=row,
-        prefer="return=representation",
+    # Wave 4 deep-fix Phase B — single atomic RPC. Replaces the prior
+    # "INSERT parent + INSERT secondaries + DELETE-on-failure" two-call dance.
+    # Idempotency: re-driving the same orchestrator_run_id returns the
+    # existing assessment id without inserting a duplicate. Supersedence:
+    # the RPC stamps superseded_at on any prior live assessment for this
+    # asset and writes superseded_by to point back at the new row.
+    secondaries = _build_stage_10_secondaries(
+        run, ctx, parsed, hypothesis_result, premortem_result, short_to_full,
     )
-    if not rows:
-        raise RuntimeError("Failed to insert convergence_assessments row")
-    assessment_id = rows[0]["id"]
 
-    # Wave 4.1 — orphan-prevention rollback. If any of the secondary inserts
-    # below fails, DELETE the parent assessment so the next assessment of this
-    # asset doesn't see a half-written predecessor (Stage 0 prior_assessments
-    # would surface the orphan as a phantom). A Postgres RPC would be cleaner
-    # (true ACID), but rollback-on-failure gets ~95% of the value with a tiny
-    # fraction of the migration weight. See plan-this-for-optimal-zippy-allen.md
-    # for the RPC alternative if orphans become an observed problem.
-    try:
-        _stage_10_write_secondaries(
-            sb, assessment_id, asset_id, run, ctx, parsed, conviction, direction,
-            hypothesis_result, premortem_result, short_to_full,
+    # Wave 4 deep-fix Phase C — catalyst lookup. Done by the caller (not the
+    # pure payload builder) because it requires the sb client. Result stamps
+    # the post_mortem_stub fields the RPC will INSERT.
+    outcome_window_end, catalyst_marker = _resolve_catalyst_window(sb, asset_id)
+    secondaries["post_mortem_stub"]["outcome_window_end"] = (
+        outcome_window_end.isoformat()
+    )
+    secondaries["post_mortem_stub"]["catalyst_resolution_marker"] = catalyst_marker
+
+    rpc_payload = {
+        "payload": {
+            "orchestrator_run_id": run.orchestrator_run_id,
+            "assessment": row,
+            "stage_metrics": secondaries["stage_metrics"],
+            "hypotheses": secondaries["hypotheses"],
+            "premortem_verdicts": secondaries["premortem_verdicts"],
+            "post_mortem_stub": secondaries["post_mortem_stub"],
+        }
+    }
+    rpc_result = sb._rest(
+        "POST", "rpc/persist_assessment_v3",
+        json_body=rpc_payload,
+    )
+    # PostgREST returns the scalar uuid directly. Some clients wrap it in a
+    # list, some return the bare string — handle both shapes defensively.
+    if isinstance(rpc_result, list):
+        rpc_result = rpc_result[0] if rpc_result else None
+    if isinstance(rpc_result, dict):
+        # If PostgREST decides to return a named-column object, the function
+        # signature names the return column 'persist_assessment_v3'.
+        rpc_result = (
+            rpc_result.get("persist_assessment_v3")
+            or rpc_result.get("uuid")
+            or next(iter(rpc_result.values()), None)
         )
-    except Exception:
-        logger.exception(
-            "Stage 10 secondary writes failed for assessment %s; "
-            "rolling back the parent convergence_assessments row.",
-            assessment_id,
+    if not rpc_result:
+        raise RuntimeError(
+            "persist_assessment_v3 returned no assessment id "
+            f"(orchestrator_run_id={run.orchestrator_run_id})"
         )
-        try:
-            sb._rest(
-                "DELETE", "convergence_assessments",
-                params={"id": f"eq.{assessment_id}"},
-            )
-        except Exception as rb_exc:  # noqa: BLE001
-            # Worst-case: orphan persists. Surface it loudly so operators
-            # know they need to clean up manually. The parent exception is
-            # re-raised below regardless.
-            logger.error(
-                "ROLLBACK FAILED for orphaned convergence_assessments %s: %s",
-                assessment_id, rb_exc,
-            )
-        raise
+    assessment_id = str(rpc_result)
 
     # Wave 4.2 — memory writeback runs OUTSIDE the rollback scope. A storage
     # failure here MUST NOT delete the parent assessment; the memory blob is
@@ -1294,44 +1309,108 @@ def stage_10_persist(
     return assessment_id
 
 
-def _stage_10_write_secondaries(
-    sb: SupabaseClient,
-    assessment_id: str,
-    asset_id: str,
+# Wave 4 deep-fix Phase C — event types eligible for catalyst-resolution marker.
+# Pdufa was the original (Wave 4.3). Expanded here to cover the rest of the
+# FDA-event-driven post-mortem window classes. Order doesn't matter; the SQL
+# ORDER BY event_date.asc.nullslast picks the soonest one regardless.
+CATALYST_EVENT_TYPES = ("pdufa", "advisory_committee", "eop2", "readout")
+
+# Days back from today to consider "just-resolved" events. Without this,
+# a PDUFA that resolved last week would silently fall through to the
+# default_<N>d_fallback even though the catalyst signal is still meaningful.
+CATALYST_LOOKBACK_DAYS = int(
+    os.environ.get("ORCH_CATALYST_LOOKBACK_DAYS", "30")
+)
+
+# Default outcome window when no eligible catalyst event is on file. The +60d
+# default was hardcoded in the original Wave 4.3 path; Phase C makes it env-
+# tunable so different asset types (smol approvals vs ASCO readouts vs AdComm
+# meetings) can be re-windowed without a redeploy.
+DEFAULT_POST_MORTEM_WINDOW_DAYS = int(
+    os.environ.get("ORCH_DEFAULT_POST_MORTEM_WINDOW_DAYS", "60")
+)
+
+
+def _resolve_catalyst_window(
+    sb: SupabaseClient, asset_id: str,
+) -> tuple[datetime, str]:
+    """Wave 4 Phase C.1 — pick the soonest eligible FDA catalyst (pending OR
+    recently-resolved-within-CATALYST_LOOKBACK_DAYS, across all
+    CATALYST_EVENT_TYPES). Returns the (outcome_window_end, marker) pair.
+
+    Marker grammar: ``<event_type>:<event_id>`` for catalyst-anchored windows;
+    ``default_<N>d_fallback`` when nothing matches. The nightly calibration
+    refit uses this string to weight (or exclude) default-window stubs.
+    """
+    lookback_cutoff = (
+        datetime.now(timezone.utc).date() - timedelta(days=CATALYST_LOOKBACK_DAYS)
+    ).isoformat()
+    types_filter = ",".join(CATALYST_EVENT_TYPES)
+    rows = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id,event_date,event_type,event_status",
+            "asset_id": f"eq.{asset_id}",
+            "event_type": f"in.({types_filter})",
+            "event_status": "in.(pending,resolved)",
+            "event_date": f"gte.{lookback_cutoff}",
+            "order": "event_date.asc.nullslast",
+            "limit": "1",
+        },
+    ) or []
+    if rows and rows[0].get("event_date"):
+        evt = rows[0]
+        outcome_window_end = (
+            datetime.fromisoformat(evt["event_date"]).replace(tzinfo=timezone.utc)
+            + timedelta(days=2)
+        )
+        marker = f"{evt['event_type']}:{evt['id']}"
+        return outcome_window_end, marker
+    outcome_window_end = (
+        datetime.now(timezone.utc)
+        + timedelta(days=DEFAULT_POST_MORTEM_WINDOW_DAYS)
+    )
+    marker = f"default_{DEFAULT_POST_MORTEM_WINDOW_DAYS}d_fallback"
+    return outcome_window_end, marker
+
+
+def _build_stage_10_secondaries(
     run: AssessmentRun,
     ctx: Dict[str, Any],
     parsed: Dict[str, Any],
-    conviction: float,
-    direction: str,
     hypothesis_result: Optional[HypothesisResult],
     premortem_result: Optional[PreMortemResult],
     short_to_full: Dict[str, str],
-) -> None:
-    """All non-parent inserts for a Stage 10 assessment. Any failure here
-    is caller-rolled-back via DELETE on the parent row (Wave 4.1)."""
-    # Per-stage metrics rows
-    for m in run.stage_metrics:
-        sb._rest(
-            "POST", "assessment_stage_metrics",
-            json_body={
-                "assessment_id": assessment_id,
-                "stage_name": m.stage_name,
-                "model": m.model,
-                "input_tokens": m.input_tokens,
-                "output_tokens": m.output_tokens,
-                "thinking_tokens": m.thinking_tokens,
-                "cache_read_tokens": m.cache_read_tokens,
-                "cache_creation_tokens": m.cache_creation_tokens,
-                "cost_usd": round(m.cost_usd, 4),
-                "latency_ms": m.latency_ms,
-                "status": m.status,
-                "notes": m.notes,
-            },
-            prefer="return=minimal",
-        )
+) -> Dict[str, Any]:
+    """Wave 4 deep-fix Phase B — pure payload builder for the
+    persist_assessment_v3 RPC. Replaces _stage_10_write_secondaries (which
+    did its own POSTs). Output dict has four arrays + one stub object,
+    matching the RPC's expected payload shape.
 
-    # Stage 2: hypothesis_enumeration rows (one per hypothesis). The model
-    # cites by 8-char short id; resolve to full UUIDs for the uuid[] columns.
+    No DB writes happen here. All effectful work is downstream in the RPC.
+    """
+    # Per-stage metrics payload (assessment_id is filled in by the RPC).
+    stage_metrics_payload = [
+        {
+            "stage_name": m.stage_name,
+            "model": m.model,
+            "input_tokens": m.input_tokens,
+            "output_tokens": m.output_tokens,
+            "thinking_tokens": m.thinking_tokens,
+            "cache_read_tokens": m.cache_read_tokens,
+            "cache_creation_tokens": m.cache_creation_tokens,
+            "cost_usd": round(m.cost_usd, 4),
+            "latency_ms": m.latency_ms,
+            "status": m.status,
+            "notes": m.notes,
+        }
+        for m in run.stage_metrics
+    ]
+
+    # Stage 2 hypothesis_enumeration payload. The model cites by 8-char short
+    # id; resolve to full UUIDs for the uuid[] columns. Unresolved shorts get
+    # dropped here (matches the Wave 5.2 cited-prose hydration policy).
+    hypotheses_payload: List[Dict[str, Any]] = []
     if hypothesis_result is not None and hypothesis_result.hypotheses:
         for h in hypothesis_result.hypotheses:
             supporting_uuids = [
@@ -1344,25 +1423,21 @@ def _stage_10_write_secondaries(
                 for s in h.contradicting_fact_ids
                 if s.lower() in short_to_full
             ]
-            sb._rest(
-                "POST", "hypothesis_enumeration",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": h.hypothesis_id,
-                    "label": h.label,
-                    "claim": h.claim,
-                    "mechanism": h.mechanism,
-                    "direction": h.direction,
-                    "supporting_fact_ids": supporting_uuids,
-                    "contradicting_fact_ids": contradicting_uuids,
-                    "kill_conditions": h.kill_conditions,
-                    "prior_estimate_pct": h.prior_estimate_pct,
-                    "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
-                },
-                prefer="return=minimal",
-            )
+            hypotheses_payload.append({
+                "hypothesis_id": h.hypothesis_id,
+                "label": h.label,
+                "claim": h.claim,
+                "mechanism": h.mechanism,
+                "direction": h.direction,
+                "supporting_fact_ids": supporting_uuids,
+                "contradicting_fact_ids": contradicting_uuids,
+                "kill_conditions": h.kill_conditions,
+                "prior_estimate_pct": h.prior_estimate_pct,
+                "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
+            })
 
-    # Stage 3: premortem_assessments rows (one per hypothesis verdict).
+    # Stage 3 premortem_assessments payload.
+    premortem_payload: List[Dict[str, Any]] = []
     if premortem_result is not None and premortem_result.verdicts:
         for v in premortem_result.verdicts:
             failure_modes_jsonb = [
@@ -1374,58 +1449,43 @@ def _stage_10_write_secondaries(
                 }
                 for fm in v.failure_modes
             ]
-            sb._rest(
-                "POST", "premortem_assessments",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": v.hypothesis_id,
-                    "verdict": v.verdict,
-                    "failure_modes": failure_modes_jsonb,
-                    "disconfirming_searches": v.disconfirming_searches,
-                    "update_triggers": v.update_triggers,
-                },
-                prefer="return=minimal",
-            )
+            premortem_payload.append({
+                "hypothesis_id": v.hypothesis_id,
+                "verdict": v.verdict,
+                "failure_modes": failure_modes_jsonb,
+                "disconfirming_searches": v.disconfirming_searches,
+                "update_triggers": v.update_triggers,
+            })
 
-    # Post-mortem queue stub — outcome resolves at the asset's pending FDA
-    # catalyst (PDUFA / AdComm); falls back to +60d when no pending event is
-    # on file. Wave 4.3 — record HOW the date was derived in
-    # `catalyst_resolution_marker` so the nightly feedback loop can filter
-    # default-window stubs from catalyst-anchored ones.
-    pdufa_rows = sb._rest(
-        "GET", "fda_regulatory_events",
-        params={
-            "select": "id,event_date,event_type",
-            "asset_id": f"eq.{asset_id}",
-            "event_type": "eq.pdufa",
-            "event_status": "eq.pending",
-            "order": "event_date.asc.nullslast",
-            "limit": "1",
-        },
-    ) or []
-    if pdufa_rows and pdufa_rows[0].get("event_date"):
-        outcome_window_end = (
-            datetime.fromisoformat(pdufa_rows[0]["event_date"]).replace(tzinfo=timezone.utc)
-            + timedelta(days=2)
-        )
-        catalyst_marker = f"fda_event:{pdufa_rows[0]['id']}"
-    else:
-        outcome_window_end = datetime.now(timezone.utc) + timedelta(days=60)
-        catalyst_marker = "default_60d_fallback"
+    # Post-mortem queue stub. NOTE: this still does a SELECT against
+    # fda_regulatory_events because the catalyst lookup is purely a read
+    # (no transactional dependency on the parent INSERT). It's safe to run
+    # outside the RPC scope.
+    direction = parsed.get("thesis_direction") or "neutral"
+    if direction not in {"long", "short", "neutral", "straddle"}:
+        direction = "neutral"
+    conviction = float(parsed.get("conviction_pct") or 50.0)
+    conviction = max(0.0, min(100.0, conviction))
+    # Phase C resolves the catalyst window. Done by the caller (which has
+    # the sb client). We build the stub WITHOUT the catalyst lookup here
+    # so this function stays pure; the caller stamps the resolved fields
+    # before passing to the RPC.
+    post_mortem_stub = {
+        "asset_id": run.asset_id,
+        "predicted_outcome": _direction_to_outcome(direction),
+        "predicted_conviction_pct": conviction,
+        "predicted_direction": direction,
+        # Caller fills these from _resolve_catalyst_window():
+        #   "outcome_window_end": <iso>,
+        #   "catalyst_resolution_marker": <text>,
+    }
 
-    sb._rest(
-        "POST", "post_mortem_queue",
-        json_body={
-            "assessment_id": assessment_id,
-            "asset_id": asset_id,
-            "predicted_outcome": _direction_to_outcome(direction),
-            "predicted_conviction_pct": conviction,
-            "predicted_direction": direction,
-            "outcome_window_end": outcome_window_end.isoformat(),
-            "catalyst_resolution_marker": catalyst_marker,
-        },
-        prefer="return=minimal",
-    )
+    return {
+        "stage_metrics": stage_metrics_payload,
+        "hypotheses": hypotheses_payload,
+        "premortem_verdicts": premortem_payload,
+        "post_mortem_stub": post_mortem_stub,
+    }
 
 
 def _write_asset_memory_best_effort(
@@ -2010,7 +2070,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             sb, a_client, asset_id, trigger_type, model, extractor_model,
             ensemble_n, ensemble_mode, run_constitutional,
             constitutional_skip_semantic, enable_premortem, dry_run,
-            parsed_out, config_overrides,
+            parsed_out, config_overrides, run_id=run_id,
         )
     finally:
         if hard_kill_usd is not None:
@@ -2026,8 +2086,13 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    enable_premortem: bool,
                    dry_run: bool,
                    parsed_out: Optional[Dict[str, Any]] = None,
-                   config_overrides: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
+                   config_overrides: Optional[Dict[str, Any]] = None,
+                   run_id: Optional[str] = None) -> Optional[str]:
+    run = AssessmentRun(
+        asset_id=asset_id,
+        trigger_type=trigger_type,
+        orchestrator_run_id=run_id,  # Wave 4 Phase B — idempotency key
+    )
 
     logger.info("=== Stage 0: load context ===")
     ctx = stage_0_load(sb, asset_id)
