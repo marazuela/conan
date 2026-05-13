@@ -265,13 +265,20 @@ def fact_extractor_run(
     asset_id: Optional[str] = None,
     max_links: int = 50,
     budget_usd: float = 5.0,
+    ignore_24h_halt: bool = False,
 ) -> Dict[str, Any]:
-    """Extract structured facts from material asset_documents links."""
+    """Extract structured facts from material asset_documents links.
+
+    `ignore_24h_halt` is an operator override for one-off backfills — the
+    cron-driven call path never sets it.
+    """
     from modal_workers.extractor.sonnet_fact_extractor import main as extractor_main
 
     argv = ["--max", str(max_links), "--budget-usd", str(budget_usd)]
     if asset_id:
         argv.extend(["--asset-id", asset_id])
+    if ignore_24h_halt:
+        argv.append("--ignore-24h-halt")
     rc = extractor_main(argv)
     return {"return_code": rc}
 

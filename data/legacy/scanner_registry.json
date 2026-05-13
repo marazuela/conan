@@ -1,0 +1,59 @@
+{
+  "_schema_version": 1,
+  "_description": "Registry of all scanners. Pipeline runner reads this to determine which scanners are due. Updated by each scanner on successful completion (last_run_utc, last_run_signals, last_run_status).",
+  "_last_updated": "2026-05-13",
+  "_cadence_policy": {
+    "3h": "run every 3 hours \u2014 operational cycle",
+    "daily": "run once per UTC day \u2014 skip if last_run_utc is today",
+    "on_demand": "run only when manually triggered",
+    "weekly": "run once per UTC week \u2014 skip if last_run_utc is within last 7d"
+  },
+  "scanners": [
+    {
+      "name": "fda_pdufa_pipeline",
+      "tool_path": "tools/fda_pdufa_pipeline.py",
+      "status": "operational",
+      "geography": "US",
+      "cadence": "3h",
+      "default_scoring_profile": "binary_catalyst",
+      "signal_type_profile_map": {
+        "pdufa_imminent": "binary_catalyst",
+        "pdufa_approaching": "binary_catalyst",
+        "pdufa_watchlist": "binary_catalyst",
+        "pdufa_date_advanced": "binary_catalyst",
+        "pdufa_date_delayed": "binary_catalyst",
+        "adcom_scheduled": "binary_catalyst",
+        "clinical_readout": "binary_catalyst",
+        "fda_decision": "binary_catalyst",
+        "eop2_meeting": "binary_catalyst"
+      },
+      "endpoint_primary": "https://api.fda.gov/drug/label.json",
+      "endpoint_fallback": "https://efts.sec.gov/LATEST/search-index",
+      "timeout_soft_s": 60,
+      "timeout_hard_s": 120,
+      "last_run_utc": "2026-04-21T12:43:13.988837Z",
+      "last_run_signals": 0,
+      "last_run_status": "ok"
+    },
+    {
+      "name": "pre_phase3_readout_scanner",
+      "tool_path": "tools/pre_phase3_readout_scanner.py",
+      "status": "paused",
+      "geography": "US",
+      "cadence": "weekly",
+      "default_scoring_profile": "binary_catalyst",
+      "signal_type_profile_map": {
+        "pre_phase3_readout": "binary_catalyst"
+      },
+      "endpoint_primary": "https://clinicaltrials.gov/api/v2/studies",
+      "endpoint_secondary": null,
+      "timeout_soft_s": 90,
+      "timeout_hard_s": 180,
+      "last_run_utc": "2026-04-20T12:03:49.208151Z",
+      "last_run_signals": 0,
+      "last_run_status": "ok",
+      "strategy_spec": "strategies/pre_edge_phase3_readout.md",
+      "notes": "Added 2026-04-20 S69. Pre-edge Phase 3 readout scanner per D-013. Queries CT.gov v2 for industry-sponsored Phase 3 trials with PrimaryCompletionDate in next 90d and OverallStatus ACTIVE_NOT_RECRUITING/COMPLETED. Scores via binary_catalyst rubric with approval_probability seeded from config/phase3_approval_base_rates.json. Triage gate: >=3 of 5 patterns + INDUSTRY sponsor. Sponsor->ticker resolution happens downstream via openfigi_resolver."
+    }
+  ]
+}

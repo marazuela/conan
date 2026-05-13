@@ -6,10 +6,9 @@ The synthesis sub-agent itself (`modal_workers/sub_agents/ic_memo.py`'s
 `ic_memo_v1.json`. This module is the orchestration layer ABOVE that
 runner: given a `convergence_assessments.id`, it reconstructs the
 `asset_context` from existing DB rows (asset metadata + the four
-specialists' `sub_agent_calls.output` rows + Stage 9 thesis fields +
-reference-class anchor), invokes the runner, persists the output as a
-fifth `sub_agent_calls` row with `role='ic_memo'`, and returns the new
-sub_agent_calls.id.
+specialists' reviews + Stage 9 thesis fields + reference-class anchor),
+invokes the runner, persists the output as an `fda_agent_reviews` row
+with `agent_kind='ic_memo'`, and returns the new fda_agent_reviews.id.
 
 This is invoked **on demand** (not part of `runtime.run_one()`):
   - Operator clicks "Generate IC memo" on a watchlist or immediate-band
@@ -22,15 +21,28 @@ DIFFERENT skill that refines a convergence_assessment's existing
 prose. This module is for the synthesis flavor (4 specialist outputs →
 new ic_memo_v1.json memo).
 
-Migrations:
-  - 20260513000010_v3_phase_4b_sub_agent_calls_ic_memo_role.sql widens
-    `sub_agent_calls.role` CHECK to include 'ic_memo'.
+Persistence target: `fda_agent_reviews` (keyed by `event_id`, NOT
+`sub_agent_calls` keyed by `assessment_id`). Per `ic_memo_v1.json`
+schema header AND the `fda_signal_promote_to_thesis()` RPC at
+`20260511000000_v3_fda_signal_promote_to_thesis.sql:54-63`, the IC memo
+must be event-scoped so the operator's "Promote to thesis" path can
+find it. See audit/ic_memo_specialist_pipeline_drift.md §F-IC4.
+
+Migrations (relevant CHECK widenings):
+  - 20260510000010_v3_stream6_safety_and_cleanup.sql:114-117 — widens
+    `fda_agent_reviews.agent_kind` to accept 'ic_memo'.
+  - 20260513000010_v3_phase_4b_sub_agent_calls_ic_memo_role.sql — same
+    widening on `sub_agent_calls.role` (legacy; orchestrator no longer
+    writes there).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from modal_workers.shared.supabase_client import SupabaseClient
@@ -42,6 +54,13 @@ from modal_workers.sub_agents.runtime import (
 from orchestrator_runtime.client import OrchestratorClient
 
 logger = logging.getLogger(__name__)
+
+# IC memo persistence target. Per ic_memo_v1.json schema header and the
+# fda_signal_promote_to_thesis() RPC (20260511000000_v3_fda_signal_promote_to_thesis.sql:54-63),
+# the canonical store is `fda_agent_reviews` keyed by event_id, NOT
+# sub_agent_calls keyed by assessment_id. See audit doc
+# audit/ic_memo_specialist_pipeline_drift.md §F-IC4 for the full discussion.
+IC_MEMO_VERSION = "1"  # matches ic_memo_v1.json "schema_version" const + existing Phase 0 rows
 
 IC_MEMO_ROLE = "ic_memo"
 
@@ -280,35 +299,126 @@ def load_ic_memo_context(
     }
 
 
+def _resolve_event_id_for_ic_memo(
+    sb: SupabaseClient,
+    assessment_id: str,
+) -> Optional[str]:
+    """Resolve the fda_regulatory_events.id this IC memo should be keyed by.
+
+    `convergence_assessments` carries `asset_id` but not `event_id` (F-IC5 in
+    audit/ic_memo_specialist_pipeline_drift.md). The IC memo needs an event_id
+    for `fda_agent_reviews` (NOT NULL) and for `fda_signal_promote_to_thesis()`
+    to find it (the RPC verifies `v_review.event_id = p_event_id`).
+
+    Strategy: pick the asset's most-recently-created PENDING event. Pending
+    is the right scope because IC memos drive the operator's "Promote to
+    thesis" decision — promoting against a resolved event is meaningless.
+
+    Returns None when the asset has no pending events. Callers should warn
+    + skip persist rather than raise, so the rest of the assessment pipeline
+    (convergence_assessments writeback, stage metrics) can still complete.
+    """
+    a_rows = sb._rest(
+        "GET", "convergence_assessments",
+        params={"select": "asset_id", "id": f"eq.{assessment_id}"},
+    ) or []
+    if not a_rows:
+        return None
+    asset_id = a_rows[0].get("asset_id")
+    if not asset_id:
+        return None
+
+    events = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id",
+            "asset_id": f"eq.{asset_id}",
+            "event_status": "eq.pending",
+            "order": "created_at.desc",
+            "limit": "1",
+        },
+    ) or []
+    return events[0]["id"] if events else None
+
+
+def _compute_ic_memo_snapshot_hash(
+    event_id: str,
+    assessment_id: str,
+    output: Dict[str, Any],
+) -> str:
+    """Stable SHA-256 hash of the synthesis inputs. Matches the 64-char hex
+    shape of existing fda_agent_reviews.snapshot_hash rows (Phase 0 specialists
+    use the same width). Content-deterministic so re-running synthesis on
+    unchanged inputs produces the same hash — operators / dedup logic can
+    detect that downstream."""
+    payload = json.dumps(
+        {"event": event_id, "assessment": assessment_id, "output": output},
+        sort_keys=True, default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def persist_ic_memo_result(
     sb: SupabaseClient,
     assessment_id: str,
     question: str,
     result: SubAgentResult,
-) -> str:
-    """Insert one `sub_agent_calls` row with role='ic_memo'. Returns the
-    new row id. The caller validated `result.schema_pass` already (the
-    base `SubAgentRunner.run()` raises `SubAgentSchemaError` on failure
-    before we get here)."""
+) -> Optional[str]:
+    """Insert one `fda_agent_reviews` row with agent_kind='ic_memo'. Returns
+    the new row id, or None when the asset has no pending event to key the
+    memo to (honest-empty — the surrounding assessment still completes).
+
+    Was previously writing to `sub_agent_calls.role='ic_memo'`, but no
+    downstream consumer reads from there — the dashboard panel and the
+    `fda_signal_promote_to_thesis()` RPC both read `fda_agent_reviews`. See
+    audit doc §F-IC4 for the full divergence story.
+
+    The caller already validated `result.schema_pass` (`SubAgentRunner.run()`
+    raises `SubAgentSchemaError` on failure before we get here)."""
+    event_id = _resolve_event_id_for_ic_memo(sb, assessment_id)
+    if event_id is None:
+        logger.warning(
+            "assessment %s has no pending fda_regulatory_events row; "
+            "skipping ic_memo persist (memo synthesized but not stored — "
+            "operator workflow can't promote without an event anchor)",
+            assessment_id,
+        )
+        return None
+
+    output = result.output or {}
+    citations = output.get("citations")
+    if not isinstance(citations, list):
+        citations = []
+
+    confidence = output.get("confidence")
+    try:
+        confidence = float(confidence) if confidence is not None else None
+    except (TypeError, ValueError):
+        confidence = None
+    if confidence is not None:
+        confidence = max(0.0, min(1.0, confidence))
+
+    snapshot_hash = _compute_ic_memo_snapshot_hash(event_id, assessment_id, output)
+
     rows = sb._rest(
-        "POST", "sub_agent_calls",
+        "POST", "fda_agent_reviews",
         json_body={
-            "assessment_id": assessment_id,
-            "role": IC_MEMO_ROLE,
-            "query": question,
-            "output": result.output,
-            "schema_pass": result.schema_pass,
-            "schema_retries": result.schema_retries,
-            "tokens": result.tokens_input + result.tokens_output,
-            "cost_usd": round(result.cost_usd, 4),
-            "latency_ms": result.latency_ms,
+            "event_id": event_id,
+            "agent_kind": IC_MEMO_ROLE,
+            "version": IC_MEMO_VERSION,
+            "structured_output": output,
+            "citations": citations,
+            "confidence": confidence,
+            "snapshot_hash": snapshot_hash,
+            "status": "completed",
+            "ran_at": datetime.now(timezone.utc).isoformat(),
         },
         prefer="return=representation",
     )
     if not rows:
         raise ICMemoOrchestrationError(
-            f"sub_agent_calls insert returned no row for assessment "
-            f"{assessment_id}"
+            f"fda_agent_reviews insert returned no row for assessment "
+            f"{assessment_id} (event_id={event_id})"
         )
     return rows[0]["id"]
 
@@ -333,12 +443,18 @@ def run_ic_memo(
         cost cap). Defaults to a fresh client.
       runner: optional ICMemoRunner (test injection point — production
         callers should pass None and let this build one).
-      persist: when False, skip the sub_agent_calls insert (used for
+      persist: when False, skip the fda_agent_reviews insert (used for
         dry-run smoke checks). Defaults to True.
 
     Returns:
       {
-        "sub_agent_call_id": str | None,   # None when persist=False
+        "sub_agent_call_id": str | None,   # fda_agent_reviews.id (key name
+                                            # kept for backwards compat —
+                                            # value is now a Phase 0 review
+                                            # row id, NOT sub_agent_calls.id).
+                                            # None when persist=False OR
+                                            # when the asset has no pending
+                                            # fda_regulatory_events row.
         "assessment_id": str,
         "output": dict,                    # ic_memo_v1.json payload
         "tokens_input": int,

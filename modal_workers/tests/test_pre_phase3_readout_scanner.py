@@ -332,12 +332,39 @@ def fake_supabase(monkeypatch):
     fake.write_cache.return_value = None
     fake.openfigi_cache_backend.return_value = (lambda *_a, **_kw: None,
                                                 lambda *_a, **_kw: None)
+    fake._rest.return_value = []
     monkeypatch.setattr(scanner, "SupabaseClient", lambda: fake)
     monkeypatch.setattr(scanner, "_load_base_rates", lambda _c: {"default": 0.58})
     return fake
 
 
-def test_scan_drops_already_approved_emits_novel(monkeypatch, fake_supabase):
+@pytest.fixture
+def stub_issuer_index(monkeypatch):
+    """Patch scanner.IssuerIndex.load to return a stub that resolves every
+    sponsor to a public-issuer match. Lets tests focus on the already-approved
+    filter without tripping the unresolved-entity gate."""
+    from modal_workers.shared.sec_issuer_lookup import IssuerMatch
+
+    class _StubIndex:
+        def resolve(self, party_name: str):
+            if not party_name:
+                return None
+            return IssuerMatch(
+                ticker="TEST",
+                cik="0000000000",
+                title=party_name,
+                match_kind="exact",
+            )
+
+    monkeypatch.setattr(scanner.IssuerIndex, "load",
+                        classmethod(lambda cls, client, user_agent, **kw: _StubIndex()))
+    # openfigi resolve_ticker is best-effort; stub it to return unresolved so
+    # the issuer figi/mic stays None but the ticker+cik still satisfy the gate.
+    return _StubIndex()
+
+
+def test_scan_drops_already_approved_emits_novel(monkeypatch, fake_supabase,
+                                                 stub_issuer_index):
     """Two trials enter the pipeline; only the one with a novel drug emits."""
     sanofi_trial = _mk_trial(
         nct_id="NCT99990001",
@@ -379,7 +406,8 @@ def test_scan_drops_already_approved_emits_novel(monkeypatch, fake_supabase):
     assert any("NCT99990001" in w and "MenQuadfi" in w for w in result.warnings)
 
 
-def test_scan_does_not_drop_when_orange_book_lookup_fails(monkeypatch, fake_supabase):
+def test_scan_does_not_drop_when_orange_book_lookup_fails(monkeypatch, fake_supabase,
+                                                          stub_issuer_index):
     """If openFDA is unreachable, fail open: emit the signal with a warning."""
     trial = _mk_trial(
         nct_id="NCT99990003",
@@ -503,3 +531,42 @@ class TestAutoSeedFdaAssetHint:
         )
         assert sig is not None
         assert "auto_seed_fda_asset" not in sig.raw_payload
+
+
+def test_scan_drops_unresolved_sponsor(monkeypatch, fake_supabase):
+    """Sponsor that doesn't resolve to a public issuer (no figi/ticker/cik)
+    must be dropped — emitting strands the signal in display_band='immediate'
+    forever because the convergence reactor can't stamp band_with_bonus and
+    the v3 orchestrator can't enqueue without a ticker. Regression test for
+    audit/findings_2026-05-11.md `pre_phase3 stalled` (signal 72f090...)."""
+    trial = _mk_trial(
+        nct_id="NCT99990004",
+        sponsor="Definium Therapeutics US, Inc.",  # private biotech — not in SEC list
+        intervention_name="DefiniumNovel",
+    )
+    monkeypatch.setattr(
+        scanner, "_fetch_phase3_readout_trials",
+        lambda budget_s, scanner_cache_client=None: ([trial], []),
+    )
+    # Force IssuerIndex.load to return None so resolve() is never called and
+    # the sponsor stays unresolved — same as the live "Definium" case.
+    monkeypatch.setattr(scanner.IssuerIndex, "load",
+                        classmethod(lambda cls, client, user_agent, **kw: None))
+    # openFDA returns 404 (no Orange Book hit) so we reach the new gate.
+    monkeypatch.setattr(
+        scanner.requests, "get",
+        lambda *a, **kw: type("R", (), {"status_code": 404, "json": lambda self: {}})(),
+    )
+
+    cfg = MagicMock()
+    cfg.timeout_soft_s = 60
+    cfg.scanner_id = "00000000-0000-0000-0000-000000000001"
+    result: ScannerResult = scanner.scan(cfg)
+
+    assert result.signals == []
+    assert result.run_metrics["skipped_unresolved_entity"] == 1
+    assert any("Definium" in w and "did not resolve" in w for w in result.warnings)
+    # operator_flag write was attempted via client._rest (best-effort).
+    rest_calls = [c for c in fake_supabase._rest.call_args_list
+                  if len(c.args) >= 2 and c.args[1] == "operator_flags"]
+    assert rest_calls, "expected at least one operator_flags REST call"

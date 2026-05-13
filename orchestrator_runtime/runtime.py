@@ -1086,6 +1086,21 @@ def stage_10_persist(
                 "(%.2f -> %.2f)", pre_cap_calibrated, calibrated,
             )
 
+    # B4: apply the Stage 3 all_falsified cap AFTER calibration. Capping
+    # before calibration distorted conviction_pct_calibrated for the
+    # all_falsified case: it produced isotonic(min(raw, 30)/100) instead of
+    # the correct min(isotonic(raw/100), 30). The raw value still flows
+    # into raw_conviction_pct via ctx["pre_premortem_conviction"] so the
+    # feedback loop sees the un-capped model output (D-117 invariant).
+    if ctx.get("conviction_capped_by_premortem"):
+        pre_cap_calibrated = calibrated
+        calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
+        if calibrated < pre_cap_calibrated:
+            logger.info(
+                "Stage 10: all_falsified cap applied AFTER calibration "
+                "(%.2f -> %.2f)", pre_cap_calibrated, calibrated,
+            )
+
     band = derive_band(calibrated)
 
     # Stage 4 anchor (populated upstream; safe-degrade to Nones if absent)

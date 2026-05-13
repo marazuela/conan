@@ -62,9 +62,7 @@ image = (
         "fastapi[standard]",
         "pydantic>=2",
         "requests>=2.31",
-        "beautifulsoup4>=4.12",   # congressional_trading, esma_short_scanner
-        "openpyxl>=3.1",          # esma_short_scanner (FCA xlsx)
-        "yfinance>=0.2",          # sedar_plus_scanner, asx_scanner (ticker→mcap proxies)
+        "yfinance>=0.2",          # market_snapshot, edgar_filing_monitor, price_tracker
         "reportlab>=4.0",         # reporting_weekly (PDF render)
     )
     .add_local_python_source("modal_workers")
@@ -526,73 +524,6 @@ def fda_signal_bridge_once() -> dict:
     # None and degrades to fair_probability-only scoring with Immediate gated off.
     return _run("fda_signal_bridge")
 
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def lse_rns_scanner_once() -> dict:
-    return _run("lse_rns_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def tdnet_scanner_once() -> dict:
-    return _run("tdnet_scanner")
-
-@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
-def asx_scanner_once() -> dict:
-    # asx needs 240s (not 120): per-ticker Markit concurrent fetch across the
-    # rotation chunk routinely exceeds 90s on cold cache. Registry updated to match.
-    return _run("asx_scanner")
-
-
-# --- daily cadence ---
-
-@app.function(image=image, timeout=1200, secrets=[scanner_secrets, supabase_secrets])
-def esma_short_scanner_once() -> dict:
-    # 4 regulators × xlsx/csv fetch + ISIN dedup + OpenFIGI resolve + per-signal
-    # entity resolution. Budget history: 120→240→480→1200s.
-    # The 480s budget assumed ~80 emitted signals/run, but cold-start emits ~2000+
-    # (every holder+ISIN with pct ≥ 0.5). scanner_base's per-signal resolve_or_create_entity
-    # loop does 1-3 DB round trips × 2233 positions = ~400-500s in EU-West → eu-west-3.
-    # 1200s covers cold-start; warm runs (only |change_pct| ≥ 0.2 positions emit) finish
-    # in <120s. Registry timeout_soft_s/hard_s also bumped. Bulk-resolve refactor in
-    # scanner_base is the real long-term fix.
-    return _run("esma_short_scanner")
-
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
-def congressional_trading_once() -> dict:
-    # 20 pages × 1s polite delay + BS4 parse + OpenFIGI per ticker. 120s
-    # insufficient; bumped to 180s (registry also updated).
-    return _run("congressional_trading")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def sedar_plus_scanner_once() -> dict:
-    return _run("sedar_plus_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def hkex_scanner_once() -> dict:
-    return _run("hkex_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def kind_scanner_once() -> dict:
-    return _run("kind_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def bse_nse_scanner_once() -> dict:
-    return _run("bse_nse_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def cvm_scanner_once() -> dict:
-    return _run("cvm_scanner")
-
-@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
-def bmv_scanner_once() -> dict:
-    return _run("bmv_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def courtlistener_scanner_once() -> dict:
-    return _run("courtlistener_scanner")
-
-@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
-def sec_enforcement_scanner_once() -> dict:
-    return _run("sec_enforcement_scanner")
-
 @app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
 def insider_form4_scanner_once() -> dict:
     # Per-filing XML fetch: EFTS list (1 call) + primary_doc.xml fetch per hit
@@ -601,19 +532,6 @@ def insider_form4_scanner_once() -> dict:
     # matches.
     return _run("insider_form4_scanner")
 
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
-def delaware_chancery_scanner_once() -> dict:
-    return _run("delaware_chancery_scanner")
-
-
-# --- weekly cadence ---
-
-@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
-def takeover_candidate_scanner_once() -> dict:
-    # Multi-pattern EDGAR merge across 45d PE-filer + 60d review/streamlined
-    # windows + post-edge disqualification lookups. 180s insufficient on cold
-    # caches; bumped to 300s (registry also updated).
-    return _run("takeover_candidate_scanner")
 
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
 def pre_phase3_readout_scanner_once() -> dict:
@@ -881,17 +799,15 @@ def dispatch_release_times() -> dict:
 #
 #   Every 6h at :15 UTC (02,08,14,20):  scanner_probe  (§7.6.2)
 #   Every 6h at :15 UTC (02,08,14,20):  pre_edge_monitor (deterministic lifecycle guard)
-#   02:15 UTC window also runs:         translation_health (§7.6.1)
 #   02:15 UTC window also runs:         convergence_qa (§7.6.3)
-#   02:15 UTC window also runs:         legal_enrichment / biotech_enrichment sweeps
-#   Sun 02:15 UTC window also:          litigation_baselines_refresh (§7.6.4)
+#   02:15 UTC window also runs:         biotech_enrichment_sweep
 #
 # Each writes to `operator_flags`. No Claude calls — all mechanical.
 #
 # Cron history: shipped as "15 */6 * * *" which fires hours 0/6/12/18 UTC. The
 # `if now.hour == 2` branch below (the 02:15 window) then never triggered, so
-# translation_health / convergence_qa / litigation_baselines_refresh were dead
-# in production. 2026-04-21 fix: pin the hour list explicitly so 02 is in it.
+# convergence_qa was dead in production. 2026-04-21 fix: pin the hour list
+# explicitly so 02 is in it.
 # ==========================================================================
 
 @app.function(image=image, schedule=modal.Cron("15 2,8,14,20 * * *"), timeout=600,
@@ -900,11 +816,10 @@ def dispatch_observability() -> dict:
     from datetime import datetime, timezone
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     from modal_workers.observability import (
-        convergence_qa, edgar_runtime_health, litigation_baselines_refresh, orphan_convergence_sweeper,
+        convergence_qa, edgar_runtime_health, orphan_convergence_sweeper,
         precision_auditor, provisional_convergence_audit, scanner_probe, thesis_jobs_sla_sweeper,
-        timing_auditor, translation_health,
+        timing_auditor,
     )
-    from modal_workers.legal_enricher import legal_enrichment_sweep
     from modal_workers.pre_edge_monitor import pre_edge_monitor
     now = datetime.now(timezone.utc)
     results: dict = {"utc": now.isoformat(), "ran": []}
@@ -971,32 +886,17 @@ def dispatch_observability() -> dict:
     # 02:00-02:59 UTC window (the :15 run): daily sweeps.
     if now.hour == 2:
         try:
-            results["translation_health"] = translation_health()
-            results["ran"].append("translation_health")
-        except Exception as e:
-            results["translation_health_error"] = str(e)
-        try:
             results["convergence_qa"] = convergence_qa()
             results["ran"].append("convergence_qa")
         except Exception as e:
             results["convergence_qa_error"] = str(e)
         try:
-            results["legal_enrichment_sweep"] = legal_enrichment_sweep()
-            results["ran"].append("legal_enrichment_sweep")
-        except Exception as e:
-            results["legal_enrichment_sweep_error"] = str(e)
-        try:
             results["biotech_enrichment_sweep"] = biotech_enrichment_sweep()
             results["ran"].append("biotech_enrichment_sweep")
         except Exception as e:
             results["biotech_enrichment_sweep_error"] = str(e)
-        # Sunday: litigation baselines + Phase 1d precision/timing auditors.
+        # Sunday: Phase 1d precision/timing auditors.
         if now.weekday() == 6:  # Sunday
-            try:
-                results["litigation_baselines_refresh"] = litigation_baselines_refresh()
-                results["ran"].append("litigation_baselines_refresh")
-            except Exception as e:
-                results["litigation_baselines_refresh_error"] = str(e)
             try:
                 results["precision_auditor"] = precision_auditor()
                 results["ran"].append("precision_auditor")
@@ -1014,12 +914,6 @@ def dispatch_observability() -> dict:
 # ==========================================================================
 # On-demand observability entry points (for manual triggers via `modal run`).
 # ==========================================================================
-
-@app.function(image=image, timeout=180, secrets=[supabase_secrets])
-def translation_health_once() -> dict:
-    from modal_workers.observability import translation_health
-    return translation_health()
-
 
 @app.function(image=image, timeout=180, secrets=[supabase_secrets])
 def scanner_probe_once() -> dict:
@@ -1046,23 +940,9 @@ def pre_edge_monitor_once() -> dict:
 
 
 @app.function(image=image, timeout=240, secrets=[supabase_secrets])
-def legal_enrichment_once() -> dict:
-    from modal_workers.legal_enricher import legal_enrichment_sweep
-    return legal_enrichment_sweep()
-
-
-@app.function(image=image, timeout=240, secrets=[supabase_secrets])
 def biotech_enrichment_once() -> dict:
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     return biotech_enrichment_sweep()
-
-
-@app.function(image=image, timeout=300, secrets=[supabase_secrets])
-def litigation_baselines_refresh_once() -> dict:
-    from modal_workers.observability import litigation_baselines_refresh
-    return litigation_baselines_refresh()
-
-
 
 
 @app.function(image=image, timeout=600, secrets=[supabase_secrets])
