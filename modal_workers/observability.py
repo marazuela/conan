@@ -1,14 +1,15 @@
 """
-Observability functions for Conan v2 — spec §7.6.
+Observability functions for Conan v3 — spec §7.6.
 
-Four scheduled Modal functions that replace v1's `maintenance` skill's mechanical
+Scheduled Modal functions that replace v1's `maintenance` skill's mechanical
 sweeps. All write to the `operator_flags` table (spec §3.4) as a common structured
 surface. No Claude routine calls; these are deterministic sanity sweeps.
 
-  7.6.1 translation_health          — daily 02:00 UTC
   7.6.2 scanner_probe               — every 6h at :15
-  7.6.3 convergence_qa              — daily 03:00 UTC
-  7.6.4 litigation_baselines_refresh — weekly Sun 04:00 UTC
+  7.6.3 convergence_qa              — daily 02:15 UTC
+
+(translation_health and litigation_baselines_refresh were removed 2026-05-13
+along with the deprecated non-English and litigation scanners they monitored.)
 
 Scheduled via Modal decorators in `app.py`; the implementations live here to keep
 app.py a thin declaration file.
@@ -172,121 +173,6 @@ def record_snapshot_fetch_failure(
         )
     except Exception:  # noqa: BLE001 — observability MUST NOT break scanners
         pass
-
-
-# ===========================================================================
-# 7.6.1 translation_health
-# ===========================================================================
-
-# Scanners that emit translation_confidence in signals.raw_payload.
-_NON_ENGLISH_SCANNERS = (
-    "tdnet_scanner", "kind_scanner", "cvm_scanner",
-    "bmv_scanner", "sedar_plus_scanner", "hkex_scanner", "bse_nse_scanner",
-)
-
-_TRANSLATION_MEDIAN_WARN = 0.75
-_TRANSLATION_MEDIAN_CRITICAL_DAY = 0.70
-_TRANSLATION_CRITICAL_STREAK_DAYS = 7
-
-
-def translation_health(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
-    """Daily: compute rolling 30d median translation_confidence per non-English
-    scanner; flag warn <0.75; critical if 7-day streak of day-median <0.70."""
-    client = client or SupabaseClient()
-    summary: Dict[str, Any] = {"function": "translation_health", "per_scanner": {}}
-
-    # One query per scanner to avoid huge join; small enough table.
-    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-
-    scanners = client._rest(
-        "GET", "scanners",
-        params={"select": "id,name", "name": f"in.({','.join(_NON_ENGLISH_SCANNERS)})"},
-    ) or []
-
-    for sc in scanners:
-        sc_id, sc_name = sc["id"], sc["name"]
-        # 30-day sample
-        rows30 = client._rest(
-            "GET", "signals",
-            params={
-                "select": "raw_payload,scan_date",
-                "scanner_id": f"eq.{sc_id}",
-                "scan_date": f"gte.{thirty_days_ago}",
-            },
-        ) or []
-        confs = [
-            float(r["raw_payload"].get("translation_confidence"))
-            for r in rows30
-            if isinstance(r.get("raw_payload"), dict)
-            and r["raw_payload"].get("translation_confidence") is not None
-        ]
-        if not confs:
-            summary["per_scanner"][sc_name] = {"n": 0, "note": "no translation_confidence in 30d"}
-            continue
-
-        median30 = statistics.median(confs)
-        p25 = statistics.quantiles(confs, n=4)[0] if len(confs) >= 4 else min(confs)
-
-        # 7-day streak: day-by-day median < 0.70?
-        streak_breaking = False
-        streak_day_count = 0
-        for days_back in range(_TRANSLATION_CRITICAL_STREAK_DAYS):
-            day_start = datetime.now(timezone.utc) - timedelta(days=days_back + 1)
-            day_end = datetime.now(timezone.utc) - timedelta(days=days_back)
-            day_vals = [
-                float(r["raw_payload"].get("translation_confidence"))
-                for r in rows30
-                if isinstance(r.get("raw_payload"), dict)
-                and r["raw_payload"].get("translation_confidence") is not None
-                and day_start.isoformat() <= r["scan_date"] < day_end.isoformat()
-            ]
-            if day_vals:
-                day_median = statistics.median(day_vals)
-                if day_median < _TRANSLATION_MEDIAN_CRITICAL_DAY:
-                    streak_day_count += 1
-                else:
-                    streak_breaking = True
-                    break
-            # empty days don't break the streak; they just don't count toward it
-        critical_streak = (
-            streak_day_count >= _TRANSLATION_CRITICAL_STREAK_DAYS and not streak_breaking
-        )
-
-        per = {"n": len(confs), "median_30d": round(median30, 3), "p25_30d": round(p25, 3)}
-        summary["per_scanner"][sc_name] = per
-
-        if critical_streak:
-            _upsert_flag(
-                client,
-                severity="critical",
-                source="translation_health",
-                kind="translation_confidence_trend",
-                scanner_id=sc_id,
-                title=f"{sc_name}: translation day-median <0.70 for {streak_day_count} consecutive days",
-                evidence={**per, "streak_days": streak_day_count, "threshold": _TRANSLATION_MEDIAN_CRITICAL_DAY},
-            )
-        elif median30 < _TRANSLATION_MEDIAN_WARN:
-            _upsert_flag(
-                client,
-                severity="warn",
-                source="translation_health",
-                kind="translation_confidence_trend",
-                scanner_id=sc_id,
-                title=f"{sc_name}: translation median {median30:.3f} over 30d (threshold {_TRANSLATION_MEDIAN_WARN})",
-                evidence=per,
-            )
-        elif median30 >= 0.80:
-            # Auto-resolve if the flag was open.
-            _resolve_flag(
-                client,
-                source="translation_health",
-                kind="translation_confidence_trend",
-                scanner_id=sc_id,
-                note=f"auto-resolved: median_30d={median30:.3f} recovered",
-            )
-
-    return summary
 
 
 # ===========================================================================
@@ -616,134 +502,6 @@ def convergence_qa(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
             evidence={"count_24h": orphan_count},
         )
     summary["orphan_alerts"] = orphan_count
-
-    return summary
-
-
-# ===========================================================================
-# 7.6.4 litigation_baselines_refresh
-# ===========================================================================
-
-_PARTY_RESOLUTION_TTL_DAYS = 180
-_PARTY_REVERIFY_BUDGET_PER_PASS = 50
-_DEF14A_TTL_DAYS = 90
-_EXHIBIT21_TTL_DAYS = 90
-
-_LITIGATION_SCANNERS = ("courtlistener_scanner", "sec_enforcement_scanner")
-
-
-def litigation_baselines_refresh(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
-    """Weekly Sun 04:00 UTC. Short-circuits if both litigation scanners are
-    auth_required/deprecated. Otherwise:
-      1. Re-verify up to 50 party-resolution cache entries older than 180d.
-      2. Flag staleness on DEF 14A + Exhibit 21 baselines (no auto-refresh — v1
-         policy preserved; those refreshes are too expensive to run autonomously).
-    """
-    client = client or SupabaseClient()
-    summary: Dict[str, Any] = {"function": "litigation_baselines_refresh"}
-
-    # Short-circuit if litigation is dormant.
-    scs = client._rest(
-        "GET", "scanners",
-        params={"select": "name,status", "name": f"in.({','.join(_LITIGATION_SCANNERS)})"},
-    ) or []
-    active = [s for s in scs if s["status"] == "operational"]
-    if not active:
-        summary["skipped"] = "all litigation scanners auth_required/deprecated"
-        return summary
-
-    # (1) Party-resolution cache re-verification.
-    cache_blob = client.read_cache("litigation", "party_resolution_cache.json")
-    if cache_blob:
-        try:
-            cache = json.loads(cache_blob.decode("utf-8"))
-        except Exception:
-            cache = {}
-        stale: List[str] = []
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=_PARTY_RESOLUTION_TTL_DAYS)).isoformat()
-        for party, rec in list(cache.items()):
-            if not isinstance(rec, dict):
-                continue
-            last_verified = rec.get("last_verified", "1970-01-01")
-            if last_verified < cutoff:
-                stale.append(party)
-            if len(stale) >= _PARTY_REVERIFY_BUDGET_PER_PASS:
-                break
-        summary["party_reverify_queued"] = len(stale)
-        summary["party_cache_total"] = len(cache)
-        # The actual re-verification is out-of-scope for v2 scanners-only Modal
-        # scope; emit a flag listing the stale entries so an operator or future
-        # specialist job can drain them.
-        if stale:
-            _upsert_flag(
-                client,
-                severity="info",
-                source="litigation_baselines",
-                kind="party_cache_reverify_due",
-                title=f"{len(stale)} party-resolution entries past 180d",
-                evidence={"sample": stale[:10], "total_due": len(stale)},
-            )
-    else:
-        summary["party_cache_total"] = 0
-        _upsert_flag(
-            client,
-            severity="info",
-            source="litigation_baselines",
-            kind="party_cache_missing",
-            title="party_resolution_cache.json not present in scanner-caches/litigation/",
-            evidence={},
-        )
-
-    # (2) DEF 14A + Exhibit 21 staleness.
-    for baseline_key, ttl_days, flag_kind in (
-        ("executive_lookup.json", _DEF14A_TTL_DAYS, "baseline_stale_def14a"),
-        ("exhibit21_subsidiary_table.json", _EXHIBIT21_TTL_DAYS, "baseline_stale_exhibit21"),
-    ):
-        baseline_blob = client.read_cache("litigation", baseline_key)
-        stale_flag = False
-        detail: Dict[str, Any] = {"key": baseline_key}
-        if baseline_blob is None:
-            stale_flag = True
-            detail["reason"] = "not present"
-        else:
-            try:
-                payload = json.loads(baseline_blob.decode("utf-8"))
-                last_refreshed = (payload.get("_meta") or {}).get("last_refreshed")
-                if last_refreshed:
-                    detail["last_refreshed"] = last_refreshed
-                    if last_refreshed < (
-                        datetime.now(timezone.utc) - timedelta(days=ttl_days)
-                    ).isoformat():
-                        stale_flag = True
-                        detail["reason"] = f"last_refreshed > {ttl_days}d ago"
-                else:
-                    detail["reason"] = "no _meta.last_refreshed in payload"
-                    stale_flag = True
-            except Exception as e:
-                detail["reason"] = f"parse_error: {e}"
-                stale_flag = True
-
-        if stale_flag:
-            _upsert_flag(
-                client,
-                severity="warn",
-                source="litigation_baselines",
-                kind=flag_kind,
-                title=f"{baseline_key} refresh due",
-                body=(
-                    "No auto-refresh — v1 policy preserved (too expensive for autonomous "
-                    "run). Operator should schedule a manual refresh pass."
-                ),
-                evidence=detail,
-            )
-        else:
-            _resolve_flag(
-                client,
-                source="litigation_baselines",
-                kind=flag_kind,
-                note=f"auto-resolved: {baseline_key} fresh ({detail.get('last_refreshed')})",
-            )
-        summary[flag_kind] = detail
 
     return summary
 
