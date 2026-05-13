@@ -33,6 +33,7 @@ import anthropic
 from modal_workers.extractor.asset_linker import (
     LinkerStats,
     PREFILTER_EXCLUDED_DOC_TYPES,
+    _active_asset_set_hash,
     _finish_run_row,
     _mark_classified,
     _start_run_row,
@@ -41,6 +42,11 @@ from modal_workers.extractor.asset_linker import (
     load_documents_to_link,
     prefilter_doc,
 )
+
+
+# A stable hash used by tests that need to pass one in. md5("test-hash") would
+# work too — what matters is that it's a known string written into stamps.
+_TEST_HASH = "deadbeef" * 4  # 32-char placeholder mimicking md5 shape
 
 
 # ---------------------------------------------------------------------------
@@ -408,28 +414,102 @@ def test_prefilter_does_not_apply_diversified_gate_to_single_drug_sponsor():
 
 
 # ---------------------------------------------------------------------------
-# load_documents_to_link — must filter on linker_classified_at IS NULL
+# _active_asset_set_hash — md5 over the sorted active asset id list
 # ---------------------------------------------------------------------------
 
-def test_load_documents_filters_unclassified_only():
-    """The bug regressed if load_documents_to_link ever returns a doc whose
-    linker_classified_at is NOT NULL. Pin the filter to the request layer."""
+def test_active_asset_set_hash_is_md5_of_sorted_ids():
+    """The hash must be stable across runs (sorted) and identical for the same
+    asset set regardless of fetch order. Changing the asset universe MUST
+    change the hash — that's what invalidates the cached classification."""
+    sb = MagicMock()
+    # Return assets in arbitrary order; hash should sort them.
+    sb._rest = MagicMock(return_value=[{"id": "b"}, {"id": "a"}, {"id": "c"}])
+
+    h1 = _active_asset_set_hash(sb)
+
+    # Same set, different order — must produce the same hash.
+    sb._rest = MagicMock(return_value=[{"id": "c"}, {"id": "a"}, {"id": "b"}])
+    h2 = _active_asset_set_hash(sb)
+    assert h1 == h2, "Hash must be stable regardless of fetch order"
+
+    # Different set — must produce a different hash.
+    sb._rest = MagicMock(return_value=[{"id": "a"}, {"id": "b"}])
+    h3 = _active_asset_set_hash(sb)
+    assert h1 != h3, "Adding/removing an asset MUST change the hash"
+
+    # Format: 32 hex chars (md5).
+    assert len(h1) == 32
+    assert all(c in "0123456789abcdef" for c in h1)
+
+
+def test_active_asset_set_hash_queries_active_only():
+    """The hash must only consider is_active=true assets. Inactive ones don't
+    participate in classification, so they shouldn't affect the cache key."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[{"id": "a"}])
+
+    _active_asset_set_hash(sb)
+
+    call = sb._rest.call_args
+    assert call.args[0] == "GET"
+    assert call.args[1] == "fda_assets"
+    assert call.kwargs["params"].get("is_active") == "eq.true"
+    assert call.kwargs["params"].get("select") == "id"
+
+
+# ---------------------------------------------------------------------------
+# load_documents_to_link — widens to (IS NULL) OR (hash IS NULL) OR (hash != current)
+# ---------------------------------------------------------------------------
+
+def test_load_documents_filters_unclassified_or_stale_hash():
+    """The bug regresses if load_documents_to_link ever returns a doc that has
+    been classified against the CURRENT asset-set hash. It must return:
+      - never-classified docs (linker_classified_at IS NULL), AND
+      - legacy pre-hash stamps (asset_set_hash IS NULL), AND
+      - hash-stale docs (asset_set_hash <> current).
+    Pin the OR clause to the request layer."""
     sb = MagicMock()
     sb._rest = MagicMock(return_value=[_doc()])
 
-    load_documents_to_link(sb, max_docs=20)
+    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH)
 
-    # One GET to documents with the marker filter
     sb._rest.assert_called_once()
     call = sb._rest.call_args
     assert call.args[0] == "GET"
     assert call.args[1] == "documents"
     params = call.kwargs["params"]
-    assert params.get("linker_classified_at") == "is.null", (
-        "load_documents_to_link MUST filter on linker_classified_at IS NULL — "
-        "otherwise the no-progress loop returns. Got params: %r" % params
+    or_value = params.get("or")
+    assert or_value is not None, (
+        "load_documents_to_link MUST use a PostgREST `or` filter to include "
+        "unstamped AND hash-stale docs. Got params: %r" % params
     )
+    assert "linker_classified_at.is.null" in or_value
+    assert "linker_classified_asset_set_hash.is.null" in or_value
+    assert f"linker_classified_asset_set_hash.neq.{_TEST_HASH}" in or_value
     assert params.get("order") == "published_at.desc"
+
+
+def test_load_documents_requires_hash_in_cron_mode():
+    """Forgetting to pass asset_set_hash in cron mode is a silent regression
+    risk — without the OR-clause, the query degenerates to "newest 200 docs"
+    and we'd ship the no-progress loop again. Fail loudly instead."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[])
+    with pytest.raises(ValueError, match="asset_set_hash"):
+        load_documents_to_link(sb, max_docs=20)
+
+
+def test_load_documents_doc_ids_override_bypasses_hash():
+    """Operator override (--doc-ids) must work even without a hash, so the
+    cache-validation path stays usable for diagnostics."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[_doc()])
+    # No asset_set_hash passed.
+    load_documents_to_link(sb, max_docs=20, doc_ids=["doc-1", "doc-2"])
+    call = sb._rest.call_args
+    params = call.kwargs["params"]
+    assert params.get("id") == "in.(doc-1,doc-2)"
+    assert "or" not in params, "doc_ids override must not apply the OR filter"
 
 
 def test_load_documents_does_not_query_asset_documents():
@@ -438,7 +518,7 @@ def test_load_documents_does_not_query_asset_documents():
     sb = MagicMock()
     sb._rest = MagicMock(return_value=[])
 
-    load_documents_to_link(sb, max_docs=20)
+    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH)
 
     for call in sb._rest.call_args_list:
         path = call.args[1] if len(call.args) > 1 else ""
@@ -452,11 +532,11 @@ def test_load_documents_does_not_query_asset_documents():
 # _mark_classified — terminal-state PATCH, returns bool for caller's stats
 # ---------------------------------------------------------------------------
 
-def test_mark_classified_patches_documents_with_result():
+def test_mark_classified_patches_documents_with_result_and_hash():
     sb = MagicMock()
     sb._rest = MagicMock(return_value=None)
 
-    ok = _mark_classified(sb, "doc-xyz", "no_match")
+    ok = _mark_classified(sb, "doc-xyz", "no_match", _TEST_HASH)
 
     assert ok is True
     sb._rest.assert_called_once()
@@ -466,6 +546,10 @@ def test_mark_classified_patches_documents_with_result():
     assert call.kwargs["params"] == {"id": "eq.doc-xyz"}
     body = call.kwargs["json_body"]
     assert body["linker_classified_result"] == "no_match"
+    assert body["linker_classified_asset_set_hash"] == _TEST_HASH, (
+        "Hash MUST be stamped so add/remove-asset auto-invalidates the cache. "
+        "Without it, the no-progress loop returns on every asset-set change."
+    )
     assert "linker_classified_at" in body
     # Must be ISO timestamp, not None
     assert body["linker_classified_at"] is not None
@@ -475,10 +559,11 @@ def test_mark_classified_patches_documents_with_result():
 def test_mark_classified_accepts_each_valid_result(result):
     sb = MagicMock()
     sb._rest = MagicMock(return_value=None)
-    ok = _mark_classified(sb, "doc-1", result)
+    ok = _mark_classified(sb, "doc-1", result, _TEST_HASH)
     assert ok is True
     body = sb._rest.call_args.kwargs["json_body"]
     assert body["linker_classified_result"] == result
+    assert body["linker_classified_asset_set_hash"] == _TEST_HASH
 
 
 def test_mark_classified_returns_false_on_patch_failure():
@@ -488,7 +573,7 @@ def test_mark_classified_returns_false_on_patch_failure():
     classified_at mechanism — the very bug the marker prevents."""
     sb = MagicMock()
     sb._rest = MagicMock(side_effect=Exception("network blip"))
-    ok = _mark_classified(sb, "doc-1", "linked")
+    ok = _mark_classified(sb, "doc-1", "linked", _TEST_HASH)
     assert ok is False
 
 
