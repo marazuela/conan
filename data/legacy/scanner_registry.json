@@ -10,33 +10,6 @@
   },
   "scanners": [
     {
-      "name": "edgar_filing_monitor",
-      "tool_path": "tools/edgar_filing_monitor.py",
-      "status": "operational",
-      "geography": "US",
-      "cadence": "3h",
-      "default_scoring_profile": "activist_governance",
-      "signal_type_profile_map": {
-        "mna_keyword": "merger_arb",
-        "activist_keyword": "activist_governance",
-        "activist_ownership": "activist_governance",
-        "distress_keyword": "activist_governance",
-        "governance_keyword": "activist_governance",
-        "late_filings": "activist_governance"
-      },
-      "endpoint_primary": "https://efts.sec.gov/LATEST/search-index",
-      "endpoint_secondary": "https://data.sec.gov/submissions/",
-      "timeout_soft_s": 90,
-      "timeout_hard_s": 180,
-      "coverage_mode": "full",
-      "issuer_filter_enabled": true,
-      "market_cap_floor_usd_mm": 215,
-      "last_run_utc": "2026-04-21T14:16:21.740325Z",
-      "last_run_signals": 0,
-      "last_run_status": "ok",
-      "notes": "Flagship EDGAR path: budgeted full keyword coverage by default, merger-sibling suppression enabled for activist 8-K, issuer/SPAC filter enabled, and market-cap triage floor set to $215M."
-    },
-    {
       "name": "fda_pdufa_pipeline",
       "tool_path": "tools/fda_pdufa_pipeline.py",
       "status": "operational",
@@ -81,31 +54,6 @@
       "last_run_status": "ok",
       "strategy_spec": "strategies/pre_edge_phase3_readout.md",
       "notes": "Added 2026-04-20 S69. Pre-edge Phase 3 readout scanner per D-013. Queries CT.gov v2 for industry-sponsored Phase 3 trials with PrimaryCompletionDate in next 90d and OverallStatus ACTIVE_NOT_RECRUITING/COMPLETED. Scores via binary_catalyst rubric with approval_probability seeded from config/phase3_approval_base_rates.json. Triage gate: >=3 of 5 patterns + INDUSTRY sponsor. Sponsor->ticker resolution happens downstream via openfigi_resolver."
-    },
-    {
-      "name": "insider_form4_scanner",
-      "tool_path": "tools/insider_form4_scanner.py",
-      "status": "paused",
-      "geography": "US",
-      "cadence": "daily",
-      "scheduled_hour_utc": 21,
-      "default_scoring_profile": "short_positioning",
-      "signal_type_profile_map": {
-        "insider_cluster_buy": "short_positioning",
-        "insider_cluster_sell": "short_positioning",
-        "c_suite_open_market_buy": "short_positioning",
-        "ten_percent_holder_buy": "short_positioning"
-      },
-      "top_signal_limit": 25,
-      "daily_promotion_limit": 5,
-      "endpoint_primary": "https://efts.sec.gov/LATEST/search-index",
-      "endpoint_secondary": "https://www.sec.gov/Archives/edgar/data/",
-      "timeout_soft_s": 120,
-      "timeout_hard_s": 240,
-      "last_run_utc": null,
-      "last_run_signals": 0,
-      "last_run_status": null,
-      "notes": "Added 2026-04-22 S70. SEC Section 16 Form 4 insider cluster detector. Fills the Form 4 gap called out in profile_short_positioning.md:3 ('once scanner is built') and consumed by the Form 4 cluster rubric at lines 47-55. Scans EDGAR EFTS for Form 4 + 4/A filings in last 14 days, parses primary_doc.xml, aggregates non-derivative discretionary transactions (codes P/S) by issuer CIK within a 30-day window, filters out 10b5-1 plan sales, dedups affiliated reporting owners by first-token normalization, emits insider_cluster_buy/sell (>=2 holders), solo c_suite_open_market_buy, and solo ten_percent_holder_buy. Runs 21 UTC daily (post-close, after most Form 4 filings land). Emissions route to short_positioning profile; dim_estimator branches on insider_cluster=True to apply the C-suite-weighted cluster tier rather than the ESMA holder-count tier."
     }
   ]
 }
