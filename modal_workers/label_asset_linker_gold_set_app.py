@@ -1,36 +1,49 @@
-"""asset_linker_gold_set labeling — Phase 1 of yield-optimization plan.
+"""asset_linker_gold_set labeling — Phases 1 (bootstrap) and 4 (continuous eval).
 
-Stratified-by-source sampling of recent documents, scored by Sonnet 4.6 against
-the active fda_assets universe. Output rows land in asset_linker_gold_set.
+Two modes:
+
+  bootstrap (default; label_gold_set)
+    Stratified-by-source sampling of recent documents (target ~500 docs),
+    Sonnet 4.6 labeled against the active fda_assets universe with prompt
+    caching. Idempotent on doc_id — rerunnable to refresh the gold set when
+    the universe shape changes. ~$3–15 per run depending on universe size.
+
+  incremental (daily; daily_incremental_label)
+    Sample 50 random new docs ingested in the last 24h, skip any already
+    in asset_linker_gold_set, label with Sonnet 4.6. Designed for Phase 4
+    continuous-eval — catches recall drift when (a) the SOURCE_ALLOWLIST
+    becomes wrong as new approved-stage assets enter the universe, or (b)
+    pass-1 model behavior changes. ~$1–3 per daily run.
 
 Design rationale:
   - Primary labeler is Sonnet 4.6 (single-pass) with prompt caching on the
     asset universe to keep cost low. Opus 4.7 would give marginally better
-    labels but at ~5× cost — for a 500-doc gold set used to differentiate
-    a 5× yield gap between Haiku and Sonnet, Sonnet 4.6's resolution is more
-    than enough.
+    labels but at ~5× cost.
   - Second-pass arbitration (Opus 4.7 on docs Sonnet labeled positive) is
-    available via the `arbitrate=True` arg but defaults off to keep the
-    initial run at the ~$15 budget Pedro approved.
-  - Prompt caching: the fda_assets universe (~2000 rows ≈ 25k tokens) is
-    placed in the first content block with cache_control. Cache reads at
-    10% of base input cost amortize the universe across 500 calls.
+    available via the `arbitrate=True` arg but defaults off to keep cost
+    near the daily budget.
+  - Prompt caching: the fda_assets universe is placed in the first content
+    block with cache_control. Cache reads at 10% of base input cost amortize
+    the universe across each batch.
 
 Run (Modal):
   modal deploy modal_workers/label_asset_linker_gold_set_app.py
-  modal run modal_workers/label_asset_linker_gold_set_app.py::label_gold_set \\
+  # bootstrap (~500 docs, ~$3-15)
+  modal run modal_workers/label_asset_linker_gold_set_app.py::main \\
       --target-count 500 [--arbitrate]
+  # incremental (~50 docs, ~$1-3, idempotent on doc_id)
+  modal run modal_workers/label_asset_linker_gold_set_app.py::main_incremental \\
+      --target-count 50
 
-Cost projection (Sonnet 4.6 only, prompt-cached universe):
-  - 1× cache write   ~25k tokens × $3.75/M  = $0.09
-  - 500× cache reads ~25k tokens × $0.30/M  = $3.75
-  - 500× per-doc    ~5k tokens × $3.00/M    = $7.50
-  - 500× outputs    ~250 tokens × $15.00/M  = $1.88
-  - Total                                   ≈ $13.22
+Automation: the @app.function decorator on daily_incremental_label includes
+`schedule=modal.Cron("0 3 * * *")` (03:00 UTC). If the Modal free-tier
+5-schedules cap blocks deploy, fall back to pg_cron + a web endpoint — see
+the GitHub issue spec referenced from plans/asset-linker-yield-optimization.md.
 
-With --arbitrate (Opus 4.7 second pass on ~30% positive subset, ~150 docs):
-  - 150× Opus 4.7 calls ≈ +$15
-  - Total                                   ≈ $28
+Cost projection (Sonnet 4.6 only, prompt-cached 35-asset universe):
+  - Bootstrap (500 docs):     ~$3.50 total
+  - Incremental (50 docs):    ~$0.50/day
+  - With --arbitrate (Opus on ~10% positives): +$1-2
 """
 
 from __future__ import annotations
@@ -118,6 +131,63 @@ Be conservative — false positives are more harmful than false negatives at thi
 # ---------------------------------------------------------------------------
 # Sampling
 # ---------------------------------------------------------------------------
+def _incremental_sample(sb, target_count: int = 50, days_back: int = 1) -> List[Dict[str, Any]]:
+    """Sample N random new docs ingested in last `days_back` days, skipping
+    docs already in asset_linker_gold_set. Used by the daily continuous-eval
+    cron. Distribution-agnostic by design — we want drift signal from any
+    source, including newly-eligible ones.
+    """
+    from datetime import timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+    # Pull more than needed, filter against gold set in Python (PostgREST NOT IN
+    # against another table is awkward; over-fetch is fine at this size).
+    over_fetch = target_count * 4
+    params = {
+        "select": "id,source,title,raw_text",
+        "fetched_at": f"gte.{since}",
+        "order": "fetched_at.desc",
+        "limit": str(over_fetch),
+    }
+    try:
+        candidates = sb._rest("GET", "documents", params=params) or []
+    except Exception as e:
+        print(f"WARN: incremental sample fetch failed: {e}", flush=True)
+        return []
+
+    # Skip already-labeled docs
+    existing_params = {
+        "select": "doc_id",
+        "labeled_at": f"gte.{since}",
+        "limit": "10000",
+    }
+    try:
+        existing_rows = sb._rest("GET", "asset_linker_gold_set", params=existing_params) or []
+    except Exception:
+        existing_rows = []
+    existing_ids = {r["doc_id"] for r in existing_rows}
+
+    import random
+    pool = [c for c in candidates if c["id"] not in existing_ids]
+    random.shuffle(pool)
+    picked = pool[:target_count]
+
+    rows: List[Dict[str, Any]] = []
+    for row in picked:
+        text = row.get("raw_text") or ""
+        rows.append({
+            "id": row["id"],
+            "source": row["source"],
+            "title": row.get("title") or "",
+            "text_window": text[:DOC_TEXT_MAX_CHARS],
+            "text_truncated": len(text) > DOC_TEXT_MAX_CHARS,
+        })
+    by_source: Dict[str, int] = {}
+    for r in rows:
+        by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+    print(f"incremental sample: {len(rows)} docs by source: {by_source}", flush=True)
+    return rows
+
+
 def _stratified_sample(sb, days_back: int = 7) -> List[Dict[str, Any]]:
     """Pull ~500 docs stratified by source from last N days.
 
@@ -355,8 +425,83 @@ def label_gold_set(target_count: int = 500, arbitrate: bool = False, dry_run: bo
     return {"counts": counts, "usage": total_usage, "universe_size": len(universe)}
 
 
+@app.function(
+    image=image,
+    timeout=3_600,
+    secrets=[anthropic_secrets, supabase_secrets],
+    schedule=modal.Cron("0 3 * * *"),
+)
+def daily_incremental_label(target_count: int = 50, arbitrate: bool = False) -> Dict[str, Any]:
+    """Daily continuous-eval — sample 50 random new docs from last 24h that
+    aren't already in the gold set, label with Sonnet 4.6, persist. Designed
+    to catch recall drift when the SOURCE_ALLOWLIST or pass-1 model behavior
+    becomes wrong as the universe evolves.
+
+    Schedule: 03:00 UTC daily via @modal.function(schedule=...). If the Modal
+    free-tier 5-schedules cap blocks this, fall back to pg_cron + an HTTP
+    endpoint — see GitHub issue tracked from
+    plans/asset-linker-yield-optimization.md.
+
+    Budget: ~$0.50–2/day on 35-asset universe; well under the $5/day cap.
+    """
+    import anthropic
+    from modal_workers.shared.supabase_client import SupabaseClient
+
+    sb = SupabaseClient()
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    docs = _incremental_sample(sb, target_count=target_count, days_back=1)
+    if not docs:
+        return {"counts": {"labeled": 0, "reason": "no_new_docs"}, "usage": {}}
+
+    universe = _load_asset_universe(sb)
+    universe_block = _format_universe_for_prompt(universe)
+
+    counts = {"labeled": 0, "positive": 0, "negative": 0, "parse_error": 0, "arbitrated": 0, "disagreement": 0}
+    total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+
+    for doc in docs:
+        primary = _label_one_doc(client, doc, universe_block, PRIMARY_MODEL)
+        for k, v in primary["usage"].items():
+            total_usage[k] += v
+        parsed = primary["parsed"]
+        labeler_models = [PRIMARY_MODEL]
+        confidence = "high"
+
+        if parsed.get("reasoning", "").startswith("parse_error"):
+            counts["parse_error"] += 1
+            confidence = "low"
+        elif parsed.get("links"):
+            counts["positive"] += 1
+            if arbitrate:
+                second = _label_one_doc(client, doc, universe_block, ARBITRATOR_MODEL)
+                for k, v in second["usage"].items():
+                    total_usage[k] += v
+                counts["arbitrated"] += 1
+                primary_ids = sorted(l["asset_id"] for l in parsed["links"])
+                second_ids = sorted(l["asset_id"] for l in second["parsed"].get("links", []))
+                if primary_ids != second_ids:
+                    counts["disagreement"] += 1
+                    confidence = "low"
+                labeler_models.append(ARBITRATOR_MODEL)
+        else:
+            counts["negative"] += 1
+
+        _persist(sb, doc, parsed, labeler_models, confidence)
+        counts["labeled"] += 1
+
+    return {"counts": counts, "usage": total_usage, "universe_size": len(universe)}
+
+
 @app.local_entrypoint()
 def main(target_count: int = 500, arbitrate: bool = False, dry_run: bool = False):
     """Local entrypoint — run via `modal run`."""
     out = label_gold_set.remote(target_count=target_count, arbitrate=arbitrate, dry_run=dry_run)
+    print(json.dumps(out, indent=2, default=str))
+
+
+@app.local_entrypoint()
+def main_incremental(target_count: int = 50, arbitrate: bool = False):
+    """Local entrypoint for the daily incremental — useful for ad-hoc runs."""
+    out = daily_incremental_label.remote(target_count=target_count, arbitrate=arbitrate)
     print(json.dumps(out, indent=2, default=str))
