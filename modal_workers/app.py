@@ -62,9 +62,7 @@ image = (
         "fastapi[standard]",
         "pydantic>=2",
         "requests>=2.31",
-        "beautifulsoup4>=4.12",   # congressional_trading, esma_short_scanner
-        "openpyxl>=3.1",          # esma_short_scanner (FCA xlsx)
-        "yfinance>=0.2",          # sedar_plus_scanner, asx_scanner (ticker→mcap proxies)
+        "yfinance>=0.2",          # market_snapshot, edgar_filing_monitor, price_tracker
         "reportlab>=4.0",         # reporting_weekly (PDF render)
     )
     .add_local_python_source("modal_workers")
@@ -526,73 +524,6 @@ def fda_signal_bridge_once() -> dict:
     # None and degrades to fair_probability-only scoring with Immediate gated off.
     return _run("fda_signal_bridge")
 
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def lse_rns_scanner_once() -> dict:
-    return _run("lse_rns_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def tdnet_scanner_once() -> dict:
-    return _run("tdnet_scanner")
-
-@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
-def asx_scanner_once() -> dict:
-    # asx needs 240s (not 120): per-ticker Markit concurrent fetch across the
-    # rotation chunk routinely exceeds 90s on cold cache. Registry updated to match.
-    return _run("asx_scanner")
-
-
-# --- daily cadence ---
-
-@app.function(image=image, timeout=1200, secrets=[scanner_secrets, supabase_secrets])
-def esma_short_scanner_once() -> dict:
-    # 4 regulators × xlsx/csv fetch + ISIN dedup + OpenFIGI resolve + per-signal
-    # entity resolution. Budget history: 120→240→480→1200s.
-    # The 480s budget assumed ~80 emitted signals/run, but cold-start emits ~2000+
-    # (every holder+ISIN with pct ≥ 0.5). scanner_base's per-signal resolve_or_create_entity
-    # loop does 1-3 DB round trips × 2233 positions = ~400-500s in EU-West → eu-west-3.
-    # 1200s covers cold-start; warm runs (only |change_pct| ≥ 0.2 positions emit) finish
-    # in <120s. Registry timeout_soft_s/hard_s also bumped. Bulk-resolve refactor in
-    # scanner_base is the real long-term fix.
-    return _run("esma_short_scanner")
-
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
-def congressional_trading_once() -> dict:
-    # 20 pages × 1s polite delay + BS4 parse + OpenFIGI per ticker. 120s
-    # insufficient; bumped to 180s (registry also updated).
-    return _run("congressional_trading")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def sedar_plus_scanner_once() -> dict:
-    return _run("sedar_plus_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def hkex_scanner_once() -> dict:
-    return _run("hkex_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def kind_scanner_once() -> dict:
-    return _run("kind_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def bse_nse_scanner_once() -> dict:
-    return _run("bse_nse_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def cvm_scanner_once() -> dict:
-    return _run("cvm_scanner")
-
-@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
-def bmv_scanner_once() -> dict:
-    return _run("bmv_scanner")
-
-@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
-def courtlistener_scanner_once() -> dict:
-    return _run("courtlistener_scanner")
-
-@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
-def sec_enforcement_scanner_once() -> dict:
-    return _run("sec_enforcement_scanner")
-
 @app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
 def insider_form4_scanner_once() -> dict:
     # Per-filing XML fetch: EFTS list (1 call) + primary_doc.xml fetch per hit
@@ -601,19 +532,6 @@ def insider_form4_scanner_once() -> dict:
     # matches.
     return _run("insider_form4_scanner")
 
-@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
-def delaware_chancery_scanner_once() -> dict:
-    return _run("delaware_chancery_scanner")
-
-
-# --- weekly cadence ---
-
-@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
-def takeover_candidate_scanner_once() -> dict:
-    # Multi-pattern EDGAR merge across 45d PE-filer + 60d review/streamlined
-    # windows + post-edge disqualification lookups. 180s insufficient on cold
-    # caches; bumped to 300s (registry also updated).
-    return _run("takeover_candidate_scanner")
 
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
 def pre_phase3_readout_scanner_once() -> dict:
