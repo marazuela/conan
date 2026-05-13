@@ -27,8 +27,10 @@ GLOBAL_24H_SOFT_USD = 500.0
 # Per-component HARD halt for asset_linker. Soft alerts (above) only emit
 # operator_flag rows; this ceiling causes the linker run loop to return
 # early and the */15 cron will idle until the 24h window rolls forward.
-# Catches the 2026-05-11 incident vector at $10 instead of $40+.
-ASSET_LINKER_24H_HARD_USD = 10.0
+# Raised 2026-05-12 from $10 to $20 after PR #34 moved pass-1 to Haiku 4.5.
+# Sonnet pass-1 burned $40+ in 8h on 2026-05-11; Haiku is ~3× cheaper, so
+# $20/24h is the expected steady-state ceiling with headroom for bursts.
+ASSET_LINKER_24H_HARD_USD = 20.0
 # Per-component HARD halt for the orchestrator drain. Sized as 6× the
 # observed healthy daily rate (~$8/day for ~22 runs at ~$0.36/run avg) to
 # allow legit expansion but cap a runaway scenario (e.g. ensemble_n stuck
