@@ -755,8 +755,8 @@ def _dispatch(names: List[str]) -> dict:
 
     Pre-flight: sweeps orphaned `scanner_runs.status='running'` rows (Modal hard-
     timeouts leave these behind when a container is killed before the scanner can
-    call close_scanner_run). Threshold 1200s = 20 min, comfortably above the longest
-    hard_timeout (takeover_candidate at 300s) while still catching real orphans on
+    call close_scanner_run). Threshold 1500s = 25 min, comfortably above the longest
+    hard_timeout (esma_short_scanner at 1200s) while still catching real orphans on
     the same day. Sweep failures don't block spawning — just logged in `errors`.
     """
     import sys
@@ -766,7 +766,7 @@ def _dispatch(names: List[str]) -> dict:
     reaper_error: Optional[str] = None
     try:
         from modal_workers.shared.supabase_client import SupabaseClient
-        reaped = SupabaseClient().reap_orphan_runs(max_age_seconds=1200)
+        reaped = SupabaseClient().reap_orphan_runs(max_age_seconds=1500)
     except Exception as e:  # noqa: BLE001 — reaper is advisory; don't block dispatch
         reaper_error = f"{type(e).__name__}: {e}"
 
