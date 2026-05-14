@@ -36,10 +36,21 @@ from modal_workers.shared.supabase_client import ScannerConfig
 logger = logging.getLogger(__name__)
 
 
+_VALID_MODES = {"deep", "shallow"}
+
+
 def _resolve_mode(now: datetime) -> str:
     override = os.environ.get("OPENFDA_INGEST_MODE")
     if override:
-        return override.strip().lower()
+        normalized = override.strip().lower()
+        if normalized in _VALID_MODES:
+            return normalized
+        # Typo or unrecognised value — log + fall through to weekday default
+        # rather than silently running shallow when the operator asked for deep.
+        logger.warning(
+            "OPENFDA_INGEST_MODE=%r not in %s; falling through to weekday default",
+            override, sorted(_VALID_MODES),
+        )
     # Sunday = 6 in datetime.weekday(). Sunday auto-deep folds the weekly
     # catch-up into the daily 06 UTC dispatch slot, so we don't need a second
     # registry row or a separate dispatcher cron.

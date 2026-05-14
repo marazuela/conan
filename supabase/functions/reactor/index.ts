@@ -212,7 +212,10 @@ Deno.serve(async (req: Request) => {
       const info = formatError(err);
       await sb.from("failed_reactor_events").insert({
         signal_id: null,
-        payload: payload as unknown as Record<string, unknown>,
+        payload: {
+          source: "reactor.asset_documents",
+          ...(payload as unknown as Record<string, unknown>),
+        },
         error_message: `[asset_documents] ${formatErrorForDlq(err)}`,
       });
       return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
@@ -273,7 +276,10 @@ Deno.serve(async (req: Request) => {
     const info = formatError(err);
     await sb.from("failed_reactor_events").insert({
       signal_id: sig?.signal_id ?? null,
-      payload: payload as unknown as Record<string, unknown>,
+      payload: {
+        source: "reactor.signals",
+        ...(payload as unknown as Record<string, unknown>),
+      },
       error_message: formatErrorForDlq(err),
     });
     return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {

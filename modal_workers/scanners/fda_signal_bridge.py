@@ -394,6 +394,25 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         ) or []
         assets_by_id = {row["id"]: row for row in asset_rows}
 
+    # Batch-fetch evidence for all pending events in one round-trip. PostgREST
+    # in.(...) caps the URL around ~2000 chars; at ~37 chars per UUID this fits
+    # ~50 events. Chunk if pending events ever grow past that.
+    event_ids = [e["id"] for e in events if e.get("id")]
+    evidence_by_event: Dict[str, List[Dict[str, Any]]] = {}
+    for chunk_start in range(0, len(event_ids), 50):
+        chunk = event_ids[chunk_start:chunk_start + 50]
+        in_clause = ",".join(chunk)
+        rows = client._rest(
+            "GET", "fda_event_evidence",
+            params={
+                "event_id": f"in.({in_clause})",
+                "evidence_status": "eq.active",
+                "select": "event_id,source,evidence_type,payload,evidence_status",
+            },
+        ) or []
+        for row in rows:
+            evidence_by_event.setdefault(row["event_id"], []).append(row)
+
     for event in events:
         if time.time() > deadline:
             warnings.append("wall-clock budget exceeded during signal build")
@@ -409,14 +428,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             skipped += 1
             continue
 
-        evidence_rows = client._rest(
-            "GET", "fda_event_evidence",
-            params={
-                "event_id": f"eq.{event_id}",
-                "evidence_status": "eq.active",
-                "select": "source,evidence_type,payload,evidence_status",
-            },
-        ) or []
+        evidence_rows = evidence_by_event.get(event_id, [])
 
         designations = _designations_from(asset, evidence_rows)
 
