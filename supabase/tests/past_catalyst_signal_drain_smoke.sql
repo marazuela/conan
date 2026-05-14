@@ -11,6 +11,12 @@
 --   5. A past-catalyst row at band='archive' is ignored — we only touch
 --      immediate/watchlist.
 --   6. _drained_by carries the cron source string.
+--   7. A past-catalyst row with band_with_bonus IS NULL (orphan pattern,
+--      ~20 of 23 drainable rows on the live DB 2026-05-14) is stamped to
+--      band_with_bonus='archive', so orphan_convergence_sweeper doesn't
+--      re-invoke the reactor on it.
+--   8. A past-catalyst pdufa_approaching row is drained (added to scope
+--      after the initial design — same pdufa_date code path).
 --
 -- Run with:
 --   supabase db execute --file supabase/tests/past_catalyst_signal_drain_smoke.sql
@@ -119,6 +125,37 @@ BEGIN
     '{}'::jsonb
   );
 
+  -- (6) past PCD, watchlist, BUT band_with_bonus IS NULL (orphan pattern).
+  -- Drain must stamp band_with_bonus='archive' so orphan_convergence_sweeper
+  -- doesn't resurrect it.
+  INSERT INTO public.signals (
+    signal_id, scoring_profile, rubric_version_id,
+    source_content_hash, source_date, scan_date,
+    signal_type, score, band, band_with_bonus,
+    raw_payload, dimensions
+  ) VALUES (
+    'smoke-drain-orphan-1', 'binary_catalyst', v_rubric_id,
+    'smoke-hash-6', now(), now(),
+    'pre_phase3_readout', 30.0, 'watchlist', NULL,
+    jsonb_build_object('primary_completion_date', v_past_pcd, 'ticker', 'ORP'),
+    '{}'::jsonb
+  );
+
+  -- (7) past PDUFA, watchlist pdufa_approaching — added to scope alongside
+  -- pdufa_imminent. Exercises the pdufa_date path for the new signal_type.
+  INSERT INTO public.signals (
+    signal_id, scoring_profile, rubric_version_id,
+    source_content_hash, source_date, scan_date,
+    signal_type, score, band, band_with_bonus,
+    raw_payload, dimensions
+  ) VALUES (
+    'smoke-drain-pdufa-approaching-1', 'binary_catalyst', v_rubric_id,
+    'smoke-hash-7', now(), now(),
+    'pdufa_approaching', 32.0, 'watchlist', 'watchlist',
+    jsonb_build_object('pdufa_date', v_past_pdufa, 'ticker', 'APP'),
+    '{}'::jsonb
+  );
+
   -- Capture (3)'s dimensions for the idempotency check.
   SELECT dimensions INTO v_existing_dims
     FROM public.signals WHERE signal_id = 'smoke-drain-already-1';
@@ -186,21 +223,49 @@ BEGIN
     RAISE EXCEPTION 'smoke: pre-archived row should not gain _drain_reason';
   END IF;
 
-  -- ---- Assert 6: return value reports the right counts -------------------
-  IF (v_drain_result->>'drained')::int <> 2 THEN
-    RAISE EXCEPTION 'smoke: expected drained=2 (smoke-drain-past-1 + smoke-drain-fda-decision-1), got %',
+  -- ---- Assert 6: orphan-pattern row drained AND band_with_bonus stamped --
+  SELECT band, band_with_bonus, dimensions->>'_drain_reason'
+    INTO v_band, v_band_wb, v_reason
+    FROM public.signals WHERE signal_id = 'smoke-drain-orphan-1';
+  IF v_band <> 'archive' THEN
+    RAISE EXCEPTION 'smoke: orphan-pattern row expected band=archive, got %', v_band;
+  END IF;
+  IF v_band_wb IS NULL OR v_band_wb <> 'archive' THEN
+    RAISE EXCEPTION 'smoke: orphan-pattern row expected band_with_bonus=archive (force-stamped), got %',
+                    v_band_wb;
+  END IF;
+  IF v_reason <> 'past_catalyst_no_resolution' THEN
+    RAISE EXCEPTION 'smoke: orphan-pattern row missing drain_reason';
+  END IF;
+
+  -- ---- Assert 7: pdufa_approaching row drained via pdufa_date path -------
+  SELECT band, dimensions->>'_drain_reason'
+    INTO v_band, v_reason
+    FROM public.signals WHERE signal_id = 'smoke-drain-pdufa-approaching-1';
+  IF v_band <> 'archive' OR v_reason <> 'past_catalyst_no_resolution' THEN
+    RAISE EXCEPTION 'smoke: pdufa_approaching row expected drained, got band=% reason=%',
+                    v_band, v_reason;
+  END IF;
+
+  -- ---- Assert 8: return value reports the right counts ------------------
+  IF (v_drain_result->>'drained')::int <> 4 THEN
+    RAISE EXCEPTION 'smoke: expected drained=4 (past + fda_decision + orphan + pdufa_approaching), got %',
                     v_drain_result->>'drained';
   END IF;
-  IF ((v_drain_result->'by_signal_type'->>'pre_phase3_readout')::int) <> 1 THEN
-    RAISE EXCEPTION 'smoke: expected by_signal_type.pre_phase3_readout=1, got %',
+  IF ((v_drain_result->'by_signal_type'->>'pre_phase3_readout')::int) <> 2 THEN
+    RAISE EXCEPTION 'smoke: expected by_signal_type.pre_phase3_readout=2, got %',
                     v_drain_result->'by_signal_type'->>'pre_phase3_readout';
   END IF;
   IF ((v_drain_result->'by_signal_type'->>'fda_decision')::int) <> 1 THEN
     RAISE EXCEPTION 'smoke: expected by_signal_type.fda_decision=1, got %',
                     v_drain_result->'by_signal_type'->>'fda_decision';
   END IF;
+  IF ((v_drain_result->'by_signal_type'->>'pdufa_approaching')::int) <> 1 THEN
+    RAISE EXCEPTION 'smoke: expected by_signal_type.pdufa_approaching=1, got %',
+                    v_drain_result->'by_signal_type'->>'pdufa_approaching';
+  END IF;
 
-  -- ---- Assert 7: second invocation drains nothing (idempotency at fn level)
+  -- ---- Assert 9: second invocation drains nothing (idempotency at fn level)
   v_drain_result := public._past_catalyst_signal_drain(2, 100);
   IF (v_drain_result->>'drained')::int <> 0 THEN
     RAISE EXCEPTION 'smoke: second invocation expected drained=0, got %',

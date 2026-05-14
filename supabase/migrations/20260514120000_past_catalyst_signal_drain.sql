@@ -8,11 +8,20 @@
 -- Scope:
 --   - signal_type IN ('pre_phase3_readout','eop2_meeting','binary_catalyst',
 --                     'pdufa_watchlist','fda_decision','pdufa_imminent',
---                     'pdufa_date_advanced')
+--                     'pdufa_approaching','pdufa_date_advanced')
 --   - band IN ('immediate','watchlist')
 --   - catalyst date (raw_payload->>'primary_completion_date' or
 --     'pdufa_date' or 'catalyst_date', signal_type-aware) < current_date - N
 --   - dimensions does NOT already carry _drain_reason (idempotent)
+--
+-- Resurrection guard: orphan_convergence_sweeper
+-- (modal_workers/observability.py:533) fetches signals where
+-- `band_with_bonus IS NULL` and re-invokes the reactor — which would re-stamp
+-- band_with_bonus to a live band based on score+convergence_bonus, and the
+-- dashboard's v_thesis_inbox uses coalesce(band_with_bonus, band), so a NULL
+-- left after drain would resurrect the row. We force band_with_bonus='archive'
+-- unconditionally so drained rows fall out of the sweeper's `band_with_bonus
+-- IS NULL` filter and stay archived.
 --
 -- Why a drain instead of a scanner-emit gate:
 --   - fda_pdufa_pipeline intentionally emits fda_decision up to T+60d
@@ -102,7 +111,7 @@ BEGIN
       WHERE s.signal_type IN (
               'pre_phase3_readout','eop2_meeting','binary_catalyst',
               'pdufa_watchlist','fda_decision','pdufa_imminent',
-              'pdufa_date_advanced'
+              'pdufa_approaching','pdufa_date_advanced'
             )
         AND s.band IN ('immediate','watchlist')
         -- Idempotent: skip rows already drained.
@@ -117,11 +126,11 @@ BEGIN
   LOOP
     UPDATE public.signals s
        SET band            = 'archive'::signal_band,
-           band_with_bonus = CASE
-                               WHEN s.band_with_bonus IS NOT NULL
-                                 THEN 'archive'::signal_band
-                               ELSE s.band_with_bonus
-                             END,
+           -- Unconditional: even when band_with_bonus was NULL (orphan-pattern,
+           -- ~20 of 23 drainable rows on 2026-05-14), stamp 'archive' so the
+           -- orphan_convergence_sweeper's `band_with_bonus IS NULL` filter
+           -- doesn't pick the row up and re-invoke the reactor.
+           band_with_bonus = 'archive'::signal_band,
            dimensions = s.dimensions || jsonb_build_object(
              '_drain_reason', 'past_catalyst_no_resolution',
              '_drained_at',   v_now,
