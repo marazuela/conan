@@ -396,6 +396,12 @@ _DRUG_NAME_BLOCKLIST = {
     "permit", "consult", "result", "default", "agreement",
 }
 
+# Prefixes that match `_DRUG_CODE_RE` but are SEC filing metadata, not drug codes.
+# `EX-99`, `EX-10`, `EX-21` are exhibit labels that appear in every 8-K; without
+# this filter the fallback regex captures the exhibit label before any real drug
+# code in the body (root cause of the drug_name="EX-99" emissions).
+_DRUG_CODE_PREFIX_BLOCKLIST = ("EX-", "SC-", "CIK-")
+
 
 def _extract_drug_name(text: str) -> Optional[str]:
     """Return the most likely drug name from an 8-K body, or None.
@@ -410,8 +416,12 @@ def _extract_drug_name(text: str) -> Optional[str]:
         if candidate.lower() in _DRUG_NAME_BLOCKLIST:
             continue
         return candidate
-    m = _DRUG_CODE_RE.search(head)
-    return m.group(1) if m else None
+    for m in _DRUG_CODE_RE.finditer(head):
+        candidate = m.group(1)
+        if candidate.upper().startswith(_DRUG_CODE_PREFIX_BLOCKLIST):
+            continue
+        return candidate
+    return None
 
 
 def _parse_filing_for_pdufa(file_id: str, cik: str, adsh: str,

@@ -408,6 +408,21 @@ def test_extract_drug_name_returns_none_when_no_inn_match():
     assert scanner._extract_drug_name(body) is None
 
 
+def test_extract_drug_name_skips_sec_exhibit_labels():
+    # 8-K bodies always carry exhibit labels like "EX-99.1" before the lede.
+    # The code-form fallback must skip these and return the real drug code.
+    body = (
+        "Exhibit EX-99.1 Press Release. The Company announced topline results "
+        "from its Phase 2 study of VK2735 for the treatment of obesity."
+    )
+    assert scanner._extract_drug_name(body) == "VK2735"
+
+
+def test_extract_drug_name_returns_none_when_only_exhibit_labels():
+    body = "Exhibit EX-99.1 Press Release. EX-10 Material Agreement. EX-21 Subsidiaries."
+    assert scanner._extract_drug_name(body) is None
+
+
 def test_parse_filing_returns_both_date_and_drug(monkeypatch):
     body = ("PDUFA action date of January 5, 2026 has been assigned for "
             "tovorafenib for the treatment of pediatric low-grade glioma.")
