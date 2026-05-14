@@ -21,6 +21,7 @@ module re-exports brier_score for parity with the MCP tool surface.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -63,6 +64,37 @@ def is_renormalize_priors_dry_run(sb: SupabaseClient) -> bool:
     """
     val = get_internal_config(sb, "renormalize_priors_dry_run", default="true")
     return (val or "").strip().lower() != "false"
+
+
+def compute_document_set_hash(
+    sb: SupabaseClient,
+    asset_id: str,
+) -> Optional[str]:
+    """md5 over the asset's material primary asset_documents.document_id set.
+
+    Mirror of the reactor's `computeDocSetHash` (supabase/functions/reactor/
+    index.ts) — must use identical criteria so the reactor's content-dedup
+    check can compare apples to apples against
+    convergence_assessments.document_set_hash.
+
+    Returns None when the asset has zero material primary docs; the reactor
+    treats None as "skip content-dedup" so cold-start assets still enqueue.
+    """
+    rows = sb._rest(
+        "GET", "asset_documents",
+        params={
+            "select": "document_id",
+            "asset_id": f"eq.{asset_id}",
+            "link_type": "eq.primary",
+            "is_material": "eq.true",
+        },
+    ) or []
+    if not rows:
+        return None
+    doc_ids = sorted(r["document_id"] for r in rows if r.get("document_id"))
+    if not doc_ids:
+        return None
+    return hashlib.md5(",".join(doc_ids).encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
