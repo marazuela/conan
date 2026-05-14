@@ -31,6 +31,40 @@ from modal_workers.shared.supabase_client import SupabaseClient
 logger = logging.getLogger(__name__)
 
 
+def get_internal_config(
+    sb: SupabaseClient,
+    key: str,
+    default: Optional[str] = None,
+) -> Optional[str]:
+    """Read a single string value from public.internal_config.
+
+    Returns `default` (None unless overridden) when the key is absent or the
+    fetch fails. Used by feature flags such as `renormalize_priors_dry_run`
+    where a missing key should mean "safest behavior" — i.e. dry-run is the
+    default until the operator explicitly flips it to 'false'.
+    """
+    try:
+        rows = sb._rest(
+            "GET", "internal_config",
+            params={"select": "value", "key": f"eq.{key}", "limit": "1"},
+        ) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_internal_config(%s) failed: %s", key, exc)
+        return default
+    if not rows:
+        return default
+    return rows[0].get("value", default)
+
+
+def is_renormalize_priors_dry_run(sb: SupabaseClient) -> bool:
+    """True when renormalize_priors should compute deltas but NOT mutate
+    `hypothesis.prior_estimate_pct`. Default: True (safest — preserves
+    pre-PR-1 behavior when the flag is absent).
+    """
+    val = get_internal_config(sb, "renormalize_priors_dry_run", default="true")
+    return (val or "").strip().lower() != "false"
+
+
 # ---------------------------------------------------------------------------
 # Stage 4: reference-class anchoring
 # ---------------------------------------------------------------------------

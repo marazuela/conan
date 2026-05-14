@@ -375,10 +375,59 @@ def _persist_complete(sb: SupabaseClient, outcome: ResolvedOutcome) -> None:
                         json_body=body, prefer="return=minimal")
 
 
+EMPIRICAL_TAKEOVER_THRESHOLD = 10
+"""Once an empirical post-mortem cohort reaches this size in a class,
+_refit_reference_class stops Beta-Binomial blending with the literature seed
+and lets Wilson-CI take over fully (`source='empirical'`)."""
+
+
+def _beta_binomial_blend(
+    prior_rate: float,
+    prior_effective_n: int,
+    empirical_hits: int,
+    empirical_n: int,
+) -> Tuple[float, float, float, int]:
+    """Beta-Binomial conjugate posterior: combine a literature prior with thin
+    empirical evidence.
+
+    The prior is parameterized as Beta(alpha, beta) where:
+      alpha = prior_rate * prior_effective_n
+      beta  = (1 - prior_rate) * prior_effective_n
+    Posterior after observing `empirical_hits` successes in `empirical_n`:
+      alpha' = alpha + empirical_hits
+      beta'  = beta  + (empirical_n - empirical_hits)
+    Posterior mean = alpha' / (alpha' + beta'). 95% CI uses Beta percentiles
+    approximated by Normal on the logit (sufficient for the small-n regime).
+
+    Returns (posterior_rate, ci_low, ci_high, posterior_effective_n).
+    """
+    import math
+    alpha = prior_rate * prior_effective_n
+    beta = (1.0 - prior_rate) * prior_effective_n
+    alpha_post = alpha + empirical_hits
+    beta_post = beta + (empirical_n - empirical_hits)
+    n_post = int(prior_effective_n + empirical_n)
+    mean = alpha_post / (alpha_post + beta_post)
+    if 0 < mean < 1 and n_post > 0:
+        logit = math.log(mean / (1 - mean))
+        se = math.sqrt(1.0 / max(alpha_post, 0.5) + 1.0 / max(beta_post, 0.5))
+        lo = 1.0 / (1.0 + math.exp(-(logit - 1.96 * se)))
+        hi = 1.0 / (1.0 + math.exp(-(logit + 1.96 * se)))
+    else:
+        lo, hi = max(0.0, mean - 0.1), min(1.0, mean + 0.1)
+    return round(mean, 4), round(lo, 4), round(hi, 4), n_post
+
+
 def _refit_reference_class(sb: SupabaseClient, reference_class: str) -> None:
     """UPSERT reference_class_base_rates from all resolved post-mortems sharing
-    the same reference_class. Safe under low-n: writes the row even with n<5
-    so the orchestrator's Stage 4 can render an "n=X (low)" disclaimer.
+    the same reference_class.
+
+    Beta-Binomial blending: if an existing row carries source='literature' and
+    the empirical cohort is below EMPIRICAL_TAKEOVER_THRESHOLD, we blend the
+    empirical evidence with the literature prior and write source='blended'.
+    Once the cohort reaches the threshold, Wilson-CI takes over fully with
+    source='empirical'. Without this guard the very first resolved case in a
+    class would overwrite the literature prior with a degenerate n=1 estimate.
     """
     # Pull resolved rows for this class.
     rows = sb._rest("GET", "convergence_assessments", params={
@@ -425,19 +474,47 @@ def _refit_reference_class(sb: SupabaseClient, reference_class: str) -> None:
     if n == 0:
         return
 
-    rate = successes / n
-    lo, hi = wilson_interval(successes, n)
     median_move = median(realized_moves)
 
-    upsert_body = {
-        "reference_class": reference_class,
-        "n_cases": n,
-        "approval_rate": round(rate, 4),
-        "approval_rate_ci_low": lo,
-        "approval_rate_ci_high": hi,
-        "median_realized_move_pct": round(median_move, 2) if median_move is not None else None,
-        "refit_at": datetime.now(timezone.utc).isoformat(),
-    }
+    existing = sb._rest("GET", "reference_class_base_rates", params={
+        "select": "reference_class,source,approval_rate,effective_n",
+        "reference_class": f"eq.{reference_class}",
+        "limit": "1",
+    }) or []
+    prior = existing[0] if existing else None
+
+    if (prior
+            and prior.get("source") in ("literature", "blended")
+            and n < EMPIRICAL_TAKEOVER_THRESHOLD):
+        prior_rate = float(prior["approval_rate"])
+        prior_n = int(prior.get("effective_n") or 20)
+        rate, lo, hi, eff_n = _beta_binomial_blend(prior_rate, prior_n, successes, n)
+        upsert_body = {
+            "reference_class": reference_class,
+            "n_cases": n,
+            "approval_rate": rate,
+            "approval_rate_ci_low": lo,
+            "approval_rate_ci_high": hi,
+            "median_realized_move_pct": round(median_move, 2) if median_move is not None else None,
+            "refit_at": datetime.now(timezone.utc).isoformat(),
+            "source": "blended",
+            "effective_n": eff_n,
+        }
+    else:
+        rate = successes / n
+        lo, hi = wilson_interval(successes, n)
+        upsert_body = {
+            "reference_class": reference_class,
+            "n_cases": n,
+            "approval_rate": round(rate, 4),
+            "approval_rate_ci_low": lo,
+            "approval_rate_ci_high": hi,
+            "median_realized_move_pct": round(median_move, 2) if median_move is not None else None,
+            "refit_at": datetime.now(timezone.utc).isoformat(),
+            "source": "empirical",
+            "effective_n": n,
+        }
+
     sb._rest_with_retry(
         "POST", "reference_class_base_rates",
         json_body=upsert_body,

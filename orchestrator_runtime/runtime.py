@@ -54,6 +54,7 @@ from modal_workers.shared.compute import (
     build_stage_4_anchor,
     format_anchor_for_prompt,
     get_active_calibration_curve,
+    is_renormalize_priors_dry_run,
 )
 from modal_workers.shared.supabase_client import SupabaseClient
 from orchestrator_runtime.client import (
@@ -2312,8 +2313,10 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             eq_for_anchor = float(eq_for_anchor) if eq_for_anchor is not None else None
         except (TypeError, ValueError):
             eq_for_anchor = None
+        renorm_dry_run = is_renormalize_priors_dry_run(sb)
         _, renorm_debug = renormalize_priors(
             hypothesis_result.hypotheses, anchor, eq_for_anchor,
+            dry_run=renorm_dry_run,
         )
         run.stage_metrics.append(StageMetric(
             stage_name="stage_2_hypothesis_enumeration",

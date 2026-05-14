@@ -441,6 +441,8 @@ def renormalize_priors(
     hypotheses: List[Hypothesis],
     anchor: Optional[Stage4Anchor],
     evidence_quality: Optional[float],
+    *,
+    dry_run: bool = False,
 ) -> tuple[List[Hypothesis], Dict[str, Any]]:
     """Blend per-hypothesis `prior_estimate_pct` toward the empirical base
     rate from Stage 4. Bull priors anchor to base_rate * 100; bear priors
@@ -450,8 +452,15 @@ def renormalize_priors(
     Returns (mutated_hypotheses, debug_payload). When the anchor has no
     base_rate, priors are returned unchanged and `debug.applied=False`.
 
+    Shadow mode (`dry_run=True`): compute the renorm and surface pre/post
+    deltas in the debug payload but DO NOT mutate hypotheses. Used to inspect
+    ~1 week of would-be shifts before flipping
+    `internal_config.renormalize_priors_dry_run` to 'false'. See migration
+    20260527000020_v3_seed_reference_class_base_rates.sql.
+
     Mutates `prior_estimate_pct` in place (preserving each
-    `prior_estimate_pct_pre_anchor` already set during parsing).
+    `prior_estimate_pct_pre_anchor` already set during parsing) unless
+    `dry_run=True`.
     """
     if not hypotheses or anchor is None or anchor.base_rate is None:
         return hypotheses, {"applied": False, "reason": "no_anchor_or_no_base_rate"}
@@ -488,15 +497,20 @@ def renormalize_priors(
     for h, new_val in zip(hypotheses, rescaled):
         pre_priors.append(int(round(h.prior_estimate_pct)))
         new_int = int(round(max(0.0, min(100.0, new_val))))
-        h.prior_estimate_pct = new_int
+        if not dry_run:
+            h.prior_estimate_pct = new_int
         post_priors.append(new_int)
 
+    shift_magnitude = sum(abs(a - b) for a, b in zip(pre_priors, post_priors))
+
     return hypotheses, {
-        "applied": True,
+        "applied": not dry_run,
+        "dry_run": dry_run,
         "base_rate": base_rate,
         "evidence_quality": eq,
         "blend_weight": round(w, 3),
         "pre_priors": pre_priors,
         "post_priors": post_priors,
+        "shift_magnitude": shift_magnitude,
         "labels": [h.label for h in hypotheses],
     }
