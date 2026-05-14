@@ -283,6 +283,60 @@ def fact_extractor_run(
     return {"return_code": rc}
 
 
+# Lazy-extraction caps for the on-demand path. Scoped per asset, so values
+# are << the blanket batch caps in fact_extractor_run above.
+LAZY_FACT_EXTRACT_MAX_DOCS = 50
+LAZY_FACT_EXTRACT_BUDGET_USD = 5.0
+
+
+class FactExtractorExhaustedError(RuntimeError):
+    """Raised when the per-asset extractor returns rc=3 — meaning every
+    attempted document failed (credits out, quota out, persistent 5xx) and
+    no new facts landed. Propagated up to orchestrator_drain_queue's
+    exception handler so the orchestrator_runs row gets marked failed with
+    a visible error_message instead of producing a zero-new-fact synthesis."""
+
+
+def _ensure_facts_extracted_for_asset(asset_id: str) -> None:
+    """Lazy fact extraction for one asset, run synchronously before an
+    assessment. Idempotent — `load_unextracted_links` in the extractor skips
+    documents that already have extracted_facts rows, so repeat calls on a
+    fully-extracted asset cost ~one Supabase round-trip.
+
+    Replaces the blanket hourly v3-fact-extractor cron (unscheduled
+    2026-05-11): extraction spend now follows actual Tier-1 assessment demand
+    instead of pre-building inputs for assets nothing currently assesses.
+
+    Return-code handling (per sonnet_fact_extractor.main contract):
+      rc=0  → success (including the benign "no unextracted material" case)
+      rc=2  → missing ANTHROPIC_API_KEY (config bug) → RuntimeError
+      rc=3  → every attempted doc errored, 0 facts inserted (credits/quota
+              regression) → FactExtractorExhaustedError, caught by the drain
+              loop's exception handler and persisted as a failed run
+
+    Tier-2 is intentionally NOT covered by this hook — enqueue_tier2_bulk
+    builds its input blob synchronously at enqueue time, so spawning
+    extraction there wouldn't help the current bulk run. Tier-2 reads
+    whatever facts already exist; Tier-1's lazy passes populate them over
+    time. Revisit if/when Tier-2 volume justifies the two-stage queue.
+    """
+    from modal_workers.extractor.sonnet_fact_extractor import main as extractor_main
+    rc = extractor_main([
+        "--asset-id", asset_id,
+        "--max", str(LAZY_FACT_EXTRACT_MAX_DOCS),
+        "--budget-usd", str(LAZY_FACT_EXTRACT_BUDGET_USD),
+    ])
+    if rc == 3:
+        raise FactExtractorExhaustedError(
+            f"fact_extractor exhausted for asset_id={asset_id} "
+            f"(all documents errored, 0 facts inserted) — see Modal logs"
+        )
+    if rc != 0:
+        raise RuntimeError(
+            f"fact_extractor returned unexpected rc={rc} for asset_id={asset_id}"
+        )
+
+
 # ============================================================================
 # Orchestrator — single assessment
 # ============================================================================
@@ -338,6 +392,13 @@ def orchestrator_run_one(
 
     sb = SupabaseClient()
     a_client = OrchestratorClient()
+    # Lazy fact extraction: ensure this asset's facts are fresh before the
+    # synthesis pipeline reads them. Idempotent + bounded ($5/asset cap).
+    # Skipped on dry_run so prompt evals and smoke tests don't burn
+    # extraction credits — dry_run already skips the Stage 10 persist; it
+    # should also skip extraction side effects for symmetry.
+    if not dry_run:
+        _ensure_facts_extracted_for_asset(asset_id)
     # CLI-style invocation: no orchestrator_runs row, kill switch off by
     # default (operator already chose to spawn this run). Pass
     # hard_kill_usd via env var ORCH_HARD_KILL_USD to opt in.
@@ -463,6 +524,11 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         if config_overrides.get("ensemble_mode") in {"streaming", "batch"}:
             ensemble_mode = config_overrides["ensemble_mode"]
         try:
+            # Lazy fact extraction before synthesis. Failures here propagate to
+            # the except below and mark the run failed — same handling as a
+            # synthesis-stage failure, which is what we want when credits /
+            # quotas dry up.
+            _ensure_facts_extracted_for_asset(asset_id)
             aid = run_one(
                 sb, a_client,
                 asset_id=asset_id,
@@ -712,7 +778,14 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 def tier2_bulk_enqueue(asset_ids: list) -> Dict[str, Any]:
     """Phase 4B: enqueue Tier-2 scheduled bulk runs. Thin wrapper around
     `orchestrator_runtime.tier2.enqueue_tier2_bulk` — see that function for
-    the full contract."""
+    the full contract.
+
+    Tier-2 deliberately does NOT trigger lazy fact extraction (unlike the
+    Tier-1 paths). `enqueue_tier2_bulk` builds the input blob synchronously
+    here and returns it for Cowork to cache, so any fire-and-forget
+    extraction spawn would race the blob build and lose. Tier-2 reads the
+    facts that already exist; Tier-1's lazy hook (orchestrator_run_one +
+    orchestrator_drain_queue) populates them over time."""
     from modal_workers.shared.supabase_client import SupabaseClient
     from orchestrator_runtime.tier2 import enqueue_tier2_bulk
 
@@ -893,14 +966,32 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         return {"spawned": True, "function_call_id": handle.object_id}
 
     if action == "fact_extractor_run":
-        # Fire-and-forget spawn of the Sonnet fact_extractor over material
-        # asset_documents links. Fired by pg_cron job `v3-fact-extractor`
-        # (hourly at :20).
+        # Fire-and-forget spawn of the Sonnet fact_extractor for ONE asset.
+        # The hourly v3-fact-extractor cron was unscheduled 2026-05-11 — this
+        # path is now operator-only (manual one-shot for an asset that needs
+        # re-extraction). Blanket-mode invocation (`args` without asset_id)
+        # is rejected to prevent accidental resurrection of the old spend
+        # pattern.
+        asset_id = args.get("asset_id")
+        if not asset_id or not isinstance(asset_id, str):
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "fact_extractor_run requires args.asset_id (string). "
+                        "Blanket-mode extraction was retired with the "
+                        "v3-fact-extractor cron on 2026-05-11; use Tier-1 "
+                        "lazy extraction (orchestrator_run_one / "
+                        "orchestrator_drain_queue) for routine fact freshness."
+                    ),
+                },
+            )
         fn = modal.Function.from_name(
             "conan-v3-orchestrator", "fact_extractor_run",
         )
-        kwargs: Dict[str, Any] = {}
-        for k in ("asset_id", "max_links", "budget_usd"):
+        kwargs: Dict[str, Any] = {"asset_id": asset_id}
+        for k in ("max_links", "budget_usd"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
@@ -916,6 +1007,8 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
 
     sb = SupabaseClient()
     if action == "tier2_bulk_enqueue":
+        # Tier-2 reads existing facts only — see tier2_bulk_enqueue() docstring
+        # for why fire-and-forget extraction spawns would race the blob build.
         return enqueue_tier2_bulk(sb, args["asset_ids"])
     if action == "tier2_complete":
         return complete_tier2_run(
