@@ -717,7 +717,21 @@ def main(argv: List[str] | None = None) -> int:
         else:
             final_status = "completed"
         _finish_fact_extractor_run_row(sb, run_id, final_status, stats)
-    return 1 if crashed else 0
+    if crashed:
+        return 1
+    # rc=3 signals systemic exhaustion: we had work to do, every attempt
+    # failed, and nothing landed. Distinguishes credits-out / quota-out from
+    # the benign "nothing to extract" case (docs_seen==0 → rc=0) and from
+    # partial success (some errors, some inserts → rc=0). The lazy hook in
+    # orchestrator_app uses this to fail loud instead of letting Sonnet
+    # synthesis proceed against zero new facts.
+    if (stats.docs_seen > 0
+            and stats.facts_inserted == 0
+            and stats.errors >= stats.docs_seen):
+        logger.error("Extractor exhausted: %d/%d docs errored, 0 facts inserted",
+                     stats.errors, stats.docs_seen)
+        return 3
+    return 0
 
 
 if __name__ == "__main__":
