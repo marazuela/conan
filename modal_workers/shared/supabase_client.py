@@ -342,7 +342,7 @@ class SupabaseClient:
         except ValueError:
             return None
 
-    def reap_orphan_runs(self, max_age_seconds: int = 1200) -> List[Dict[str, Any]]:
+    def reap_orphan_runs(self, max_age_seconds: int = 1500) -> List[Dict[str, Any]]:
         """Sweep `scanner_runs` where status='running' AND started_at is older than
         `max_age_seconds`. Flip them to status='timeout' with an errors note.
 
