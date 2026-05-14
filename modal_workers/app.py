@@ -578,6 +578,26 @@ def fda_adcomm_pdufa_once() -> dict:
     return _run_fetcher("fda_adcomm_pdufa", days_back=7)
 
 
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def fed_register_adcom_once() -> dict:
+    """Federal Register FDA AdComm meeting notices → fda_regulatory_events
+    (event_type='adcom', event_status='pending'). Lookup-only asset resolution
+    via fda_assets.sponsor_name / entities.name; emits no events for sponsors
+    absent from the curated fda_assets set. 30-day look-back captures notices
+    typically published 30–90d before meeting date."""
+    return _run_fetcher("fed_register_adcom", days_back=30)
+
+
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def edgar_8k_pdufa_once() -> dict:
+    """EDGAR 8-K filings with PDUFA-date phrases → fda_regulatory_events
+    (event_type='pdufa', event_status='pending', event_date=NULL).
+    Lookup-only asset resolution via entity_identifiers (CIK) + fda_assets.ticker
+    fallback. Requires SEC_USER_AGENT from scanner-secrets. event_date refinement
+    is deferred to the medical specialist via fda_agent_reviews."""
+    return _run_fetcher("edgar_8k_pdufa", days_back=14)
+
+
 # sec_8k_mna fetcher removed 2026-05-13 as part of v3-only adoption (FDA-only
 # strategic pivot). merger_arb was the last non-FDA scoring profile still
 # operational; deprecating its only producing scanner (sec_8k_mna) eliminates
@@ -659,7 +679,7 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa"],
+    13: ["fda_adcomm_pdufa", "fed_register_adcom", "edgar_8k_pdufa"],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top
