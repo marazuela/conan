@@ -54,6 +54,7 @@ class Hypothesis:
     supporting_fact_ids: List[str] = field(default_factory=list)
     contradicting_fact_ids: List[str] = field(default_factory=list)
     kill_conditions: List[str] = field(default_factory=list)
+    deliver_conditions: List[str] = field(default_factory=list)
     prior_estimate_pct: int = 50
     # D-118: pre-anchor prior preserved for observability + A/B
     prior_estimate_pct_pre_anchor: Optional[int] = None
@@ -94,12 +95,20 @@ Every claim is grounded with [F:<fact_id_short>] for facts or \
 you cannot cite, omit the clause.** Citations must use the 8-char short id \
 exactly as it appears in the structured fact layer.
 
-For every hypothesis you list `kill_conditions`: specific facts or events \
-that, if observed, would falsify the hypothesis. A hypothesis without named \
-kill conditions is invalid — emit at least 2 plain-text kill conditions per \
-hypothesis. They are events ("AdComm votes against approval"), specific \
-data ("Phase 3 pCR rate < 35%"), or filings ("FDA issues CRL"), not generic \
-risks.
+For every hypothesis you list `kill_conditions` AND `deliver_conditions`: \
+specific facts or events that, if observed, would respectively falsify or \
+confirm the hypothesis. A hypothesis without named kill_conditions is \
+invalid — emit at least 2 plain-text kill conditions per hypothesis. They \
+are events ("AdComm votes against approval"), specific data ("Phase 3 pCR \
+rate < 35%"), or filings ("FDA issues CRL"), not generic risks.
+
+`deliver_conditions` are the symmetric counterpart: specific events or data \
+that would confirm the hypothesis's upside (FDA approval letter, deal-close \
+8-K, Phase 3 met primary endpoint). The aging loop watches both lists — \
+when an extracted_fact matches a kill_condition the asset moves toward \
+kill, when it matches a deliver_condition the asset moves toward deliver. \
+Emit at least 1 deliver_condition per hypothesis when an upside path \
+exists; empty list is acceptable only for pure-downside bear hypotheses.
 
 Surface contradictions. If two facts conflict (e.g. one trial positive, one \
 trial negative), route them into bull and bear hypotheses respectively rather \
@@ -118,6 +127,7 @@ Output ONLY a JSON object — no commentary, no markdown fences:
       "supporting_fact_ids": ["<8-char fact_id_short>", ...],
       "contradicting_fact_ids": ["<8-char fact_id_short>", ...],
       "kill_conditions": ["<event/data/filing that would falsify>", ...],
+      "deliver_conditions": ["<event/data/filing that would confirm>", ...],
       "prior_estimate_pct": <int 0-100>
     },
     ...
@@ -133,6 +143,8 @@ be exact (Stage 4 reference-class anchoring will renormalize).
 - supporting_fact_ids / contradicting_fact_ids: 8-char short ids, no [F:] \
 prefix in the JSON arrays themselves.
 - kill_conditions: 2+ items per hypothesis, plain text.
+- deliver_conditions: 1+ items per hypothesis when an upside path exists \
+(bull/base hypotheses usually have ≥1; pure bear may emit []).
 - mechanism citations use [F:abc12345] notation inline, exactly as in the \
 upstream cited prose.
 
@@ -238,6 +250,23 @@ def _validate_and_parse_hypotheses(
                        f"({len(kill_conditions)}); strict-sourcing requires 2+.",
                 affected_id=str(h.get("hypothesis_id") or f"H{idx+1}")))
 
+        deliver_conditions = h.get("deliver_conditions") or []
+        if not isinstance(deliver_conditions, list):
+            deliver_conditions = []
+        deliver_conditions = [
+            str(k).strip() for k in deliver_conditions if str(k).strip()
+        ]
+        # Soft signal: bull/base hypotheses should have ≥1 deliver_condition.
+        # Empty list permissible for pure-bear hypotheses. Emit a warning
+        # rather than error so old fixtures continue to parse.
+        if not deliver_conditions and label in ("bull", "base"):
+            findings.append(HypothesisFinding(
+                severity="warning", check="missing_deliver_conditions",
+                detail=f"hypothesis[{idx}] label={label!r} has no "
+                       f"deliver_conditions; aging Stage B will only be "
+                       f"able to trigger kill, not deliver.",
+                affected_id=str(h.get("hypothesis_id") or f"H{idx+1}")))
+
         supporting = [s for s in (h.get("supporting_fact_ids") or [])
                       if isinstance(s, str)]
         contradicting = [s for s in (h.get("contradicting_fact_ids") or [])
@@ -275,6 +304,7 @@ def _validate_and_parse_hypotheses(
             supporting_fact_ids=supporting,
             contradicting_fact_ids=contradicting,
             kill_conditions=kill_conditions,
+            deliver_conditions=deliver_conditions,
             prior_estimate_pct=prior,
             prior_estimate_pct_pre_anchor=prior,  # snapshot before renormalize
         ))

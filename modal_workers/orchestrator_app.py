@@ -392,6 +392,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     completed = 0
     failed = 0
     killed_budget = 0
+    skipped_prior_failure = 0
 
     for run_row in pending:
         run_id = run_row["id"]
@@ -407,6 +408,42 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 "started_at": datetime.now(timezone.utc).isoformat(),
             },
         )
+
+        # v3 §8a prior-failure guard. Block dispatch when the asset has an
+        # open kill verdict in the last 24h with challenger=kill AND
+        # aging_extensions.routine_declined='true'. The flag clears on next
+        # passing Stage B promotion. Operator can override via
+        # trigger_type='operator_refresh' (skips the SQL gate by design).
+        if trigger != "operator_refresh":
+            try:
+                guard = sb._rest(
+                    "POST", "rpc/v3_prior_failure_guard",
+                    json_body={"p_asset_id": asset_id},
+                )
+                allow = bool(guard) if isinstance(guard, bool) else (
+                    bool(guard[0]) if isinstance(guard, list) and guard else True
+                )
+            except Exception:
+                # Guard failures must never block drain progression. Telemetry
+                # would catch this via the RPC error log; we proceed as if
+                # the guard had returned True (allow).
+                allow = True
+            if not allow:
+                sb._rest(
+                    "PATCH", "orchestrator_runs",
+                    params={"id": f"eq.{run_id}"},
+                    json_body={
+                        "status": "skipped_dedupe",
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "notes": {
+                            "skip_reason": "prior_failure_guard",
+                            "guard": "v3_prior_failure_guard",
+                        },
+                    },
+                )
+                skipped_prior_failure += 1
+                drained += 1
+                continue
 
         a_client = OrchestratorClient()
         try:
@@ -487,6 +524,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         "completed": completed,
         "failed": failed,
         "killed_budget": killed_budget,
+        "skipped_prior_failure": skipped_prior_failure,
     }
 
 
@@ -664,6 +702,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "asset_linker_run",
     "asset_linker_pass2_run",
     "fact_extractor_run",
+    "aging_bulk_enqueue",
 })
 
 
@@ -797,6 +836,56 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
     if action == "tier2_fail":
         return fail_tier2_run(sb, args["run_id"], args.get("error_message", ""))
+    if action == "aging_bulk_enqueue":
+        # Cowork-only path: return up to N kill_pending watch=1-2 assets that
+        # haven't been Stage-B-evaluated today. NO orchestrator_runs writes —
+        # the fda_aging_review Cowork skill consumes this list directly,
+        # writes verdicts to fda_aging_verdicts (stage='b_claude_review').
+        # Quota gate (10/UTC-day) is also enforced server-side here so the
+        # caller can't request more than today's remaining budget.
+        from datetime import datetime, timezone
+        max_assets = int(args.get("max_assets", 10))
+        max_assets = max(0, min(max_assets, 10))
+        today_count_rows = sb._rest(
+            "GET", "fda_aging_verdicts",
+            params={
+                "select": "id",
+                "stage": "eq.b_claude_review",
+                "created_at": "gte." + datetime.now(timezone.utc).date().isoformat(),
+                "limit": "11",
+            },
+        ) or []
+        remaining = max(0, 10 - len(today_count_rows))
+        cap = min(max_assets, remaining)
+        if cap == 0:
+            return {
+                "assets": [],
+                "remaining_quota": 0,
+                "today_count": len(today_count_rows),
+            }
+        rows = sb._rest(
+            "GET", "fda_assets",
+            params={
+                "select": "id,ticker,drug_name,indication,watch_priority,"
+                          "aging_state,next_catalyst_date,aging_extensions,"
+                          "last_aging_evaluated_at",
+                "is_active": "eq.true",
+                "aging_state": "eq.kill_pending",
+                "watch_priority": "in.(1,2)",
+                "or": (
+                    "(last_aging_evaluated_at.is.null,"
+                    f"last_aging_evaluated_at.lt."
+                    f"{datetime.now(timezone.utc).date().isoformat()})"
+                ),
+                "order": "next_catalyst_date.asc.nullsfirst",
+                "limit": str(cap),
+            },
+        ) or []
+        return {
+            "assets": rows,
+            "remaining_quota": remaining,
+            "today_count": len(today_count_rows),
+        }
     # ic_memo_run
     return run_ic_memo(
         sb,

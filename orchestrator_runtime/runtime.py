@@ -806,6 +806,7 @@ def stage_10_persist(
                 "claim": h.claim,
                 "direction": h.direction,
                 "kill_conditions": h.kill_conditions,
+                "deliver_conditions": h.deliver_conditions,
                 "prior_estimate_pct": h.prior_estimate_pct,
             }
             for h in hypothesis_result.hypotheses
@@ -955,6 +956,7 @@ def stage_10_persist(
                     "supporting_fact_ids": supporting_uuids,
                     "contradicting_fact_ids": contradicting_uuids,
                     "kill_conditions": h.kill_conditions,
+                    "deliver_conditions": h.deliver_conditions,
                     "prior_estimate_pct": h.prior_estimate_pct,
                     "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
                 },
@@ -982,6 +984,7 @@ def stage_10_persist(
                     "failure_modes": failure_modes_jsonb,
                     "disconfirming_searches": v.disconfirming_searches,
                     "update_triggers": v.update_triggers,
+                    "is_declined": v.is_declined,
                 },
                 prefer="return=minimal",
             )

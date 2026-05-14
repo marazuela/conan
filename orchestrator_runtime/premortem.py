@@ -60,6 +60,12 @@ class HypothesisVerdict:
     failure_modes: List[FailureMode] = field(default_factory=list)
     disconfirming_searches: List[str] = field(default_factory=list)
     update_triggers: List[str] = field(default_factory=list)
+    # v2 thesis_challenger semantic intent layer. Optional input field
+    # `challenger_verdict` ∈ {confirm, challenge, kill, decline}. Maps onto
+    # verdict (confirm→survives, challenge→weakened, kill→falsified) with
+    # `decline` carrying the v2 "this signal doesn't support a real thesis"
+    # semantics via is_declined flag (verdict left at failure-modes rollup).
+    is_declined: bool = False
 
 
 @dataclass
@@ -101,6 +107,15 @@ hypothesis remains live for committee.
   - 'falsified': at least one kill-severity failure mode is confirmed by \
 cited evidence (not speculative).
 
+Additionally, you MAY emit a `challenger_verdict` field per hypothesis with \
+the v2 thesis_challenger semantic intent: confirm | challenge | kill | \
+decline. The first three are aliases for survives | weakened | falsified \
+and should agree with the verdict you derived from failure_modes. Reserve \
+`decline` for the case where the hypothesis itself doesn't engage with a \
+real thesis — widely-watched event with no named edge, hallucinated \
+catalyst, cosmetic kill_conditions only. `decline` is sparingly used and \
+does NOT cap conviction; it flags the asset for operator review.
+
 Also emit:
   - disconfirming_searches: short list of queries / data we'd want to look up \
 to test this hypothesis ("phase 3 SUSTAIN-1 hepatic AE rate", "FDA AdComm \
@@ -124,6 +139,7 @@ Output ONLY a JSON object — no commentary, no markdown fences:
     {
       "hypothesis_id": "H1",
       "verdict": "survives",
+      "challenger_verdict": "confirm | challenge | kill | decline",
       "failure_modes": [
         {"description": "<sentence>", "severity": "weaken|kill|tail",
          "evidence_fact_ids": ["abc12345"], "speculative": false},
@@ -136,7 +152,11 @@ Output ONLY a JSON object — no commentary, no markdown fences:
   ],
   "overall_verdict": "all_survive | partial | all_falsified",
   "surviving_hypothesis_ids": ["H1", "H3"]
-}"""
+}
+
+`challenger_verdict` is optional; if omitted, it's derived from `verdict` \
+via confirm=survives, challenge=weakened, kill=falsified. Emit `decline` \
+only when the hypothesis itself is structurally unsupported."""
 
 
 def _serialize_hypothesis(h: Hypothesis) -> str:
@@ -267,12 +287,30 @@ def _validate_and_parse_verdicts(
         triggers = [str(s).strip() for s in (v.get("update_triggers") or [])
                     if isinstance(s, str) and str(s).strip()]
 
+        # v2 thesis_challenger semantic-intent layer. confirm/challenge/kill
+        # are aliases for the verdict we already derived (survives/weakened/
+        # falsified). `decline` is sparingly used — flag is_declined and leave
+        # verdict at the failure-modes rollup so the Stage 9 cap logic still
+        # runs as if the hypothesis had a normal verdict.
+        challenger_verdict = str(v.get("challenger_verdict") or "").strip().lower()
+        is_declined = (challenger_verdict == "decline")
+        if challenger_verdict and challenger_verdict not in (
+            "confirm", "challenge", "kill", "decline"
+        ):
+            findings.append(PreMortemFinding(
+                severity="warning", check="invalid_challenger_verdict",
+                detail=f"verdicts[{idx}] challenger_verdict="
+                       f"{challenger_verdict!r} not in "
+                       f"{{confirm,challenge,kill,decline}}; ignored.",
+                affected_id=hyp_id))
+
         verdicts.append(HypothesisVerdict(
             hypothesis_id=hyp_id,
             verdict=verdict,
             failure_modes=failure_modes,
             disconfirming_searches=disconfirming,
             update_triggers=triggers,
+            is_declined=is_declined,
         ))
         seen_ids.add(hyp_id)
 
