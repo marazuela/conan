@@ -43,6 +43,7 @@ import {
   type GroupSignal,
   signalFingerprint,
 } from "../_shared/convergence.ts";
+import { formatError, formatErrorForDlq } from "../_shared/errors.ts";
 import {
   classifyProvisionalHeuristic,
   flattenPersistedDimensions,
@@ -196,13 +197,13 @@ Deno.serve(async (req: Request) => {
         headers: { "content-type": "application/json" },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const info = formatError(err);
       await sb.from("failed_reactor_events").insert({
         signal_id: null,
         payload: payload as unknown as Record<string, unknown>,
-        error_message: `[asset_documents] ${message}`,
+        error_message: `[asset_documents] ${formatErrorForDlq(err)}`,
       });
-      return new Response(JSON.stringify({ error: message }), {
+      return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
         status: 500,
         headers: { "content-type": "application/json" },
       });
@@ -257,13 +258,13 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     // DLQ the event so Supabase's webhook retry + our own inspection both work.
-    const message = err instanceof Error ? err.message : String(err);
+    const info = formatError(err);
     await sb.from("failed_reactor_events").insert({
       signal_id: sig?.signal_id ?? null,
       payload: payload as unknown as Record<string, unknown>,
-      error_message: message,
+      error_message: formatErrorForDlq(err),
     });
-    return new Response(JSON.stringify({ error: message }), {
+    return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
       status: 500,
       headers: { "content-type": "application/json" },
     });

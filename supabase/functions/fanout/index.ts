@@ -39,6 +39,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { deliveryRowFor } from "./deliveries.ts";
+import { formatError } from "../_shared/errors.ts";
 
 interface AlertRow {
   id: string;
@@ -205,8 +206,8 @@ Deno.serve(async (req: Request) => {
     }
     return new Response(JSON.stringify({ skipped: "unsupported table" }), { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), {
+    const info = formatError(err);
+    return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
       status: 500, headers: { "content-type": "application/json" },
     });
   }

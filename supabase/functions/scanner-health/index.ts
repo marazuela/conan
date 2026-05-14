@@ -46,6 +46,7 @@ import {
   type OperatorFlagSnapshot,
   type ScannerRunSnapshot,
 } from "./state.ts";
+import { formatError } from "../_shared/errors.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -119,8 +120,8 @@ Deno.serve(async (req: Request) => {
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), {
+    const info = formatError(err);
+    return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
       status: 500,
       headers: { "content-type": "application/json" },
     });
