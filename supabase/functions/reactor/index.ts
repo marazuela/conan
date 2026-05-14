@@ -481,9 +481,17 @@ async function processSignal(sig: SignalRow) {
   // Stamping the loser with bonus=0 + raw score/band parity keeps it in the
   // canonical group with no convergence boost. score_with_bonus / band_with_bonus
   // mirror raw score/band so the row is no longer picked up by the orphan filter.
+  //
+  // The OR on band_with_bonus heals legacy orphans from before commit 0fa72da:
+  // back then clearDisplacedWinners set score_with_bonus + band_with_bonus to
+  // NULL, leaving displaced rows in an orphan-filter state forever. Those rows
+  // already have the correct convergence_key set (so the first predicate
+  // doesn't fire), but their band_with_bonus is still NULL. Including the
+  // band_with_bonus null check stamps them on first sweeper replay.
   if (
     sig.signal_id !== winnerRow.signal_id &&
-    (sig.convergence_key ?? null) !== convergence_key
+    ((sig.convergence_key ?? null) !== convergence_key ||
+      (sig.band_with_bonus ?? null) === null)
   ) {
     await stampRow(sig.signal_id, convergence_key, 0, sig.score!, sig.band!);
   }
