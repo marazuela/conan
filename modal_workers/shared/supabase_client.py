@@ -212,9 +212,15 @@ class SupabaseClient:
             if row.get("name") and row.get("status")
         }
 
+    # Runnable statuses for the dispatcher — kept in sync with
+    # modal_workers/app._ALLOWED_DISPATCH_STATUSES. `shadow` and
+    # `shadow_with_emit` are lifecycle stages of operational scanners (the
+    # scanner decides internally whether to emit signals).
+    _RUNNABLE_STATUS_IN = '("operational","active","shadow","shadow_with_emit")'
+
     def load_operational_daily_names_for_hour(self, hour_utc: int,
                                               null_default_hour: int = 13) -> List[str]:
-        """Names of `cadence='daily'` scanners operational right now and scheduled
+        """Names of `cadence='daily'` scanners in a runnable status and scheduled
         for `hour_utc`. Rows with NULL `scheduled_hour_utc` route to `null_default_hour`
         so a newly-registered scanner still fires once a day without manual timing.
 
@@ -228,7 +234,7 @@ class SupabaseClient:
             "scanners",
             params={
                 "cadence": "eq.daily",
-                "status": "eq.operational",
+                "status": f"in.{self._RUNNABLE_STATUS_IN}",
                 "scheduled_hour_utc": f"eq.{hour_utc}",
                 "select": "name",
             },
@@ -240,7 +246,7 @@ class SupabaseClient:
                 "scanners",
                 params={
                     "cadence": "eq.daily",
-                    "status": "eq.operational",
+                    "status": f"in.{self._RUNNABLE_STATUS_IN}",
                     "scheduled_hour_utc": "is.null",
                     "select": "name",
                 },
@@ -249,16 +255,17 @@ class SupabaseClient:
         return sorted(set(names))
 
     def load_operational_names_by_cadence(self, cadence: str) -> List[str]:
-        """Names of operational scanners with the given cadence. Used by the 3h
-        and weekly dispatchers (daily uses load_operational_daily_names_for_hour
-        because it routes by scheduled_hour_utc).
+        """Names of scanners in a runnable status with the given cadence. Used
+        by the 3h and weekly dispatchers (daily uses
+        load_operational_daily_names_for_hour because it routes by
+        scheduled_hour_utc).
         """
         rows = self._rest(
             "GET",
             "scanners",
             params={
                 "cadence": f"eq.{cadence}",
-                "status": "eq.operational",
+                "status": f"in.{self._RUNNABLE_STATUS_IN}",
                 "select": "name",
             },
         ) or []
