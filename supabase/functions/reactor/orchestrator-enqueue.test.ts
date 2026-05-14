@@ -5,7 +5,10 @@
 // orchestrator_drain_queue Modal function consumes. If this drifts, the
 // drainer breaks; lock it here.
 
-import { buildOrchestratorRunInsert } from "./orchestrator-enqueue.ts";
+import {
+  buildOrchestratorRunInsert,
+  CONTENT_DEDUP_BYPASS_TRIGGERS,
+} from "./orchestrator-enqueue.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -16,20 +19,52 @@ Deno.test("buildOrchestratorRunInsert produces the canonical pending-row shape",
     asset_id: "00000000-0000-0000-0000-000000000001",
     trigger_type: "new_doc",
     trigger_doc_id: "00000000-0000-0000-0000-000000000002",
+    document_set_hash: "abc123",
   });
   assert(row.asset_id === "00000000-0000-0000-0000-000000000001", "asset_id passes through");
   assert(row.trigger_type === "new_doc", "trigger_type passes through");
   assert(row.trigger_doc_id === "00000000-0000-0000-0000-000000000002", "trigger_doc_id passes through");
   assert(row.status === "pending", "status is always pending");
-  // Row must contain exactly these 4 keys — the dedup index expects this exact
-  // (asset_id, trigger_type, trigger_doc_id) trio plus status='pending' for the
-  // partial-unique predicate. Extra keys would still insert OK, but adding any
-  // is a contract change that should fail this test loudly.
+  assert(row.document_set_hash === "abc123", "document_set_hash passes through");
+  // Row must contain exactly these 5 keys — the content-dedup index expects
+  // (asset_id, document_set_hash) plus status='pending' for partial-unique
+  // matching on doc-bus triggers. Adding any is a contract change that should
+  // fail this test loudly.
   const keys = Object.keys(row).sort();
   assert(
-    JSON.stringify(keys) === JSON.stringify(["asset_id", "status", "trigger_doc_id", "trigger_type"]),
-    `row keys must be exactly the 4-tuple, got ${keys.join(",")}`,
+    JSON.stringify(keys) === JSON.stringify([
+      "asset_id", "document_set_hash", "status", "trigger_doc_id", "trigger_type",
+    ]),
+    `row keys must be exactly the 5-tuple, got ${keys.join(",")}`,
   );
+});
+
+Deno.test("document_set_hash defaults to null when omitted (legacy callers)", () => {
+  const row = buildOrchestratorRunInsert({
+    asset_id: "55555555-5555-5555-5555-555555555555",
+    trigger_type: "new_doc",
+    trigger_doc_id: "66666666-6666-6666-6666-666666666666",
+  });
+  assert(row.document_set_hash === null, "missing document_set_hash → null");
+});
+
+Deno.test("CONTENT_DEDUP_BYPASS_TRIGGERS covers operator/system triggers", () => {
+  const expected = [
+    "manual", "operator_refresh", "tier2_escalation",
+    "catalyst_proximity", "aging_recheck", "scheduled", "backtest",
+  ];
+  for (const t of expected) {
+    assert(
+      CONTENT_DEDUP_BYPASS_TRIGGERS.has(t),
+      `bypass set must include ${t}`,
+    );
+  }
+  for (const t of ["new_doc", "cross_source", "market_move"]) {
+    assert(
+      !CONTENT_DEDUP_BYPASS_TRIGGERS.has(t),
+      `bypass set must NOT include ${t} (doc-bus triggers are content-deduped)`,
+    );
+  }
 });
 
 Deno.test("cross_source trigger_type is preserved (Tier 1 escalation marker)", () => {
