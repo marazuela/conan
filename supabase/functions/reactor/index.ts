@@ -161,11 +161,26 @@ const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
 });
 
 Deno.serve(async (req: Request) => {
-  // Webhook secret check (if configured). Set via Supabase Dashboard → Edge Functions → Secrets.
-  // Constant-time comparison so an attacker can't byte-by-byte the secret via timing.
+  // Auth gate. Two acceptable callers:
+  //   1. Postgres webhooks (call_reactor / call_reactor_assetdoc) — send
+  //      x-supabase-webhook-secret matching the vault `webhook_secret` value.
+  //   2. dispatch_observability sweeper — sends Authorization: Bearer <service_role>
+  //      because the function is deployed --no-verify-jwt (see memory
+  //      reactor_deploy_no_verify_jwt.md) and the sweeper has no vault access.
+  // Either credential passes; missing both → 401. Constant-time compare on both.
+  //
+  // Outer `if (WEBHOOK_SECRET)` exists ONLY to allow a deploy-before-env-set
+  // transition (env is project-scoped so it activates both fanout and reactor
+  // gates simultaneously). Once WEBHOOK_SECRET is verified set in prod, the
+  // conditional should be removed so the gate becomes mandatory. See F-152
+  // follow-up in audit/findings_2026-05-11_full_stack.md.
   if (WEBHOOK_SECRET) {
-    const got = req.headers.get("x-supabase-webhook-secret") ?? "";
-    if (!timingSafeEqual(got, WEBHOOK_SECRET)) {
+    const headerSecret = req.headers.get("x-supabase-webhook-secret") ?? "";
+    const authz = req.headers.get("authorization") ?? "";
+    const bearerToken = authz.toLowerCase().startsWith("bearer ") ? authz.slice(7) : "";
+    const webhookOk = timingSafeEqual(headerSecret, WEBHOOK_SECRET);
+    const serviceOk = bearerToken !== "" && timingSafeEqual(bearerToken, SERVICE_KEY);
+    if (!webhookOk && !serviceOk) {
       return new Response("unauthorized", { status: 401 });
     }
   }
