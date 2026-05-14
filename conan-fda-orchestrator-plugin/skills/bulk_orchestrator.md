@@ -107,9 +107,15 @@ The harness writes `extensions.escalated_to_tier1=true` on the row and inserts a
 - ✅ `cited_prose_blocks`, `key_facts`, `uncertainties`, `citations`
 - ✅ `reference_class`, `reference_class_base_rate`, `similar_resolved_case_ids`
 - ✅ `evidence_quality`
+- ✅ `gate_status` — **must be `"tier2_skipped"`** (PR-5, 2026-05-14). The
+  Tier-2 path is architecturally exempt from the Stage 7 constitutional check;
+  this column makes the exemption explicit so downstream filters can use
+  `gate_status='pass'` without conflating Tier-2 with Tier-1 mid-flight rows.
 - ❌ `ensemble_*` — null (Tier 2 is single-shot)
 - ❌ `pre_mortem`, `adversarial_challenges` — null (use Tier 1 for adversarial pass)
-- ❌ `constitutional_*` — null
+- ❌ `constitutional_*` — null (the gate truth lives in `gate_status` above;
+     `constitutional_pass` stays NULL to preserve the
+     `TIER2_FORBIDDEN_NON_NULL` contract in `orchestrator_runtime/tier2.py`)
 - ❌ `market_implied_move`, `options_iv` — null (no options sub-agent in Tier 2)
 
 The schema's existing `additionalProperties: false` means missing fields must be explicitly null in the emitted JSON.
