@@ -650,6 +650,12 @@ def reporting_weekly_once() -> dict:
 _DEFAULT_SCANNERS_3H: List[str] = []
 _DEFAULT_SCANNERS_WEEKLY: List[str] = []
 
+# Statuses that authorize a scanner to be spawned by `_dispatch`. Other values
+# in the `scanners.status` CHECK (planned, deprecated, experimental, paused,
+# shadow, shadow_with_emit) all halt dispatch. Updated alongside the
+# scanners.status CHECK in supabase/migrations if new run-states are added.
+_ALLOWED_DISPATCH_STATUSES = frozenset({"operational", "active"})
+
 
 def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], Optional[str]]:
     """Resolve operational scanner names for a cadence from the registry, falling
@@ -726,13 +732,20 @@ def _dispatch(names: List[str]) -> dict:
     spawned = []
     skipped = []
     errors = []
+    # Allowlist + fail-closed: a scanner spawns only when the registry confirms
+    # it is in an allowed dispatch state. Unknown status (lookup miss → None)
+    # also skips, so a stale hardcoded fallback list (e.g. when the registry
+    # GET errored) can't resurrect a deprecated scanner. Prior behavior was
+    # fail-open (`status is not None and status != "operational"`), which let
+    # edgar_filing_monitor keep emitting after v2-teardown set it to
+    # status='deprecated' (F-104).
     for name in names:
         status = statuses.get(name)
-        if status is not None and status != "operational":
+        if status not in _ALLOWED_DISPATCH_STATUSES:
             skipped.append({
                 "scanner": name,
                 "status": status,
-                "reason": f"registry status={status}",
+                "reason": f"registry status={status!r} not in {sorted(_ALLOWED_DISPATCH_STATUSES)}",
             })
             continue
         fn = getattr(me, f"{name}_once", None)
