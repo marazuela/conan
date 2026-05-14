@@ -25,8 +25,8 @@ Scheduled dispatch (post-2026-05-13 FDA-only state):
   - 3h cadence — `fda_signal_bridge`.
   - daily release-time buckets — queried from registry per tick:
       06 UTC  openfda_corpus_ingest
-      13 UTC  fda_adcomm_pdufa (fetcher), fda_pdufa_pipeline, fed_register_adcom,
-              edgar_8k_pdufa, pre_phase3_readout_scanner
+      13 UTC  fda_adcomm_pdufa (fetcher), fed_register_adcom (fetcher),
+              fda_pdufa_pipeline, pre_phase3_readout_scanner
       17 UTC  anthropic_files_backfill
       21 UTC  fda_pdufa_pipeline (secondary slot for late-US CRLs)
 
@@ -35,7 +35,7 @@ Only rows with `status='operational'` fire; paused rows are skipped inside
 no code redeploy needed for timing tweaks.
 
 Secret requirements (populate via `modal secret create scanner-secrets ...`):
-  - SEC_USER_AGENT          — required by fda_pdufa_pipeline, edgar_8k_pdufa.
+  - SEC_USER_AGENT          — required by fda_pdufa_pipeline.
                               Must be a valid contact string.
   - OPENFIGI_API_KEY        — optional; openfigi_resolver falls back to anonymous tier.
 
@@ -578,6 +578,19 @@ def fda_adcomm_pdufa_once() -> dict:
     return _run_fetcher("fda_adcomm_pdufa", days_back=7)
 
 
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def fed_register_adcom_once() -> dict:
+    """Federal Register FDA AdComm meeting notices → catalyst_universe (adcomm).
+
+    Populates the rows that modal_workers/sub_agents/regulatory_history.py's
+    fda_adcomm_upcoming / fda_adcomm_historical MCP tools query against
+    (catalyst_type='adcomm'). Default 30-day publication-date look-back —
+    Federal Register notices typically run 4–6 weeks ahead of the meeting,
+    so a 30d publication window comfortably captures upcoming meetings.
+    Scheduled via dispatch_release_times 13 UTC bucket."""
+    return _run_fetcher("fed_register_adcom", days_back=30)
+
+
 # sec_8k_mna fetcher removed 2026-05-13 as part of v3-only adoption (FDA-only
 # strategic pivot). merger_arb was the last non-FDA scoring profile still
 # operational; deprecating its only producing scanner (sec_8k_mna) eliminates
@@ -659,7 +672,7 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa"],
+    13: ["fda_adcomm_pdufa", "fed_register_adcom"],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top
