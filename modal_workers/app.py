@@ -519,9 +519,10 @@ def fda_pdufa_pipeline_once() -> dict:
 def fda_signal_bridge_once() -> dict:
     # Iterates pending fda_regulatory_events, calls process_event +
     # upsert_feature_snapshot per row. Mode (shadow / shadow_with_emit /
-    # operational) is read from scanners.config.mode at run time. Polygon
-    # providers are best-effort: missing POLYGON_API_KEY leaves market+options
-    # None and degrades to fair_probability-only scoring with Immediate gated off.
+    # operational) is derived from scanners.status at run time — see
+    # STATUS_TO_MODE in fda_signal_bridge.py. Polygon providers are
+    # best-effort: missing POLYGON_API_KEY leaves market+options None and
+    # degrades to fair_probability-only scoring with Immediate gated off.
     return _run("fda_signal_bridge")
 
 @app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
@@ -650,11 +651,16 @@ def reporting_weekly_once() -> dict:
 _DEFAULT_SCANNERS_3H: List[str] = []
 _DEFAULT_SCANNERS_WEEKLY: List[str] = []
 
-# Statuses that authorize a scanner to be spawned by `_dispatch`. Other values
-# in the `scanners.status` CHECK (planned, deprecated, experimental, paused,
-# shadow, shadow_with_emit) all halt dispatch. Updated alongside the
-# scanners.status CHECK in supabase/migrations if new run-states are added.
-_ALLOWED_DISPATCH_STATUSES = frozenset({"operational", "active"})
+# Statuses that authorize a scanner to be spawned by `_dispatch`. `shadow` and
+# `shadow_with_emit` are runnable lifecycle stages (see migration
+# 20260505000020) — the scanner itself decides whether the run emits signals,
+# the dispatcher's only job is to fire it. Remaining `scanners.status` values
+# (planned, deprecated, experimental, paused) all halt dispatch. Updated
+# alongside the scanners.status CHECK in supabase/migrations if new run-states
+# are added.
+_ALLOWED_DISPATCH_STATUSES = frozenset({
+    "operational", "active", "shadow", "shadow_with_emit",
+})
 
 
 def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], Optional[str]]:

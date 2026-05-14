@@ -2,21 +2,27 @@
 FDA signal bridge — turns canonical fda_regulatory_events rows into either
 shadow-only feature snapshots (Phase 3) or live signals + features (post-cutover).
 
-Operating modes (read from public.scanners.config.mode, defaulting to 'shadow'):
+Operating modes are derived from `public.scanners.status` (single source of
+truth). The bridge maps status → write/emit flags via STATUS_TO_MODE:
 
-  shadow            Write shadow_* columns on fda_event_features only. No signals
-                    row emission. Existing binary_catalyst flow continues
-                    untouched. This is the default while the new pipeline is
-                    being calibrated against catalyst_universe ground truth.
+  status='shadow'           → mode=shadow.
+                              Write shadow_* columns on fda_event_features only.
+                              No signals row emission. Default while the new
+                              pipeline is being calibrated against
+                              catalyst_universe ground truth.
 
-  shadow_with_emit  Cutover-interim. Write shadow_* AND canonical score/band on
-                    fda_event_features, plus emit signals rows with
-                    scoring_profile='fda_event'. Used to confirm zero divergence
-                    between feature snapshots and emitted signal rows over a
-                    short window before flipping fully operational.
+  status='shadow_with_emit' → mode=shadow_with_emit.
+                              Cutover-interim. Write shadow_* AND canonical
+                              score/band on fda_event_features, plus emit
+                              signals rows with scoring_profile='fda_event'.
+                              Used to confirm zero divergence between feature
+                              snapshots and emitted signal rows over a short
+                              window before flipping fully operational.
 
-  operational       Write only canonical score/band on fda_event_features and
-                    emit signals rows. Phase 6 final state.
+  status='operational'      → mode=operational.
+                              Write only canonical score/band on
+                              fda_event_features and emit signals rows.
+                              Phase 6 final state.
 
 Two hard gates are enforced before any signal would be considered for emission:
 
@@ -60,6 +66,14 @@ MODE_SHADOW = "shadow"
 MODE_SHADOW_WITH_EMIT = "shadow_with_emit"
 MODE_OPERATIONAL = "operational"
 VALID_MODES = (MODE_SHADOW, MODE_SHADOW_WITH_EMIT, MODE_OPERATIONAL)
+
+# Mapping from scanners.status → bridge mode. Status is the single source of
+# truth for the lifecycle stage; the bridge derives write/emit flags from it.
+STATUS_TO_MODE: Dict[str, str] = {
+    "shadow": MODE_SHADOW,
+    "shadow_with_emit": MODE_SHADOW_WITH_EMIT,
+    "operational": MODE_OPERATIONAL,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +324,7 @@ def _designations_from(asset: Mapping[str, Any], evidence_rows: Sequence[Mapping
 def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circulars
     """Drive the bridge over pending `fda_regulatory_events` rows.
 
-    Mode is read from `cfg.config.mode` and defaults to 'shadow'. Per
+    Mode is derived from `cfg.status` via STATUS_TO_MODE. Per
     write_flags_for_mode:
       - shadow            → upsert shadow_* columns only, no signal emission.
       - shadow_with_emit  → upsert canonical+shadow, emit signals.
@@ -324,17 +338,22 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
     from modal_workers.shared.scanner_base import ScannerResult, Signal
     from modal_workers.shared.supabase_client import EntityHints, SupabaseClient
 
+    # Validate status before any I/O so a misconfigured row fails fast with a
+    # clean error envelope rather than crashing inside the client init.
+    mode = STATUS_TO_MODE.get(cfg.status)
+    if mode is None:
+        return ScannerResult(
+            scanner=NAME, status="error",
+            error=(
+                f"invalid bridge status: {cfg.status!r} "
+                f"(expected one of {sorted(STATUS_TO_MODE)})"
+            ),
+        )
+
     client = SupabaseClient()
     started = time.time()
     soft_budget_s = max(int(cfg.timeout_soft_s or 60), 30)
     deadline = started + soft_budget_s
-
-    mode = (cfg.config or {}).get("mode") or MODE_SHADOW
-    if mode not in VALID_MODES:
-        return ScannerResult(
-            scanner=NAME, status="error",
-            error=f"invalid bridge mode: {mode!r} (expected one of {VALID_MODES})",
-        )
 
     warnings: List[str] = []
     market, options, polygon_warning = _build_polygon_providers()

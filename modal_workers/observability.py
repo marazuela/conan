@@ -223,15 +223,22 @@ def _should_skip_probe(scanner: Dict[str, Any]) -> Optional[str]:
 
 
 def scanner_probe(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
-    """Every 6h at :15: probe each operational scanner's primary endpoint.
+    """Every 6h at :15: probe each runnable scanner's primary endpoint.
     Updates scanners.last_probe_* columns; flags drift via operator_flags.
-    Does NOT auto-repair (v1 behavior explicitly dropped in v2 spec)."""
+    Does NOT auto-repair (v1 behavior explicitly dropped in v2 spec).
+
+    Runnable scope mirrors the dispatcher (_ALLOWED_DISPATCH_STATUSES) —
+    shadow and shadow_with_emit scanners are part of the live fleet and must
+    get probe coverage even though they don't emit signals."""
     client = client or SupabaseClient()
     summary: Dict[str, Any] = {"function": "scanner_probe", "results": [], "skipped": []}
 
     scanners = client._rest(
         "GET", "scanners",
-        params={"select": "id,name,endpoints,config,last_run_status", "status": "eq.operational"},
+        params={
+            "select": "id,name,endpoints,config,last_run_status",
+            "status": 'in.("operational","shadow","shadow_with_emit")',
+        },
     ) or []
 
     for sc in scanners:
@@ -267,6 +274,29 @@ def scanner_probe(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
         primary = endpoints.get("primary") or endpoints.get("endpoint_primary")
         fallbacks = endpoints.get("fallbacks") or []
         if not primary:
+            # Endpoints jsonb exists but neither `primary` nor `endpoint_primary`
+            # is set (e.g. the FDA signal bridge stores provider URLs under
+            # named keys). Treat as a skip rather than silently dropping the
+            # row — record the evaluation and surface the gap so an operator
+            # can either add a `primary` key or document a probe_skip_reason.
+            reason = "no_primary_endpoint"
+            summary["skipped"].append({"scanner": sc_name, "reason": reason})
+            client._rest(
+                "PATCH", "scanners",
+                params={"id": f"eq.{sc_id}"},
+                json_body={
+                    "last_probe_at": datetime.now(timezone.utc).isoformat(),
+                    "last_probe_status": None,
+                    "last_probe_latency_ms": None,
+                },
+            )
+            _resolve_flag(
+                client,
+                source="scanner_probe",
+                kind="endpoint_drift",
+                scanner_id=sc_id,
+                note=f"skipped: {reason}",
+            )
             continue
 
         primary = _substitute_url_template(primary)
