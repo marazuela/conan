@@ -614,8 +614,11 @@ def stage_1_synthesize(
 
     # Stream 3.3: prefer native Citations API content blocks when any document
     # in ctx has been uploaded to Anthropic Files API; falls back to the
-    # text-only user_content otherwise.
-    has_file_ids = any(d.get("anthropic_file_id") for d in docs)
+    # text-only user_content otherwise. _build_stage_1_user_content_blocks
+    # handles mixed mode (some docs uploaded, others not) via fallback_doc_parts.
+    n_docs_native = sum(1 for d in docs if d.get("anthropic_file_id"))
+    n_docs_text_fallback = len(docs) - n_docs_native
+    has_file_ids = n_docs_native > 0
     user_payload: Any = (
         _build_stage_1_user_content_blocks(ctx) if has_file_ids else user_content
     )
@@ -637,7 +640,16 @@ def stage_1_synthesize(
             cache_creation_tokens=result.cache_creation_tokens,
             cost_usd=result.cost_usd,
             latency_ms=result.latency_ms,
-            notes={"n_facts": len(facts), "n_docs": len(docs)},
+            notes={
+                "n_facts": len(facts),
+                "n_docs": len(docs),
+                # Files API / Citations API adoption telemetry — post-launch we
+                # want to see n_docs_native rise and n_docs_text_fallback fall
+                # as the backfill drains. Also confirms mixed-mode requests
+                # don't silently regress to text-only.
+                "n_docs_native": n_docs_native,
+                "n_docs_text_fallback": n_docs_text_fallback,
+            },
         )
         return result.text, metric
 
@@ -766,6 +778,7 @@ def _stage_1_synthesize_with_dispatch(
         logger.warning("Stage 1 hit SUB_AGENT_LOOP_MAX_TURNS=%d without end_turn",
                        SUB_AGENT_LOOP_MAX_TURNS)
 
+    n_docs_native_d = sum(1 for d in ctx["documents"] if d.get("anthropic_file_id"))
     metric = StageMetric(
         stage_name="stage_1_synthesis",
         model=model,
@@ -779,6 +792,9 @@ def _stage_1_synthesize_with_dispatch(
         notes={
             "n_facts": len(ctx["facts"]),
             "n_docs": len(ctx["documents"]),
+            # Files API / Citations API adoption telemetry (dispatch variant).
+            "n_docs_native": n_docs_native_d,
+            "n_docs_text_fallback": len(ctx["documents"]) - n_docs_native_d,
             "sub_agent_dispatches": dispatch_log,
             "loop_turns": turn + 1,
         },

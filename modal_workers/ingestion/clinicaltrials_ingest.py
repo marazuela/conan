@@ -245,6 +245,7 @@ def _ingest_study(study: Dict[str, Any], writer: DocumentWriter) -> "_IngestOutc
             url=f"https://clinicaltrials.gov/study/{nct_id}",
             title=title,
             is_pdf=False,
+            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001

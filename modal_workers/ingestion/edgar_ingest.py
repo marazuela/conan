@@ -265,6 +265,7 @@ def _ingest_one_hit(hit: dict, writer: DocumentWriter, user_agent: str) -> _Inge
             url=archives_url,
             title=title,
             is_pdf=False,
+            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001

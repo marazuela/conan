@@ -64,6 +64,7 @@ image = (
         "requests>=2.31",
         "yfinance>=0.2",          # market_snapshot, edgar_filing_monitor, price_tracker
         "reportlab>=4.0",         # reporting_weekly (PDF render)
+        "anthropic>=0.40",        # anthropic_files_backfill_once (Files API uploads)
     )
     .add_local_python_source("modal_workers")
 )
@@ -72,7 +73,9 @@ image = (
 scanner_secrets = modal.Secret.from_name("scanner-secrets")       # SEC_USER_AGENT, OPENFIGI_API_KEY, COURTLISTENER_TOKEN, OPENDART_KEY
 supabase_secrets = modal.Secret.from_name("supabase-secrets")     # SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUTE_SECRET — shared with Supabase internal_config.compute_secret
-# anthropic-secrets intentionally NOT referenced here. thesis_writer + candidate_aging
+anthropic_secrets = modal.Secret.from_name("anthropic-orchestrator")  # ANTHROPIC_API_KEY — needed by anthropic_files_backfill_once for Files API uploads
+# anthropic-secrets is referenced only by anthropic_files_backfill_once below.
+# thesis_writer + candidate_aging
 # run as Claude skills via Cowork scheduled tasks, not as Modal functions.
 
 
@@ -563,6 +566,24 @@ def openfda_corpus_ingest_deep() -> dict:
     import os
     os.environ["OPENFDA_INGEST_MODE"] = "deep"
     return _run("openfda_corpus_ingest")
+
+
+# --- Anthropic Files API backfill (signal-less; daily 04 UTC) -----------------
+
+@app.function(
+    image=image,
+    timeout=1200,
+    secrets=[scanner_secrets, supabase_secrets, anthropic_secrets],
+)
+def anthropic_files_backfill_once() -> dict:
+    # Registry-driven via dispatch_release_times: scanners.scheduled_hour_utc=17
+    # routes this to the 17 UTC bucket (lightest; shares with congressional_trading).
+    # The scanner drains documents with anthropic_file_id IS NULL into the
+    # Anthropic Files API (gated by MIN_UPLOAD_BYTES + per-day cap + 24h
+    # notional-cost hard halt). timeout=1200s sized for the 500-row daily cap
+    # × ~2s per upload. Requires the anthropic-orchestrator secret so
+    # DocumentWriter sees ANTHROPIC_API_KEY at runtime.
+    return _run("anthropic_files_backfill")
 
 
 # ==========================================================================
