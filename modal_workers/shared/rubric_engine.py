@@ -436,11 +436,7 @@ def apply_auto_caps(
         raw = signal.get("raw_data", {}) or {}
         universe_resolved = bool(raw.get("universe_resolved"))
         nos = str(raw.get("nos") or raw.get("nature_of_suit") or "")
-        signal_category = str(raw.get("signal_category") or "")
-        high_priority = (
-            nos in ("850", "410")
-            or signal_category == "delaware_chancery"
-        )
+        high_priority = nos in ("850", "410")
         if (not universe_resolved) and (not high_priority):
             if band in ("immediate", "watchlist"):
                 band = "archive"
