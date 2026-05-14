@@ -162,6 +162,23 @@ Deno.serve(async (req: Request) => {
       const evt = payload.record;
       const newState = (evt.payload as Record<string, string> | null)?.to;
 
+      // Email gate: thesis_writer "honest decline" path writes a candidate_events
+      // row so operators see the flagged candidate on /candidates, but tags the
+      // payload with routine_declined so fanout must NOT page anyone. Per
+      // thesis_writer.md §"Email gating" (line 659) and audit F-121
+      // (audit/findings_2026-05-11_full_stack.md). Permissive type check: the
+      // skill writes JSON boolean true; the parallel SQL filter on
+      // candidates.extensions->>'routine_declined' uses string 'true' (D-001
+      // watch→active rule). Gate at the candidate_events branch entry so this
+      // also covers the killed/delivered email path below.
+      const rd = (evt.payload as Record<string, unknown> | null)?.routine_declined;
+      if (rd === true || rd === "true") {
+        return new Response(
+          JSON.stringify({ skipped: "routine_declined" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
       // Email path B: pre-edge promotion (thesis_writer → candidate row created).
       if (evt.event_type === "created" || evt.event_type === "thesis_drafted_by_claude") {
         const out = await dispatchPreEdgePromotion(evt);
