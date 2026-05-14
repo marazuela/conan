@@ -48,6 +48,13 @@ VALID_CATALYST_TYPES = frozenset({
     "litigation_verdict",
     "take_private_announce", "take_private_close",
     "phase3_readout",
+    # 2026-05-14: added for fed_register_adcom fetcher (FDA Advisory Committee
+    # meeting notices from the Federal Register). Mirrors the catalyst_type
+    # value that modal_workers/sub_agents/regulatory_history.py already
+    # queries against via the fda_adcomm_upcoming / fda_adcomm_historical
+    # MCP tools. Companion DB CHECK extension lives in the migration
+    # supabase/migrations/20260527010000_catalyst_universe_adcomm_enum.sql.
+    "adcomm",
 })
 
 VALID_MATERIAL_OUTCOMES = frozenset({"yes", "no", "unclear"})

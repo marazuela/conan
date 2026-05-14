@@ -437,7 +437,20 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
     sponsor_class = sponsor_mod.get("class", "")  # INDUSTRY, NIH, etc.
     conditions = conditions_mod.get("conditions", []) or []
     enrollment = (design.get("enrollmentInfo") or {}).get("count")
-    interventions = _extract_drug_interventions(arms_mod.get("interventions") or [])
+    raw_interventions = arms_mod.get("interventions") or []
+    interventions = _extract_drug_interventions(raw_interventions)
+    # Preserve the unfiltered intervention list (placebos, devices, behavioral
+    # arms, etc.) so downstream consumers can apply their own filtering — e.g.
+    # distinguish placebo-controlled from open-label, or surface combination
+    # therapy arms that _extract_drug_interventions drops by type.
+    interventions_all = [
+        {
+            "name": (iv.get("name") or "").strip(),
+            "type": (iv.get("type") or "").strip().upper(),
+        }
+        for iv in raw_interventions
+        if (iv.get("name") or "").strip()
+    ]
 
     # Indication + base-rate from Supabase table
     base_key, matched_indications = _map_conditions_to_base_key(conditions)
@@ -485,6 +498,7 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
         "enrollment": enrollment,
         "conditions": conditions,
         "interventions": interventions,
+        "interventions_all": interventions_all,
         "primary_outcomes": primary_outcomes[:3],
         "base_rate_key": base_key,
         "base_rate_approval": approval_prob,
@@ -572,6 +586,13 @@ def _build_signal(
 
     source_url = f"https://clinicaltrials.gov/study/{nct}" if nct else None
 
+    # Lead drug — first non-placebo, non-comparator DRUG-type intervention.
+    # Surfaced as a top-level raw_payload field so scoring, TAM modelling, and
+    # competitive-landscape downstream consumers can key off a single drug name
+    # instead of collapsing every signal into the heuristic-only dimension
+    # vector when raw_payload.lead_drug is NULL.
+    lead_drug = _pick_lead_drug_name(scored.get("interventions", []))
+
     raw_payload: Dict[str, Any] = {
         "nct_id": nct,
         "trial_title": scored["brief_title"],
@@ -584,6 +605,9 @@ def _build_signal(
         "meaningful_enrollment": isinstance(scored["enrollment"], int) and scored["enrollment"] >= 200,
         "conditions": scored["conditions"],
         "interventions": scored.get("interventions", []),
+        "interventions_all": scored.get("interventions_all", []),
+        "lead_drug": lead_drug,
+        "indication_keywords": scored["matched_indications"],
         "primary_outcomes": scored["primary_outcomes"],
         "single_primary_endpoint": len(scored["primary_outcomes"]) == 1,
         "industry_sponsored": scored["sponsor_class"] == "INDUSTRY",
@@ -616,7 +640,6 @@ def _build_signal(
     # so the v3 asset_linker cron can begin ingesting docs for this asset. The
     # trigger only fires when this key is present and the entity has no
     # existing fda_asset; missing/empty fields are a no-op.
-    lead_drug = _pick_lead_drug_name(scored.get("interventions", []))
     if issuer_match is not None and lead_drug:
         raw_payload["auto_seed_fda_asset"] = {
             "ticker": issuer_match.ticker,
@@ -766,6 +789,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     warnings.extend(fetch_warnings)
 
     below_gate = 0
+    skipped_no_drug_intervention = 0
     skipped_already_approved = 0
     skipped_unresolved_entity = 0
     unresolved_sponsors: List[str] = []
@@ -786,6 +810,20 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         if not nct or nct in seen_nct:
             continue
         seen_nct.add(nct)
+
+        # Drop trials with no drug-like intervention left after filtering
+        # placebo / device / behavioral arms. Without a drug, the binary
+        # catalyst rubric has nothing scorable to say and the resulting
+        # signal collapses into the heuristic-only dimension vector. Placed
+        # before the triage gate so it doesn't burn an openFDA Orange Book
+        # lookup on a no-drug trial.
+        if not scored.get("interventions"):
+            skipped_no_drug_intervention += 1
+            warnings.append(
+                f"skipped {nct}: no drug-like intervention "
+                f"(all arms placebo/device/behavioral)"
+            )
+            continue
 
         # Triage gate (v1 parity): >= 3 of 5 patterns AND INDUSTRY sponsor.
         if scored["patterns_hit"] < 3:
@@ -900,6 +938,7 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         fetched_records=len(trials),
         run_metrics={
             "below_gate": below_gate,
+            "skipped_no_drug_intervention": skipped_no_drug_intervention,
             "skipped_already_approved": skipped_already_approved,
             "skipped_unresolved_entity": skipped_unresolved_entity,
         },

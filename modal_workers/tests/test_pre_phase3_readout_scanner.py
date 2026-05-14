@@ -406,6 +406,63 @@ def test_scan_drops_already_approved_emits_novel(monkeypatch, fake_supabase,
     assert any("NCT99990001" in w and "MenQuadfi" in w for w in result.warnings)
 
 
+def test_scan_drops_trials_with_no_drug_intervention(monkeypatch, fake_supabase,
+                                                     stub_issuer_index):
+    """Device-only / all-placebo trials slip through CT.gov's PHASE3 filter but
+    have no drug-like arm after `_extract_drug_interventions`. Without a drug
+    the binary catalyst rubric has nothing scorable to say, so the scanner
+    drops them rather than emit a signal that strands downstream.
+
+    Three trials enter: device-only (DEVICE type), all-placebo (DRUG type but
+    every arm filtered by _INTERVENTION_NOISE), and one valid drug. Only the
+    last emits; the first two are counted in run_metrics."""
+    device_trial = _mk_trial(
+        nct_id="NCT99990010",
+        sponsor="DeviceCo",
+        intervention_name="INTERCEPT Blood System",
+        intervention_type="DEVICE",
+    )
+    placebo_only_trial = _mk_trial(
+        nct_id="NCT99990011",
+        sponsor="PlaceboCorp",
+        intervention_name="Placebo",
+        intervention_type="DRUG",
+    )
+    novel_trial = _mk_trial(
+        nct_id="NCT99990012",
+        sponsor="BioNewCo",
+        intervention_name="BNC-9876",
+    )
+
+    monkeypatch.setattr(
+        scanner, "_fetch_phase3_readout_trials",
+        lambda budget_s, scanner_cache_client=None: (
+            [device_trial, placebo_only_trial, novel_trial], []
+        ),
+    )
+
+    # openFDA: every drug → 404 (novel). Orange Book never matches.
+    def fake_get(*_a, **kw):
+        m = MagicMock()
+        m.status_code = 404
+        m.json.return_value = {}
+        return m
+
+    monkeypatch.setattr(scanner.requests, "get", fake_get)
+
+    cfg = MagicMock()
+    cfg.timeout_soft_s = 60
+    result: ScannerResult = scanner.scan(cfg)
+
+    emitted_ncts = [s.raw_payload["nct_id"] for s in result.signals]
+    assert emitted_ncts == ["NCT99990012"]
+    assert result.run_metrics["skipped_no_drug_intervention"] == 2
+    assert any("NCT99990010" in w and "no drug-like intervention" in w
+               for w in result.warnings)
+    assert any("NCT99990011" in w and "no drug-like intervention" in w
+               for w in result.warnings)
+
+
 def test_scan_does_not_drop_when_orange_book_lookup_fails(monkeypatch, fake_supabase,
                                                           stub_issuer_index):
     """If openFDA is unreachable, fail open: emit the signal with a warning."""
