@@ -1136,6 +1136,145 @@ def edgar_runtime_health(client: Optional[SupabaseClient] = None) -> Dict[str, A
 
 
 # ===========================================================================
+# scanner_liveness_sweep — silent-absence detector for operational scanners
+# ===========================================================================
+#
+# Companion to scanner_failure_streak (consecutive failures) and
+# edgar_runtime_health (EDGAR-specific degradation). This sweep detects what
+# those two miss: scanners with status='operational' that have stopped firing
+# entirely (no scanner_runs rows produced).
+#
+# F-200 motivated this: pre_phase3_readout_scanner missed two consecutive
+# Monday-12-UTC weekly fires (2026-04-27 → 2026-05-11) while
+# takeover_candidate_scanner ran the same weeks, so dispatch_weekly fired but
+# pre_phase3 was excluded for an unidentified reason. Modal log retention
+# (<7d) prevented post-hoc root cause; the only signal would have been
+# scanners.last_run_utc staleness.
+#
+# Threshold: now() - last_run_utc > 2× expected_max_age_s, where
+#   3h     → 10800s
+#   daily  → 86400s
+#   weekly → 604800s
+# 2× gives one full cadence window of slack so a single missed cron tick
+# doesn't page; two consecutive misses do.
+
+_LIVENESS_CADENCE_MAX_AGE_S: Dict[str, int] = {
+    "3h": 10_800,
+    "daily": 86_400,
+    "weekly": 604_800,
+}
+_LIVENESS_STALENESS_MULTIPLIER = 2
+
+
+def _parse_iso_utc(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def scanner_liveness_sweep(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Flag operational+scheduled scanners whose last_run_utc is stale relative
+    to their cadence. Resolves any prior flag once the scanner runs again."""
+    client = client or SupabaseClient()
+    now = datetime.now(timezone.utc)
+    summary: Dict[str, Any] = {
+        "function": "scanner_liveness_sweep",
+        "scanned": 0,
+        "flagged_stale": 0,
+        "flagged_never_ran": 0,
+        "resolved": 0,
+        "skipped_unknown_cadence": 0,
+        "stale_samples": [],
+    }
+
+    rows = client._rest(
+        "GET", "scanners",
+        params={
+            "status": "eq.operational",
+            "cadence": "neq.on_demand",
+            "select": "id,name,cadence,last_run_utc",
+            "order": "name.asc",
+        },
+    ) or []
+    summary["scanned"] = len(rows)
+
+    for row in rows:
+        scanner_id = row["id"]
+        name = row["name"]
+        cadence = row["cadence"]
+        last_run = row.get("last_run_utc")
+
+        max_age_s = _LIVENESS_CADENCE_MAX_AGE_S.get(cadence)
+        if max_age_s is None:
+            summary["skipped_unknown_cadence"] += 1
+            continue
+        threshold_s = _LIVENESS_STALENESS_MULTIPLIER * max_age_s
+
+        if last_run is None:
+            summary["flagged_never_ran"] += 1
+            _upsert_flag(
+                client,
+                severity="warn",
+                source="scanner_liveness",
+                kind="never_ran",
+                scanner_id=scanner_id,
+                title=f"{name} status=operational but has never run",
+                evidence={
+                    "scanner": name,
+                    "cadence": cadence,
+                    "expected_max_age_s": max_age_s,
+                },
+            )
+            continue
+
+        last_run_dt = _parse_iso_utc(last_run)
+        if last_run_dt is None:
+            continue
+        age_s = int((now - last_run_dt).total_seconds())
+
+        if age_s > threshold_s:
+            summary["flagged_stale"] += 1
+            if len(summary["stale_samples"]) < 5:
+                summary["stale_samples"].append({
+                    "scanner": name,
+                    "cadence": cadence,
+                    "last_run_utc": last_run,
+                    "age_s": age_s,
+                    "threshold_s": threshold_s,
+                })
+            _upsert_flag(
+                client,
+                severity="warn",
+                source="scanner_liveness",
+                kind="stale_run",
+                scanner_id=scanner_id,
+                title=f"{name} hasn't run in {age_s // 3600}h (cadence={cadence})",
+                evidence={
+                    "scanner": name,
+                    "cadence": cadence,
+                    "last_run_utc": last_run,
+                    "expected_max_age_s": max_age_s,
+                    "threshold_s": threshold_s,
+                    "age_s": age_s,
+                },
+            )
+        else:
+            for kind in ("stale_run", "never_ran"):
+                summary["resolved"] += _resolve_flag(
+                    client,
+                    source="scanner_liveness",
+                    kind=kind,
+                    scanner_id=scanner_id,
+                    note=f"auto-resolved: {name} ran {age_s // 3600}h ago",
+                )
+
+    return summary
+
+
+# ===========================================================================
 # 7.6.5 precision_auditor (Phase 1d) — v2 (bulk-insert normalization)
 # ===========================================================================
 #

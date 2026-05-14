@@ -476,17 +476,74 @@ def _run(scanner_name: str) -> dict:
 def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
     """Runner for catalyst_universe fetchers (modal_workers/fetchers/universe/*).
 
-    Fetchers don't use scanner_base/scanner_runs — they write directly to
-    catalyst_universe. Contract: `fetch(client, *, start_date, end_date) -> dict`.
+    Contract: `fetch(client, *, start_date, end_date) -> dict` returning at least
+    `fetched`, `upserted`, `errors`, and (post-F-214) `partial_reasons`.
+
+    If the fetcher is registered in `public.scanners`, opens/closes a
+    `scanner_runs` row so a non-empty `partial_reasons` surfaces via the same
+    dashboards + reaper as scanner partials. Falls back to a bare fetch when the
+    row isn't there yet so the code can land before the registration migration.
     """
-    from datetime import date, timedelta
+    import os
+    from datetime import date, datetime, timedelta, timezone
     from importlib import import_module
-    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError
 
     mod = import_module(f"modal_workers.fetchers.universe.{fetcher_module}")
     end = date.today()
     start = end - timedelta(days=days_back)
-    return mod.fetch(SupabaseClient(), start_date=start, end_date=end)
+    client = SupabaseClient()
+
+    try:
+        cfg = client.load_scanner_config(fetcher_module)
+    except SupabaseError:
+        return mod.fetch(client, start_date=start, end_date=end)
+
+    modal_inv = os.environ.get("MODAL_TASK_ID")
+    run_id = client.open_scanner_run(cfg.scanner_id, modal_invocation_id=modal_inv)
+    try:
+        result = mod.fetch(client, start_date=start, end_date=end)
+    except Exception as e:
+        client.close_scanner_run(
+            run_id, status="error", signals_emitted=0,
+            errors=[{"type": type(e).__name__, "message": str(e)[:400]}],
+        )
+        try:
+            client.update_scanner_last_run(
+                cfg.scanner_id,
+                last_run_utc=datetime.now(timezone.utc).isoformat(),
+                last_run_status="error", last_run_signals=0,
+            )
+        except SupabaseError:
+            pass
+        raise
+
+    partial_reasons = result.get("partial_reasons") or []
+    final_status = "partial" if partial_reasons else "ok"
+    errors_payload = list(result.get("errors") or [])
+    if partial_reasons:
+        errors_payload.append({
+            "partial_reasons": partial_reasons,
+            "pages_attempted": result.get("pages_attempted"),
+            "pages_failed": result.get("pages_failed"),
+        })
+    client.close_scanner_run(
+        run_id,
+        status=final_status,
+        signals_emitted=result.get("upserted", 0),
+        fetched_records=result.get("fetched", 0),
+        errors=errors_payload,
+    )
+    try:
+        client.update_scanner_last_run(
+            cfg.scanner_id,
+            last_run_utc=datetime.now(timezone.utc).isoformat(),
+            last_run_status=final_status,
+            last_run_signals=result.get("upserted", 0),
+        )
+    except SupabaseError:
+        pass  # last_run_* is observability-only; don't fail the run
+    return result
 
 
 # ==========================================================================
@@ -870,8 +927,8 @@ def dispatch_observability() -> dict:
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     from modal_workers.observability import (
         convergence_qa, edgar_runtime_health, orphan_convergence_sweeper,
-        precision_auditor, provisional_convergence_audit, scanner_probe, thesis_jobs_sla_sweeper,
-        timing_auditor,
+        precision_auditor, provisional_convergence_audit, scanner_liveness_sweep,
+        scanner_probe, thesis_jobs_sla_sweeper, timing_auditor,
     )
     from modal_workers.pre_edge_monitor import pre_edge_monitor
     now = datetime.now(timezone.utc)
@@ -891,6 +948,16 @@ def dispatch_observability() -> dict:
         results["ran"].append("edgar_runtime_health")
     except Exception as e:
         results["edgar_runtime_health_error"] = str(e)
+
+    # Always: silent-absence detector for operational+scheduled scanners
+    # (F-204). Flags any scanner whose last_run_utc exceeds 2× cadence period,
+    # catching the failure mode F-200 hit (two consecutive missed weekly fires
+    # with no other observability signal).
+    try:
+        results["scanner_liveness_sweep"] = scanner_liveness_sweep()
+        results["ran"].append("scanner_liveness_sweep")
+    except Exception as e:
+        results["scanner_liveness_sweep_error"] = str(e)
 
     # Always: heal signals dropped by webhook burst (idempotent reactor replay).
     try:
