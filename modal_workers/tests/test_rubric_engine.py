@@ -382,14 +382,6 @@ class TestLitigationUniverseMissCap:
         assert band == "immediate"
         assert caps == []
 
-    def test_chancery_category_exempt(self):
-        band, caps = self._call({
-            "universe_resolved": False,
-            "signal_category": "delaware_chancery",
-        })
-        assert band == "immediate"
-        assert caps == []
-
     def test_universe_resolved_not_capped(self):
         band, caps = self._call({"universe_resolved": True, "nos": "830"})
         assert band == "immediate"

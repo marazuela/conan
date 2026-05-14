@@ -1,10 +1,9 @@
 """Extract a corporate party name from a court-case caption.
 
-Used by courtlistener_scanner and delaware_chancery_scanner to pass a CLEAN
-company name to `entity_hints.name` rather than the full caption. Passing the
-full caption (e.g., "People of the State of California v. REV Group Inc")
-creates junk entities that never resolve to FIGI/ticker — see the 2026-04-23
-log review.
+Used by courtlistener_scanner to pass a CLEAN company name to
+`entity_hints.name` rather than the full caption. Passing the full caption
+(e.g., "People of the State of California v. REV Group Inc") creates junk
+entities that never resolve to FIGI/ticker — see the 2026-04-23 log review.
 
 Two outputs:
   name        str   — the extracted corporate party, or "" if extraction failed
