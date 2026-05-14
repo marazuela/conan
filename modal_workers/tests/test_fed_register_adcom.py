@@ -1,274 +1,232 @@
-"""Tests for the fed_register_adcom fetcher.
+"""Tests for fed_register_adcom fetcher.
 
-The fetcher is a thin wrapper around fda_advisory_calendar.fetch_advisory_committee_meetings.
-We mock that helper directly with controlled Meeting fixtures, then assert
-on the mapped catalyst_universe rows we asked upsert_catalyst_universe_row
-to write.
-
-Why this fetcher exists: regulatory_history.py's MCP tools query
-catalyst_universe WHERE catalyst_type='adcomm' and got zero rows before
-this producer landed. See migration
-supabase/migrations/20260527010000_catalyst_universe_adcomm_enum.sql.
+Pure-Python: HTTP session and SupabaseClient are stubbed via monkeypatch
+fixtures. Asserts the title/date/sponsor extraction invariants and the
+end-to-end fetch envelope shape on canned Federal Register responses.
 """
+
 from __future__ import annotations
 
-from datetime import date, timedelta
-from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from datetime import date
+from typing import Any, Dict, List, Optional
 
 import pytest
 
-from modal_workers.fetchers.universe import fed_register_adcom as mod
-from modal_workers.shared.fda_advisory_calendar import Meeting
+from modal_workers.fetchers.universe import fed_register_adcom as M
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Title filter
 # ---------------------------------------------------------------------------
 
-def _mk_meeting(
-    *,
-    meeting_date: str | None = "2026-06-15",
-    publication_date: str = "2026-05-01",
-    committee: str | None = "ODAC",
-    title: str = "Notice of meeting",
-    abstract: str = "Meeting on June 15, 2026 to discuss XYZ.",
-    drug_candidates: List[str] | None = None,
-    source_url: str = "https://www.federalregister.gov/d/2026-99999",
-) -> Meeting:
-    return Meeting(
-        publication_date=publication_date,
-        meeting_date=meeting_date,
-        title=title,
-        abstract=abstract,
-        committee=committee,
-        source_url=source_url,
-        drug_candidates=drug_candidates or [],
-    )
+@pytest.mark.parametrize("title,expected", [
+    ("Cardiovascular and Renal Drugs Advisory Committee; Notice of Meeting", True),
+    ("Vaccines and Related Biological Products Advisory Committee; Notice of Meeting", True),
+    ("Advisory Committee; Blood Products Advisory Committee; Renewal", False),
+    ("Anesthetic and Analgesic Drug Products Advisory Committee; Renewal", False),
+    ("Establishment of a Public Docket; Request for Comments", False),
+    ("ChemoCentryx, Inc.; Proposal To Withdraw Approval of New Drug Application", False),
+    # "Establishment of a Public Docket" is FDA's standard pattern for the
+    # comment docket attached to a meeting notice; not a committee establishment.
+    # Should pass the title filter; sponsor / asset gates handle precision.
+    ("Pharmacy Compounding Advisory Committee; Notice of Meeting; Establishment of a Public Docket", True),
+])
+def test_is_meeting_notice(title, expected):
+    assert M._is_meeting_notice(title) is expected
 
 
-class _UpsertRecorder:
-    """Captures every upsert_catalyst_universe_row call so tests can
-    assert on the rows the fetcher would write. Replaces the real helper
-    via monkeypatch."""
+# ---------------------------------------------------------------------------
+# Meeting-date extraction from the free-text 'dates' field
+# ---------------------------------------------------------------------------
 
-    def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
+@pytest.mark.parametrize("dates_text,expected", [
+    ("The meeting will be held on July 23, 2026, from 8:00 a.m. to 4:30 p.m. Eastern Time.",
+     "2026-07-23"),
+    ("The meeting will be held on May 28, 2026, from 8:30 a.m. to 4:30 p.m.",
+     "2026-05-28"),
+    ("Meeting: October 1, 2026", "2026-10-01"),
+    ("Date: November 15, 2026 ... Day 2 November 16, 2026", "2026-11-15"),
+    ("", None),
+    ("Comments due by June 30, 2026", None),  # no meeting/date keyword preceding
+])
+def test_parse_meeting_date(dates_text, expected):
+    assert M._parse_meeting_date(dates_text) == expected
 
-    def __call__(self, client, **kwargs) -> str:
-        self.calls.append(kwargs)
-        return f"row-{len(self.calls)}"
+
+# ---------------------------------------------------------------------------
+# Sponsor extraction + normalization
+# ---------------------------------------------------------------------------
+
+def test_sponsor_from_title_prefix():
+    doc = {"title": "Acme Therapeutics, Inc.; Notice of Meeting", "abstract": ""}
+    terms = M._sponsor_terms_from_doc(doc)
+    # The exact prefix should be the first candidate
+    assert terms
+    assert terms[0].startswith("Acme")
+
+
+def test_sponsor_from_abstract_when_title_is_panel_only():
+    doc = {
+        "title": "Cardiovascular and Renal Drugs Advisory Committee; Notice of Meeting",
+        "abstract": "The committee will discuss the New Drug Application from Axsome Therapeutics for AXS-05.",
+    }
+    terms = M._sponsor_terms_from_doc(doc)
+    # Abstract sniff should surface a candidate
+    assert any("Axsome" in t for t in terms)
+
+
+def test_sponsor_normalize_strips_corporate_suffixes():
+    assert M._normalize_sponsor("Acme Therapeutics, Inc.") == "Acme"
+    assert M._normalize_sponsor("Axsome Pharmaceuticals LLC") == "Axsome"
+    assert M._normalize_sponsor("Sanofi S.A.") == "Sanofi"
+
+
+# ---------------------------------------------------------------------------
+# Content-hash stability
+# ---------------------------------------------------------------------------
+
+def test_content_hash_is_stable_and_unique():
+    h1 = M._content_hash("2026-08122")
+    h2 = M._content_hash("2026-08122")
+    h3 = M._content_hash("2026-07361")
+    assert h1 == h2
+    assert h1 != h3
+    assert h1.startswith("sha256:")
+    assert len(h1) == len("sha256:") + 64
+
+
+# ---------------------------------------------------------------------------
+# Stubbed SupabaseClient + HTTP session for end-to-end fetch
+# ---------------------------------------------------------------------------
+
+class _StubResponse:
+    def __init__(self, body: Dict[str, Any], status: int = 200):
+        self._body = body
+        self.status = status
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            raise RuntimeError(f"http {self.status}")
+
+    def json(self) -> Dict[str, Any]:
+        return self._body
+
+
+class _StubSession:
+    def __init__(self, pages: List[Dict[str, Any]]):
+        self._pages = pages
+        self._calls = 0
+        self.headers: Dict[str, str] = {}
+
+    def get(self, url, params=None, timeout=None):
+        body = self._pages[self._calls] if self._calls < len(self._pages) else {"results": []}
+        self._calls += 1
+        return _StubResponse(body)
+
+
+class _StubClient:
+    """Fake SupabaseClient.
+
+    Asset resolution succeeds for sponsors whose normalized prefix is in
+    `known_sponsors`. _rest_with_retry records every call for assertion.
+    """
+
+    def __init__(self, known_sponsors: Optional[List[str]] = None):
+        self.known_sponsors = [s.lower() for s in (known_sponsors or [])]
+        self.posted: List[Dict[str, Any]] = []
+
+    def _rest(self, method, path, params=None, **_):
+        if path == "fda_assets":
+            sponsor_filter = (params or {}).get("sponsor_name") or ""
+            for ks in self.known_sponsors:
+                if ks in sponsor_filter.lower():
+                    return [{"id": f"asset-{ks}"}]
+            return []
+        if path == "entities":
+            return []
+        return []
+
+    def _rest_with_retry(self, method, path, json_body=None, prefer=None, **_):
+        # Capture the POST shape; act as if a row was newly inserted
+        # (ignore-duplicates returns the inserted rows; if conflict it'd return []).
+        self.posted.extend(json_body or [])
+        return list(json_body or [])
 
 
 @pytest.fixture
-def fake_client():
-    """Return a MagicMock standing in for SupabaseClient."""
-    return MagicMock()
+def two_doc_response():
+    """Page 1: a sponsor-resolvable notice + a panel-only notice."""
+    return [{
+        "results": [
+            {
+                "title": "Axsome Therapeutics, Inc.; Notice of Meeting",
+                "abstract": "...",
+                "publication_date": "2026-04-15",
+                "document_number": "2026-08001",
+                "html_url": "https://www.federalregister.gov/d/2026-08001",
+                "dates": "The meeting will be held on July 23, 2026, from 8:00 a.m.",
+            },
+            {
+                "title": "Pharmacy Compounding Advisory Committee; Notice of Meeting",
+                "abstract": "General-purpose compounding discussion.",
+                "publication_date": "2026-04-16",
+                "document_number": "2026-07361",
+                "html_url": "https://www.federalregister.gov/d/2026-07361",
+                "dates": "The meeting will be held on August 1, 2026.",
+            },
+        ],
+        "next_page_url": None,
+    }]
 
 
-@pytest.fixture
-def recorder(monkeypatch):
-    """Replace upsert_catalyst_universe_row with a recording stub so
-    fetch() never reaches Supabase. Returns the recorder for assertions."""
-    rec = _UpsertRecorder()
-    monkeypatch.setattr(mod, "upsert_catalyst_universe_row", rec)
-    return rec
-
-
-def _patch_meetings(monkeypatch, meetings: List[Meeting]) -> None:
-    """Monkeypatch fetch_advisory_committee_meetings to return our fixture."""
-    monkeypatch.setattr(
-        mod, "fetch_advisory_committee_meetings",
-        lambda **_kwargs: meetings,
-    )
-
-
-# ---------------------------------------------------------------------------
-# row mapping
-# ---------------------------------------------------------------------------
-
-def test_row_mapping_basic(monkeypatch, fake_client, recorder):
-    """A single notice with a clean meeting_date produces one upserted row
-    with the expected enum values + raw_payload contents."""
-    _patch_meetings(monkeypatch, [_mk_meeting(
-        meeting_date="2026-07-10",
-        publication_date="2026-05-20",
-        committee="CRDAC",
-        title="Notice of CRDAC meeting on Drug-X",
-        abstract="The CRDAC will meet on July 10, 2026.",
-        drug_candidates=["Drug-X"],
-        source_url="https://www.federalregister.gov/d/2026-77777",
-    )])
-
-    result = mod.fetch(
-        fake_client,
-        start_date=date(2026, 4, 21),
-        end_date=date(2026, 5, 21),
-    )
-
-    assert result["fetched"] == 1
-    assert result["upserted"] == 1
-    assert result["skipped"] == 0
-    assert result["errors"] == []
-    assert len(recorder.calls) == 1
-
-    call = recorder.calls[0]
-    assert call["profile"] == "binary_catalyst"
-    assert call["catalyst_type"] == "adcomm"
-    assert call["catalyst_date"] == "2026-07-10"
-    assert call["source_feed"] == "federal_register_adcom"
-    assert call["ticker"] is None
-    assert call["entity_id"] is None
-    assert call["material_outcome"] == "unclear"
-    assert call["source_url"] == "https://www.federalregister.gov/d/2026-77777"
-
-    payload = call["raw_payload"]
-    assert payload["committee"] == "CRDAC"
-    assert payload["drug_candidates"] == ["Drug-X"]
-    assert payload["publication_date"] == "2026-05-20"
-    assert "CRDAC" in payload["title"]
-    assert "July 10, 2026" in payload["abstract"]
-
-
-def test_drug_candidates_passed_through_payload(monkeypatch, fake_client, recorder):
-    """Multiple drug_candidates from the helper land verbatim in raw_payload
-    so a downstream entity_linker pass can read them."""
-    _patch_meetings(monkeypatch, [_mk_meeting(
-        drug_candidates=["Drug-A", "Drug-B", "Drug-C"],
-    )])
-    mod.fetch(fake_client, start_date=date.today() - timedelta(days=30),
-              end_date=date.today())
-    assert recorder.calls[0]["raw_payload"]["drug_candidates"] == [
-        "Drug-A", "Drug-B", "Drug-C",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# date-parse fallthrough
-# ---------------------------------------------------------------------------
-
-def test_notices_without_meeting_date_are_skipped(monkeypatch, fake_client, recorder):
-    """A notice whose abstract has no parseable date is counted as
-    `skipped`, not errored, and never upserted."""
-    _patch_meetings(monkeypatch, [
-        _mk_meeting(meeting_date=None, title="Procedural notice"),
-        _mk_meeting(meeting_date="2026-08-01", title="Real meeting"),
-    ])
-
-    result = mod.fetch(
-        fake_client,
-        start_date=date.today() - timedelta(days=30),
-        end_date=date.today(),
-    )
+def test_fetch_emits_event_for_resolvable_sponsor(monkeypatch, two_doc_response):
+    monkeypatch.setattr(M, "_session", lambda: _StubSession(two_doc_response))
+    client = _StubClient(known_sponsors=["axsome"])
+    result = M.fetch(client, start_date=date(2026, 4, 1), end_date=date(2026, 5, 1))
 
     assert result["fetched"] == 2
     assert result["upserted"] == 1
-    assert result["skipped"] == 1
+    assert result["skipped_no_asset"] == 1
     assert result["errors"] == []
-    # Only the second notice produced an upsert.
-    assert len(recorder.calls) == 1
-    assert recorder.calls[0]["catalyst_date"] == "2026-08-01"
+    # The inserted row must carry the parsed meeting date + adcom event_type
+    assert len(client.posted) == 1
+    row = client.posted[0]
+    assert row["event_type"] == "adcom"
+    assert row["event_status"] == "pending"
+    assert row["event_date"] == "2026-07-23"
+    assert row["asset_id"] == "asset-axsome"
+    assert row["source_content_hash"].startswith("sha256:")
+    assert row["extensions"]["fed_register_document_number"] == "2026-08001"
 
 
-def test_no_parseable_meetings_returns_zero(monkeypatch, fake_client, recorder):
-    """All notices lack meeting_date → fetcher returns clean envelope
-    without raising or recording any upserts."""
-    _patch_meetings(monkeypatch, [
-        _mk_meeting(meeting_date=None),
-        _mk_meeting(meeting_date=None),
-        _mk_meeting(meeting_date=None),
-    ])
-    result = mod.fetch(
-        fake_client,
-        start_date=date.today() - timedelta(days=30),
-        end_date=date.today(),
-    )
-    assert result == {
-        "fetched": 3,
-        "upserted": 0,
-        "skipped": 3,
-        "errors": [],
-        "window": {
-            "start": (date.today() - timedelta(days=30)).isoformat(),
-            "end": date.today().isoformat(),
-        },
-    }
-    assert recorder.calls == []
+def test_fetch_dry_run_makes_no_supabase_writes(monkeypatch, two_doc_response):
+    monkeypatch.setattr(M, "_session", lambda: _StubSession(two_doc_response))
+    client = _StubClient(known_sponsors=["axsome"])
+    result = M.fetch(client, start_date=date(2026, 4, 1), end_date=date(2026, 5, 1), dry_run=True)
+    # Dry-run counts everything past title+date+sponsor_terms gates (asset
+    # resolution is bypassed) — both fixture docs pass, so upserted=2.
+    assert result["upserted"] == 2
+    assert client.posted == []
 
 
-# ---------------------------------------------------------------------------
-# idempotency / dedupe relies on upsert helper. We can't unit-test the
-# DB unique key, but we can assert the call shape is consistent across
-# repeated invocations so the upsert key inputs are stable.
-# ---------------------------------------------------------------------------
-
-def test_dedupe_on_rerun(monkeypatch, fake_client, recorder):
-    """Calling fetch twice with the same Meeting fixtures produces calls
-    with identical dedupe-key fields (source_feed + catalyst_type +
-    ticker + catalyst_date). The DB ON CONFLICT clause makes the second
-    write a no-op idempotently — we just verify the inputs match."""
-    meetings = [_mk_meeting(meeting_date="2026-09-12", source_url="https://x/1"),
-                _mk_meeting(meeting_date="2026-10-04", source_url="https://x/2")]
-    _patch_meetings(monkeypatch, meetings)
-
-    r1 = mod.fetch(fake_client,
-                   start_date=date.today() - timedelta(days=30),
-                   end_date=date.today())
-    r2 = mod.fetch(fake_client,
-                   start_date=date.today() - timedelta(days=30),
-                   end_date=date.today())
-
-    assert r1["upserted"] == r2["upserted"] == 2
-
-    # Same dedupe keys across both runs.
-    def _key(c):
-        return (c["source_feed"], c["catalyst_type"], c.get("ticker"),
-                c["catalyst_date"])
-    keys_run1 = [_key(c) for c in recorder.calls[:2]]
-    keys_run2 = [_key(c) for c in recorder.calls[2:]]
-    assert keys_run1 == keys_run2
-
-
-# ---------------------------------------------------------------------------
-# upstream helper failure handling
-# ---------------------------------------------------------------------------
-
-def test_helper_exception_returns_error_envelope(monkeypatch, fake_client, recorder):
-    """If fetch_advisory_committee_meetings raises (Federal Register down
-    or cache corrupted), the fetcher captures the error at the top level
-    and returns an envelope with no partial writes."""
-    def _boom(**_kw):
-        raise RuntimeError("federal register 503")
-    monkeypatch.setattr(mod, "fetch_advisory_committee_meetings", _boom)
-
-    result = mod.fetch(
-        fake_client,
-        start_date=date.today() - timedelta(days=30),
-        end_date=date.today(),
-    )
-
-    assert result["fetched"] == 0
+def test_renewal_notices_filtered_before_date_parse(monkeypatch):
+    pages = [{
+        "results": [
+            {
+                "title": "Blood Products Advisory Committee; Renewal",
+                "abstract": "",
+                "publication_date": "2026-05-07",
+                "document_number": "2026-09108",
+                "html_url": "https://www.federalregister.gov/d/2026-09108",
+                "dates": "The meeting will be held on June 1, 2026.",
+            },
+        ],
+        "next_page_url": None,
+    }]
+    monkeypatch.setattr(M, "_session", lambda: _StubSession(pages))
+    client = _StubClient(known_sponsors=["any"])
+    result = M.fetch(client, start_date=date(2026, 5, 1), end_date=date(2026, 5, 31))
+    assert result["fetched"] == 1
+    assert result["skipped_not_meeting"] == 1
     assert result["upserted"] == 0
-    assert result["skipped"] == 0
-    assert len(result["errors"]) == 1
-    assert result["errors"][0]["phase"] == "fetch_advisory_committee_meetings"
-    assert "federal register 503" in result["errors"][0]["error"]
-    assert recorder.calls == []
-
-
-# ---------------------------------------------------------------------------
-# dry-run never writes
-# ---------------------------------------------------------------------------
-
-def test_dry_run_does_not_call_upsert(monkeypatch, fake_client, recorder):
-    """dry_run=True counts upserts but never calls the recorder. This
-    matches the existing fda_adcomm_pdufa.py contract."""
-    _patch_meetings(monkeypatch, [_mk_meeting(meeting_date="2026-09-01")])
-    result = mod.fetch(
-        fake_client,
-        start_date=date.today() - timedelta(days=30),
-        end_date=date.today(),
-        dry_run=True,
-    )
-    assert result["upserted"] == 1
-    assert recorder.calls == []
+    assert client.posted == []
