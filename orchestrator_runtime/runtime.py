@@ -161,7 +161,12 @@ CACHEABLE_PREFIX_HEADER = (
 
 # Stage 9 post-hoc cap: when Stage 3 returns all_falsified, conviction_pct
 # is forced to ≤ this ceiling. Plan §"D2: All-falsified handling".
-ALL_FALSIFIED_CONVICTION_CEILING = 30.0
+# Wave 6.1 — env-overridable. Default 30.0 matches the legacy literal.
+# Sane range is [10, 50]; values outside that are clamped at parse time.
+ALL_FALSIFIED_CONVICTION_CEILING = max(
+    0.0,
+    min(100.0, float(os.environ.get("ORCH_ALL_FALSIFIED_CEILING", "30.0"))),
+)
 
 # Per-asset doc-buffer construction caps (keep below Tier-1 rate limit
 # of 30k input tokens/min on the new API key). Env-overridable for A/B
@@ -174,6 +179,20 @@ DOC_EXCERPT_CHARS = int(os.environ.get("ORCH_DOC_EXCERPT_CHARS", "4000"))
 # cached system prefix. Stage 1 sees them so it can ground "what did we
 # previously think?" without a separate tool call.
 MAX_PRIOR_ASSESSMENTS = int(os.environ.get("ORCH_MAX_PRIOR_ASSESSMENTS", "3"))
+
+# Wave 10.2 — IC memo auto-trigger bar. After Stage 10 persists, if the
+# calibrated conviction crosses this AND the band is operator-actionable,
+# we automatically synthesize the IC memo. Set to 0.0 to disable the auto
+# path entirely; set above 100 to force operator-only triggering.
+IC_MEMO_AUTO_CONVICTION_THRESHOLD = max(
+    0.0,
+    min(101.0, float(
+        os.environ.get("ORCH_IC_MEMO_CONVICTION_THRESHOLD", "75.0")
+    )),
+)
+# Bands eligible for auto IC memo. 'archive' and 'discard' never trigger
+# because the operator wouldn't act on those anyway.
+IC_MEMO_AUTO_BANDS = frozenset({"immediate", "watchlist"})
 
 # Wave 1.1 composite ranking — higher = more important; ties break by
 # extraction_confidence DESC, then created_at DESC. The asset_documents
@@ -217,6 +236,11 @@ class AssessmentRun:
     asset_id: str
     trigger_type: str
     trigger_doc_id: Optional[str] = None
+    # Wave 4 deep-fix Phase B.2 — idempotency key passed to persist_assessment_v3.
+    # When set, a retried run resolves to the existing convergence_assessments
+    # row instead of inserting a duplicate. None for ad-hoc CLI runs (which
+    # aren't gated by orchestrator_runs and don't need retry-safety).
+    orchestrator_run_id: Optional[str] = None
     document_window_start: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc) - timedelta(days=180))
     document_window_end: datetime = field(
@@ -385,6 +409,31 @@ def stage_4_anchor(
         exclude_asset_id=asset.get("id"),
     )
     ctx["reference_class_anchor"] = anchor
+
+    # Wave 7 — surface data-quality signals so SQL audits can quantify how
+    # often the anchor is degraded. We deliberately do NOT emit operator_flags
+    # here: today 34/35 active assets have a null reference_class_signature,
+    # so per-assessment flags would be pure noise. The note fields below let
+    # a single dashboard query (FILTER WHERE notes->>'missing_reference_class')
+    # surface the same fact, once.
+    missing_ref_class = not bool(reference_class)
+    n_similar = len(anchor.similar_cases)
+    sparse_similar = (n_similar < 5)   # Wave 7.2
+
+    # Wave 7.3 — base-rate refit staleness. Today there are 0 base_rate rows
+    # so this stays False; once nightly refits populate, an anchor older than
+    # 30 days surfaces as stale on every assessment that uses it.
+    refit_at_iso: Optional[str] = (
+        anchor.base_rate.refit_at if anchor.base_rate else None)
+    refit_stale_30d = False
+    if refit_at_iso:
+        try:
+            refit_dt = datetime.fromisoformat(refit_at_iso.replace("Z", "+00:00"))
+            refit_stale_30d = (datetime.now(timezone.utc) - refit_dt) > timedelta(days=30)
+        except (TypeError, ValueError):
+            # Bad ISO string — treat as stale to force operator attention.
+            refit_stale_30d = True
+
     metric = StageMetric(
         stage_name="stage_4_reference_class_anchor",
         model="deterministic",
@@ -392,11 +441,16 @@ def stage_4_anchor(
         notes={
             "reference_class": reference_class,
             "has_base_rate": anchor.base_rate is not None,
-            "n_similar_cases": len(anchor.similar_cases),
+            "n_similar_cases": n_similar,
             "n_cases_in_class": (anchor.base_rate.n_cases
                                  if anchor.base_rate else None),
             "approval_rate_pct": (round(anchor.base_rate.as_pct(), 2)
                                   if anchor.base_rate else None),
+            # Wave 7 telemetry
+            "missing_reference_class": missing_ref_class,
+            "sparse_similar_cases": sparse_similar,
+            "refit_at": refit_at_iso,
+            "refit_stale_30d": refit_stale_30d,
         },
     )
     return anchor, metric
@@ -627,7 +681,23 @@ def _stage_1_synthesize_with_dispatch(
     dispatch_log: List[Dict[str, Any]] = []
     final_text = ""
 
-    for turn in range(SUB_AGENT_LOOP_MAX_TURNS):
+    # Wave 9.1 — config_overrides["sub_agent_max_turns"] lets an operator-refresh
+    # (or future per-asset config) raise/lower the dispatch loop ceiling without
+    # a redeploy. Coerced to int, clamped to [1, 16] to keep accidental typos
+    # from running away.
+    cfg = ctx.get("config_overrides") or {}
+    try:
+        max_turns = int(cfg.get("sub_agent_max_turns", SUB_AGENT_LOOP_MAX_TURNS))
+    except (TypeError, ValueError):
+        max_turns = SUB_AGENT_LOOP_MAX_TURNS
+    max_turns = max(1, min(16, max_turns))
+    if max_turns != SUB_AGENT_LOOP_MAX_TURNS:
+        logger.info(
+            "Stage 1 sub-agent loop: max_turns=%d (overridden from default %d)",
+            max_turns, SUB_AGENT_LOOP_MAX_TURNS,
+        )
+
+    for turn in range(max_turns):
         result = a_client.call(
             system=system_blocks,
             messages=messages,
@@ -751,11 +821,24 @@ Rules:
 - Output ONLY the JSON object — no markdown fences, no commentary"""
 
 
+STAGE_9_RETRY_REMINDER = (
+    "\n\n## IMPORTANT — RETRY\n\n"
+    "Your previous response was not valid JSON. Emit ONLY a JSON object "
+    "matching the schema above. Do not include markdown fences, prose "
+    "commentary, or any text outside the JSON braces. Start with `{` and "
+    "end with `}`."
+)
+
+
 def stage_9_extract(
     a_client: OrchestratorClient,
     cited_prose: str,
     model: str,
 ) -> tuple[Optional[Dict[str, Any]], StageMetric]:
+    """Wave 5.1 — one retry on JSON parse failure. The retry call appends an
+    explicit "emit valid JSON" reminder and keeps the same cited prose. Both
+    calls are tallied into the StageMetric so cost accounting is honest.
+    """
     user_content = f"Cited prose to extract:\n\n{cited_prose}"
     result = a_client.call(
         system=STAGE_9_SYSTEM,
@@ -764,18 +847,67 @@ def stage_9_extract(
         max_tokens=8192,
     )
     parsed = parse_json_or_none(result.text)
+
+    # Aggregate counters — start with the first call
+    agg_input = result.input_tokens
+    agg_output = result.output_tokens
+    agg_thinking = result.thinking_tokens
+    agg_cache_read = result.cache_read_tokens
+    agg_cache_create = result.cache_creation_tokens
+    agg_cost = result.cost_usd
+    agg_latency = result.latency_ms
+    n_attempts = 1
+    retry_succeeded = False
+
+    if not parsed:
+        # First-shot parse failed — try once more with an explicit reminder.
+        # Cited prose is unchanged; only the user message gets the reminder
+        # appended. STAGE_9_SYSTEM is unchanged so the cached prefix still
+        # hits.
+        logger.warning(
+            "Stage 9 first-shot JSON parse failed; retrying with explicit "
+            "JSON reminder (output_tokens=%d)",
+            result.output_tokens,
+        )
+        retry_content = user_content + STAGE_9_RETRY_REMINDER
+        retry_result = a_client.call(
+            system=STAGE_9_SYSTEM,
+            messages=[{"role": "user", "content": retry_content}],
+            model=model,
+            max_tokens=8192,
+        )
+        parsed = parse_json_or_none(retry_result.text)
+        agg_input += retry_result.input_tokens
+        agg_output += retry_result.output_tokens
+        agg_thinking += retry_result.thinking_tokens
+        agg_cache_read += retry_result.cache_read_tokens
+        agg_cache_create += retry_result.cache_creation_tokens
+        agg_cost += retry_result.cost_usd
+        agg_latency += retry_result.latency_ms
+        n_attempts = 2
+        retry_succeeded = bool(parsed)
+        logger.info(
+            "Stage 9 retry %s (output_tokens=%d)",
+            "succeeded" if retry_succeeded else "ALSO failed",
+            retry_result.output_tokens,
+        )
+
     metric = StageMetric(
         stage_name="stage_9_extraction",
         model=result.model,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        thinking_tokens=result.thinking_tokens,
-        cache_read_tokens=result.cache_read_tokens,
-        cache_creation_tokens=result.cache_creation_tokens,
-        cost_usd=result.cost_usd,
-        latency_ms=result.latency_ms,
+        input_tokens=agg_input,
+        output_tokens=agg_output,
+        thinking_tokens=agg_thinking,
+        cache_read_tokens=agg_cache_read,
+        cache_creation_tokens=agg_cache_create,
+        cost_usd=agg_cost,
+        latency_ms=agg_latency,
         status="completed" if parsed else "failed",
-        notes={"parsed": bool(parsed)},
+        notes={
+            "parsed": bool(parsed),
+            "n_attempts": n_attempts,
+            "retry_succeeded": retry_succeeded,
+        },
     )
     return parsed, metric
 
@@ -812,27 +944,85 @@ def stage_10_persist(
     short_to_full = {f["id"][:8]: f["id"] for f in ctx["facts"]}
     short_to_full_doc = {d["id"][:8]: d["id"] for d in ctx["documents"]}
 
-    # Hydrate citations in cited_prose_blocks
+    # Wave 5.2 — track unresolved short-ids during hydration. Previously the
+    # `dict.get(s, s)` fallback silently kept the 8-char short id, producing
+    # dangling references in cited_prose_blocks and orphan key_facts.fact_id
+    # entries. Now we drop the citation cleanly and accumulate the short-ids
+    # into stage_10_unhydrated_short_ids for assessment_stage_metrics.notes.
+    unhydrated_fact_shorts: set[str] = set()
+    unhydrated_doc_shorts: set[str] = set()
+
+    def _hydrate_fact(short: str) -> Optional[str]:
+        full = short_to_full.get(short)
+        if full is None:
+            unhydrated_fact_shorts.add(short)
+        return full
+
+    def _hydrate_doc(short: str) -> Optional[str]:
+        full = short_to_full_doc.get(short)
+        if full is None:
+            unhydrated_doc_shorts.add(short)
+        return full
+
+    # Hydrate citations in cited_prose_blocks. Drop unresolved entries cleanly
+    # so downstream consumers don't see 8-char shorts where UUIDs are expected.
     hydrated_blocks = []
     for blk in (parsed.get("cited_prose_blocks") or []):
+        fact_uuids = [
+            uuid for uuid in (_hydrate_fact(s) for s in (blk.get("fact_citations") or []))
+            if uuid is not None
+        ]
+        doc_uuids = [
+            uuid for uuid in (_hydrate_doc(s) for s in (blk.get("doc_citations") or []))
+            if uuid is not None
+        ]
         hydrated_blocks.append({
             "section": blk.get("section"),
             "text": blk.get("text"),
-            "fact_citations": [
-                short_to_full.get(s, s) for s in (blk.get("fact_citations") or [])
-            ],
-            "doc_citations": [
-                short_to_full_doc.get(s, s) for s in (blk.get("doc_citations") or [])
-            ],
+            "fact_citations": fact_uuids,
+            "doc_citations": doc_uuids,
         })
 
     hydrated_key_facts = []
     for kf in (parsed.get("key_facts") or []):
-        short = kf.get("fact_id_short", "")
+        short = kf.get("fact_id_short", "") or ""
+        full = _hydrate_fact(short) if short else None
+        if full is None:
+            # Skip key_facts whose short-id doesn't resolve to a real
+            # extracted_facts row — writing the short string into the
+            # fact_id column would fail FK validation anyway.
+            continue
         hydrated_key_facts.append({
             "text": kf.get("text"),
-            "fact_id": short_to_full.get(short, short),
+            "fact_id": full,
         })
+
+    if unhydrated_fact_shorts or unhydrated_doc_shorts:
+        logger.warning(
+            "Stage 10 hydration: %d unresolved fact shorts, %d unresolved doc "
+            "shorts; citations dropped: facts=%s docs=%s",
+            len(unhydrated_fact_shorts), len(unhydrated_doc_shorts),
+            sorted(unhydrated_fact_shorts), sorted(unhydrated_doc_shorts),
+        )
+
+    # Wave 5.2 — emit a stage_10_hydration metric row so the dropped-citation
+    # signal lands in assessment_stage_metrics where audits can pick it up.
+    # Status="completed" if no drops, "degraded" if any. Tokens/cost 0 (no
+    # LLM call here) but the notes carry the diagnostic shorts.
+    run.stage_metrics.append(StageMetric(
+        stage_name="stage_10_hydration",
+        model="deterministic",
+        status="degraded" if (unhydrated_fact_shorts or unhydrated_doc_shorts)
+                else "completed",
+        notes={
+            "n_unhydrated_fact_shorts": len(unhydrated_fact_shorts),
+            "n_unhydrated_doc_shorts": len(unhydrated_doc_shorts),
+            "unhydrated_fact_shorts": sorted(unhydrated_fact_shorts),
+            "unhydrated_doc_shorts": sorted(unhydrated_doc_shorts),
+            "n_blocks_persisted": len(hydrated_blocks),
+            "n_key_facts_persisted": len(hydrated_key_facts),
+        },
+    ))
 
     conviction = float(parsed.get("conviction_pct") or 50.0)
     conviction = max(0.0, min(100.0, conviction))
@@ -862,15 +1052,39 @@ def stage_10_persist(
     # all_falsified branch no longer mutates parsed["conviction_pct"];
     # instead it sets ctx["conviction_capped_by_premortem"] and stages
     # the raw value on ctx["pre_premortem_conviction"]).
+    #
+    # Wave 8.1 — calibration_status disambiguates "why is curve_version NULL?"
+    # at audit time. Enum: applied | no_active_curve | no_curve_data.
     active_curve = get_active_calibration_curve(sb)
+    calibration_curve_version: Optional[str] = None
     if active_curve and active_curve.get("curve_data"):
         calibrated = apply_isotonic_calibration(
             conviction / 100.0, active_curve["curve_data"]) * 100.0
         calibrated = max(0.0, min(100.0, calibrated))
-        calibration_curve_version: Optional[str] = active_curve.get("version")
+        calibration_curve_version = active_curve.get("version")
+        calibration_status = "applied"
+    elif active_curve:
+        # Row exists but no usable curve_data — degenerate state worth flagging.
+        calibrated = conviction
+        calibration_status = "no_curve_data"
     else:
         calibrated = conviction
-        calibration_curve_version = None
+        calibration_status = "no_active_curve"
+
+    # B4: apply the Stage 3 all_falsified cap AFTER calibration. Capping
+    # before calibration distorted conviction_pct_calibrated for the
+    # all_falsified case: it produced isotonic(min(raw, 30)/100) instead of
+    # the correct min(isotonic(raw/100), 30). The raw value still flows
+    # into raw_conviction_pct via ctx["pre_premortem_conviction"] so the
+    # feedback loop sees the un-capped model output (D-117 invariant).
+    if ctx.get("conviction_capped_by_premortem"):
+        pre_cap_calibrated = calibrated
+        calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
+        if calibrated < pre_cap_calibrated:
+            logger.info(
+                "Stage 10: all_falsified cap applied AFTER calibration "
+                "(%.2f -> %.2f)", pre_cap_calibrated, calibrated,
+            )
 
     # B4: apply the Stage 3 all_falsified cap AFTER calibration. Capping
     # before calibration distorted conviction_pct_calibrated for the
@@ -1004,6 +1218,7 @@ def stage_10_persist(
         "similar_resolved_case_ids": similar_case_ids or None,
         "conviction_pct_calibrated": round(calibrated, 2),
         "calibration_curve_version": calibration_curve_version,
+        "calibration_status": calibration_status,   # Wave 8.1
         "conviction_pct": round(calibrated, 2),
         "evidence_quality": evidence_quality,
         "band": band,
@@ -1016,38 +1231,201 @@ def stage_10_persist(
         "latency_ms": total_latency,
     }
 
-    rows = sb._rest(
-        "POST", "convergence_assessments",
-        json_body=row,
-        prefer="return=representation",
+    # Wave 4 deep-fix Phase B — single atomic RPC. Replaces the prior
+    # "INSERT parent + INSERT secondaries + DELETE-on-failure" two-call dance.
+    # Idempotency: re-driving the same orchestrator_run_id returns the
+    # existing assessment id without inserting a duplicate. Supersedence:
+    # the RPC stamps superseded_at on any prior live assessment for this
+    # asset and writes superseded_by to point back at the new row.
+    secondaries = _build_stage_10_secondaries(
+        run, ctx, parsed, hypothesis_result, premortem_result, short_to_full,
     )
-    if not rows:
-        raise RuntimeError("Failed to insert convergence_assessments row")
-    assessment_id = rows[0]["id"]
 
-    # Per-stage metrics rows
-    for m in run.stage_metrics:
-        sb._rest(
-            "POST", "assessment_stage_metrics",
-            json_body={
-                "assessment_id": assessment_id,
-                "stage_name": m.stage_name,
-                "model": m.model,
-                "input_tokens": m.input_tokens,
-                "output_tokens": m.output_tokens,
-                "thinking_tokens": m.thinking_tokens,
-                "cache_read_tokens": m.cache_read_tokens,
-                "cache_creation_tokens": m.cache_creation_tokens,
-                "cost_usd": round(m.cost_usd, 4),
-                "latency_ms": m.latency_ms,
-                "status": m.status,
-                "notes": m.notes,
-            },
-            prefer="return=minimal",
+    # Wave 4 deep-fix Phase C — catalyst lookup. Done by the caller (not the
+    # pure payload builder) because it requires the sb client. Result stamps
+    # the post_mortem_stub fields the RPC will INSERT.
+    outcome_window_end, catalyst_marker = _resolve_catalyst_window(sb, asset_id)
+    secondaries["post_mortem_stub"]["outcome_window_end"] = (
+        outcome_window_end.isoformat()
+    )
+    secondaries["post_mortem_stub"]["catalyst_resolution_marker"] = catalyst_marker
+
+    rpc_payload = {
+        "payload": {
+            "orchestrator_run_id": run.orchestrator_run_id,
+            "assessment": row,
+            "stage_metrics": secondaries["stage_metrics"],
+            "hypotheses": secondaries["hypotheses"],
+            "premortem_verdicts": secondaries["premortem_verdicts"],
+            "post_mortem_stub": secondaries["post_mortem_stub"],
+        }
+    }
+    rpc_result = sb._rest(
+        "POST", "rpc/persist_assessment_v3",
+        json_body=rpc_payload,
+    )
+    # PostgREST returns the scalar uuid directly. Some clients wrap it in a
+    # list, some return the bare string — handle both shapes defensively.
+    if isinstance(rpc_result, list):
+        rpc_result = rpc_result[0] if rpc_result else None
+    if isinstance(rpc_result, dict):
+        # If PostgREST decides to return a named-column object, the function
+        # signature names the return column 'persist_assessment_v3'.
+        rpc_result = (
+            rpc_result.get("persist_assessment_v3")
+            or rpc_result.get("uuid")
+            or next(iter(rpc_result.values()), None)
         )
+    if not rpc_result:
+        raise RuntimeError(
+            "persist_assessment_v3 returned no assessment id "
+            f"(orchestrator_run_id={run.orchestrator_run_id})"
+        )
+    assessment_id = str(rpc_result)
 
-    # Stage 2: hypothesis_enumeration rows (one per hypothesis). The model
-    # cites by 8-char short id; resolve to full UUIDs for the uuid[] columns.
+    # Wave 4.2 — memory writeback runs OUTSIDE the rollback scope. A storage
+    # failure here MUST NOT delete the parent assessment; the memory blob is
+    # a read optimization, not part of the correctness contract.
+    _write_asset_memory_best_effort(
+        sb,
+        asset_id=asset_id,
+        assessment_id=assessment_id,
+        asset=ctx["asset"],
+        parsed=parsed,
+        cited_prose=cited_prose,
+        calibrated=calibrated,
+        band=band,
+        direction=direction,
+    )
+
+    # Wave 10.3 — supersede the IC memo attached to the prior live assessment
+    # for this asset (if any). The supersedence chain on
+    # convergence_assessments is stamped elsewhere; here we just keep the
+    # memo's `superseded_at` in sync so the dashboard's "live memo" surface
+    # stays accurate without re-walking the parent chain.
+    _supersede_prior_ic_memo_best_effort(
+        sb, asset_id=asset_id, new_assessment_id=assessment_id,
+    )
+
+    # Wave 10.2 — auto-trigger IC memo synthesis on high-conviction
+    # assessments. Today (2026-05-13) the IC memo runner has fired 0 times
+    # in 30d because nothing automatically invokes it. Bar: calibrated
+    # conviction >= ORCH_IC_MEMO_CONVICTION_THRESHOLD AND band in {immediate,
+    # watchlist}. Best-effort: a memo failure is logged but doesn't impact
+    # the assessment's success — the operator can manually re-trigger via
+    # the dashboard.
+    _maybe_trigger_ic_memo_best_effort(
+        sb,
+        assessment_id=assessment_id,
+        calibrated=calibrated,
+        band=band,
+    )
+
+    return assessment_id
+
+
+# Wave 4 deep-fix Phase C — event types eligible for catalyst-resolution marker.
+# Pdufa was the original (Wave 4.3). Expanded here to cover the rest of the
+# FDA-event-driven post-mortem window classes. Order doesn't matter; the SQL
+# ORDER BY event_date.asc.nullslast picks the soonest one regardless.
+CATALYST_EVENT_TYPES = ("pdufa", "advisory_committee", "eop2", "readout")
+
+# Days back from today to consider "just-resolved" events. Without this,
+# a PDUFA that resolved last week would silently fall through to the
+# default_<N>d_fallback even though the catalyst signal is still meaningful.
+CATALYST_LOOKBACK_DAYS = int(
+    os.environ.get("ORCH_CATALYST_LOOKBACK_DAYS", "30")
+)
+
+# Default outcome window when no eligible catalyst event is on file. The +60d
+# default was hardcoded in the original Wave 4.3 path; Phase C makes it env-
+# tunable so different asset types (smol approvals vs ASCO readouts vs AdComm
+# meetings) can be re-windowed without a redeploy.
+DEFAULT_POST_MORTEM_WINDOW_DAYS = int(
+    os.environ.get("ORCH_DEFAULT_POST_MORTEM_WINDOW_DAYS", "60")
+)
+
+
+def _resolve_catalyst_window(
+    sb: SupabaseClient, asset_id: str,
+) -> tuple[datetime, str]:
+    """Wave 4 Phase C.1 — pick the soonest eligible FDA catalyst (pending OR
+    recently-resolved-within-CATALYST_LOOKBACK_DAYS, across all
+    CATALYST_EVENT_TYPES). Returns the (outcome_window_end, marker) pair.
+
+    Marker grammar: ``<event_type>:<event_id>`` for catalyst-anchored windows;
+    ``default_<N>d_fallback`` when nothing matches. The nightly calibration
+    refit uses this string to weight (or exclude) default-window stubs.
+    """
+    lookback_cutoff = (
+        datetime.now(timezone.utc).date() - timedelta(days=CATALYST_LOOKBACK_DAYS)
+    ).isoformat()
+    types_filter = ",".join(CATALYST_EVENT_TYPES)
+    rows = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id,event_date,event_type,event_status",
+            "asset_id": f"eq.{asset_id}",
+            "event_type": f"in.({types_filter})",
+            "event_status": "in.(pending,resolved)",
+            "event_date": f"gte.{lookback_cutoff}",
+            "order": "event_date.asc.nullslast",
+            "limit": "1",
+        },
+    ) or []
+    if rows and rows[0].get("event_date"):
+        evt = rows[0]
+        outcome_window_end = (
+            datetime.fromisoformat(evt["event_date"]).replace(tzinfo=timezone.utc)
+            + timedelta(days=2)
+        )
+        marker = f"{evt['event_type']}:{evt['id']}"
+        return outcome_window_end, marker
+    outcome_window_end = (
+        datetime.now(timezone.utc)
+        + timedelta(days=DEFAULT_POST_MORTEM_WINDOW_DAYS)
+    )
+    marker = f"default_{DEFAULT_POST_MORTEM_WINDOW_DAYS}d_fallback"
+    return outcome_window_end, marker
+
+
+def _build_stage_10_secondaries(
+    run: AssessmentRun,
+    ctx: Dict[str, Any],
+    parsed: Dict[str, Any],
+    hypothesis_result: Optional[HypothesisResult],
+    premortem_result: Optional[PreMortemResult],
+    short_to_full: Dict[str, str],
+) -> Dict[str, Any]:
+    """Wave 4 deep-fix Phase B — pure payload builder for the
+    persist_assessment_v3 RPC. Replaces _stage_10_write_secondaries (which
+    did its own POSTs). Output dict has four arrays + one stub object,
+    matching the RPC's expected payload shape.
+
+    No DB writes happen here. All effectful work is downstream in the RPC.
+    """
+    # Per-stage metrics payload (assessment_id is filled in by the RPC).
+    stage_metrics_payload = [
+        {
+            "stage_name": m.stage_name,
+            "model": m.model,
+            "input_tokens": m.input_tokens,
+            "output_tokens": m.output_tokens,
+            "thinking_tokens": m.thinking_tokens,
+            "cache_read_tokens": m.cache_read_tokens,
+            "cache_creation_tokens": m.cache_creation_tokens,
+            "cost_usd": round(m.cost_usd, 4),
+            "latency_ms": m.latency_ms,
+            "status": m.status,
+            "notes": m.notes,
+        }
+        for m in run.stage_metrics
+    ]
+
+    # Stage 2 hypothesis_enumeration payload. The model cites by 8-char short
+    # id; resolve to full UUIDs for the uuid[] columns. Unresolved shorts get
+    # dropped here (matches the Wave 5.2 cited-prose hydration policy).
+    hypotheses_payload: List[Dict[str, Any]] = []
     if hypothesis_result is not None and hypothesis_result.hypotheses:
         for h in hypothesis_result.hypotheses:
             supporting_uuids = [
@@ -1060,25 +1438,21 @@ def stage_10_persist(
                 for s in h.contradicting_fact_ids
                 if s.lower() in short_to_full
             ]
-            sb._rest(
-                "POST", "hypothesis_enumeration",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": h.hypothesis_id,
-                    "label": h.label,
-                    "claim": h.claim,
-                    "mechanism": h.mechanism,
-                    "direction": h.direction,
-                    "supporting_fact_ids": supporting_uuids,
-                    "contradicting_fact_ids": contradicting_uuids,
-                    "kill_conditions": h.kill_conditions,
-                    "prior_estimate_pct": h.prior_estimate_pct,
-                    "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
-                },
-                prefer="return=minimal",
-            )
+            hypotheses_payload.append({
+                "hypothesis_id": h.hypothesis_id,
+                "label": h.label,
+                "claim": h.claim,
+                "mechanism": h.mechanism,
+                "direction": h.direction,
+                "supporting_fact_ids": supporting_uuids,
+                "contradicting_fact_ids": contradicting_uuids,
+                "kill_conditions": h.kill_conditions,
+                "prior_estimate_pct": h.prior_estimate_pct,
+                "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
+            })
 
-    # Stage 3: premortem_assessments rows (one per hypothesis verdict).
+    # Stage 3 premortem_assessments payload.
+    premortem_payload: List[Dict[str, Any]] = []
     if premortem_result is not None and premortem_result.verdicts:
         for v in premortem_result.verdicts:
             failure_modes_jsonb = [
@@ -1090,68 +1464,74 @@ def stage_10_persist(
                 }
                 for fm in v.failure_modes
             ]
-            sb._rest(
-                "POST", "premortem_assessments",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": v.hypothesis_id,
-                    "verdict": v.verdict,
-                    "failure_modes": failure_modes_jsonb,
-                    "disconfirming_searches": v.disconfirming_searches,
-                    "update_triggers": v.update_triggers,
-                },
-                prefer="return=minimal",
-            )
+            premortem_payload.append({
+                "hypothesis_id": v.hypothesis_id,
+                "verdict": v.verdict,
+                "failure_modes": failure_modes_jsonb,
+                "disconfirming_searches": v.disconfirming_searches,
+                "update_triggers": v.update_triggers,
+            })
 
-    # Post-mortem queue stub — outcome resolves at PDUFA date.
-    # For VRDN MVP, PDUFA is 2026-06-30. We pull from the asset's pending FDA
-    # event row if available; otherwise default to +60d.
-    pdufa_rows = sb._rest(
-        "GET", "fda_regulatory_events",
-        params={
-            "select": "event_date",
-            "asset_id": f"eq.{asset_id}",
-            "event_type": "eq.pdufa",
-            "event_status": "eq.pending",
-            "order": "event_date.asc.nullslast",
-            "limit": "1",
-        },
-    ) or []
-    if pdufa_rows and pdufa_rows[0].get("event_date"):
-        outcome_window_end = (
-            datetime.fromisoformat(pdufa_rows[0]["event_date"]).replace(tzinfo=timezone.utc)
-            + timedelta(days=2)
-        )
-    else:
-        outcome_window_end = datetime.now(timezone.utc) + timedelta(days=60)
+    # Post-mortem queue stub. NOTE: this still does a SELECT against
+    # fda_regulatory_events because the catalyst lookup is purely a read
+    # (no transactional dependency on the parent INSERT). It's safe to run
+    # outside the RPC scope.
+    direction = parsed.get("thesis_direction") or "neutral"
+    if direction not in {"long", "short", "neutral", "straddle"}:
+        direction = "neutral"
+    conviction = float(parsed.get("conviction_pct") or 50.0)
+    conviction = max(0.0, min(100.0, conviction))
+    # Phase C resolves the catalyst window. Done by the caller (which has
+    # the sb client). We build the stub WITHOUT the catalyst lookup here
+    # so this function stays pure; the caller stamps the resolved fields
+    # before passing to the RPC.
+    post_mortem_stub = {
+        "asset_id": run.asset_id,
+        "predicted_outcome": _direction_to_outcome(direction),
+        "predicted_conviction_pct": conviction,
+        "predicted_direction": direction,
+        # Caller fills these from _resolve_catalyst_window():
+        #   "outcome_window_end": <iso>,
+        #   "catalyst_resolution_marker": <text>,
+    }
 
-    sb._rest(
-        "POST", "post_mortem_queue",
-        json_body={
-            "assessment_id": assessment_id,
-            "asset_id": asset_id,
-            "predicted_outcome": _direction_to_outcome(direction),
-            "predicted_conviction_pct": conviction,
-            "predicted_direction": direction,
-            "outcome_window_end": outcome_window_end.isoformat(),
-        },
-        prefer="return=minimal",
-    )
+    return {
+        "stage_metrics": stage_metrics_payload,
+        "hypotheses": hypotheses_payload,
+        "premortem_verdicts": premortem_payload,
+        "post_mortem_stub": post_mortem_stub,
+    }
 
-    # Stream 3.4: write a distilled asset-scope memory blob so the next
-    # assessment of this asset starts with the prior thesis summary in
-    # context. We use the Stage 9 reasoning_summary plus headline metadata —
-    # not the full prose — so the memory file stays compact (<2KB) and the
-    # 1h-TTL system block A doesn't bloat. Best-effort: a write failure does
-    # not block the assessment from returning.
+
+def _write_asset_memory_best_effort(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    assessment_id: str,
+    asset: Dict[str, Any],
+    parsed: Dict[str, Any],
+    cited_prose: str,
+    calibrated: float,
+    band: str,
+    direction: str,
+) -> None:
+    """Wave 4.2 — memory writeback runs OUTSIDE the Wave 4.1 rollback scope.
+
+    A storage write failure must NOT delete the parent assessment (memory
+    blob is a Stage-0 read optimization, not part of the correctness
+    contract). Failures emit a warn operator_flag so a degraded loop becomes
+    operator-discoverable instead of silently rotting.
+
+    D-123 C5: distilled blob = Stage 9 reasoning_summary + headline metadata
+    + recent-assessments append (idempotent on assessment_id, capped at
+    RECENT_ASSESSMENTS_CAP).
+    """
     try:
-        # D-123 C5: read prior memory, then append-merge a new entry into
-        # ## Recent assessments (idempotent on assessment_id, capped at 5).
         store = MemoryStore(sb)
         prior_blobs = store.load_all(asset_id=asset_id)
         prior_text = (prior_blobs.asset or "") if prior_blobs else ""
         memory_summary = _build_asset_memory_summary(
-            asset=ctx["asset"],
+            asset=asset,
             parsed=parsed,
             cited_prose=cited_prose,
             conviction_calibrated=calibrated,
@@ -1160,15 +1540,178 @@ def stage_10_persist(
             assessment_id=assessment_id,
             prior_text=prior_text,
         )
-        store.write(
-            scope="asset",
-            scope_id=asset_id,
-            content=memory_summary,
-        )
+        store.write(scope="asset", scope_id=asset_id, content=memory_summary)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory writeback failed for asset=%s: %s", asset_id, exc)
+        try:
+            sb._rest(
+                "POST", "operator_flags",
+                json_body={
+                    "severity": "warn",
+                    "source": "memory_writeback",
+                    "kind": "asset_memory_write_failed",
+                    "title": (
+                        f"Memory writeback failed for asset {asset_id[:8]}"
+                    ),
+                    "body": str(exc)[:1000],
+                    "evidence": {
+                        "asset_id": asset_id,
+                        "assessment_id": assessment_id,
+                    },
+                },
+            )
+        except Exception as flag_exc:  # noqa: BLE001
+            logger.warning(
+                "memory writeback operator_flag emit failed: %s", flag_exc,
+            )
 
-    return assessment_id
+
+def _supersede_prior_ic_memo_best_effort(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    new_assessment_id: str,
+) -> None:
+    """Wave 10.3 — when a new assessment lands for an asset, mark any
+    not-yet-superseded IC memo that was attached to a prior (now stale)
+    assessment as `superseded_at = now()`.
+
+    The dashboard surfaces this so the operator sees "stale memo — refresh
+    from the live assessment". Pure observability bookkeeping; never
+    mutates the memo contents.
+
+    Best-effort: a stamp failure here is logged but never blocks the
+    parent assessment from returning.
+    """
+    try:
+        # Find any LIVE IC memo (sub_agent_calls.superseded_at IS NULL,
+        # role='ic_memo') whose assessment is on this asset and is NOT the
+        # one we just wrote. One PATCH covers all of them — there should
+        # typically be at most one, but we don't enforce it here.
+        prior_memos = sb._rest(
+            "GET", "sub_agent_calls",
+            params={
+                "select": "id,assessment_id",
+                "role": "eq.ic_memo",
+                "superseded_at": "is.null",
+                "assessment_id": f"neq.{new_assessment_id}",
+            },
+        ) or []
+        if not prior_memos:
+            return
+        # Filter to memos on assessments belonging to THIS asset. We need
+        # the join because sub_agent_calls doesn't carry asset_id directly.
+        prior_ids = [m["assessment_id"] for m in prior_memos]
+        in_filter = ",".join(prior_ids)
+        same_asset_rows = sb._rest(
+            "GET", "convergence_assessments",
+            params={
+                "select": "id",
+                "id": f"in.({in_filter})",
+                "asset_id": f"eq.{asset_id}",
+            },
+        ) or []
+        same_asset_ids = {r["id"] for r in same_asset_rows}
+        targets = [
+            m["id"] for m in prior_memos
+            if m["assessment_id"] in same_asset_ids
+        ]
+        if not targets:
+            return
+        sb._rest(
+            "PATCH", "sub_agent_calls",
+            params={"id": f"in.({','.join(targets)})"},
+            json_body={
+                "superseded_at": datetime.now(timezone.utc).isoformat(),
+            },
+            prefer="return=minimal",
+        )
+        logger.info(
+            "ic_memo: marked %d prior memo(s) superseded for asset %s",
+            len(targets), asset_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "supersede_prior_ic_memo failed for asset=%s: %s", asset_id, exc,
+        )
+
+
+def _maybe_trigger_ic_memo_best_effort(
+    sb: SupabaseClient,
+    *,
+    assessment_id: str,
+    calibrated: float,
+    band: str,
+) -> None:
+    """Wave 10.2 — fire the IC memo synthesis automatically when an
+    assessment is high-conviction AND operator-actionable.
+
+    Bar: `calibrated >= IC_MEMO_AUTO_CONVICTION_THRESHOLD` (env-tunable,
+    default 75) AND `band in IC_MEMO_AUTO_BANDS` ({immediate, watchlist}).
+
+    Synchronous + best-effort. Synchronous because the IC memo cost
+    (~1-3 specialist Sonnet calls) is bounded and the dashboard wants
+    the memo visible alongside the assessment without a separate poll.
+    Best-effort because: (a) IC memo failures should NOT mark the
+    assessment as failed — the assessment is correct, only its memo is
+    missing; (b) operator can always manually re-trigger via the
+    dashboard or `compute_v3 ic_memo_run` endpoint.
+
+    On success, also stamps `convergence_assessments.ic_memo_call_id`
+    so the dashboard `v_assessment_with_ic_memo` view joins cleanly.
+    """
+    if calibrated < IC_MEMO_AUTO_CONVICTION_THRESHOLD:
+        return
+    if band not in IC_MEMO_AUTO_BANDS:
+        return
+
+    # Lazy import to avoid pulling the ic_memo_runner module (which imports
+    # sub_agents.runtime → mcp schemas) into orchestrator_runtime hot path
+    # for assessments that never trigger a memo.
+    try:
+        from orchestrator_runtime.ic_memo_runner import (
+            ICMemoOrchestrationError,
+            run_ic_memo,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ic_memo auto-trigger: failed to import runner (%s); skipping. "
+            "Assessment %s still persists.",
+            exc, assessment_id,
+        )
+        return
+
+    try:
+        logger.info(
+            "ic_memo auto-trigger: assessment=%s conviction=%.1f band=%s",
+            assessment_id, calibrated, band,
+        )
+        result = run_ic_memo(sb, assessment_id, persist=True)
+        sub_agent_call_id = result.get("sub_agent_call_id")
+        if sub_agent_call_id:
+            # Stamp the FK on the parent assessment row.
+            sb._rest(
+                "PATCH", "convergence_assessments",
+                params={"id": f"eq.{assessment_id}"},
+                json_body={"ic_memo_call_id": sub_agent_call_id},
+                prefer="return=minimal",
+            )
+            logger.info(
+                "ic_memo auto-trigger: persisted call_id=%s cost=$%.3f",
+                sub_agent_call_id, result.get("cost_usd", 0.0),
+            )
+    except ICMemoOrchestrationError as exc:
+        # Expected failure mode: assessment has 0 specialists (e.g. cold
+        # start, sub-agent dispatch disabled). Don't escalate; log + move on.
+        logger.info(
+            "ic_memo auto-trigger: skipped (%s) for assessment %s",
+            exc, assessment_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ic_memo auto-trigger: failed for assessment %s: %s",
+            assessment_id, exc,
+        )
 
 
 RECENT_ASSESSMENTS_CAP = 5
@@ -1518,7 +2061,8 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             dry_run: bool = False,
             run_id: Optional[str] = None,
             hard_kill_usd: Optional[float] = 15.0,
-            parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
+            parsed_out: Optional[Dict[str, Any]] = None,
+            config_overrides: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Build one convergence_assessments row.
 
     run_id + hard_kill_usd activate the per-run cost ceiling (Stream 6
@@ -1541,7 +2085,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             sb, a_client, asset_id, trigger_type, model, extractor_model,
             ensemble_n, ensemble_mode, run_constitutional,
             constitutional_skip_semantic, enable_premortem, dry_run,
-            parsed_out,
+            parsed_out, config_overrides, run_id=run_id,
         )
     finally:
         if hard_kill_usd is not None:
@@ -1556,11 +2100,21 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    constitutional_skip_semantic: bool,
                    enable_premortem: bool,
                    dry_run: bool,
-                   parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
+                   parsed_out: Optional[Dict[str, Any]] = None,
+                   config_overrides: Optional[Dict[str, Any]] = None,
+                   run_id: Optional[str] = None) -> Optional[str]:
+    run = AssessmentRun(
+        asset_id=asset_id,
+        trigger_type=trigger_type,
+        orchestrator_run_id=run_id,  # Wave 4 Phase B — idempotency key
+    )
 
     logger.info("=== Stage 0: load context ===")
     ctx = stage_0_load(sb, asset_id)
+    # Wave 9.1 — stash config_overrides on ctx so downstream stages
+    # (Stage 1 dispatch loop, future Stage 3/4 knobs) can read them
+    # without needing the param threaded individually.
+    ctx["config_overrides"] = dict(config_overrides or {})
     asset = ctx["asset"]
     logger.info("Asset: %s / %s (%s, %s); facts=%d, docs=%d",
                 asset.get("ticker"), asset.get("drug_name"),
@@ -1767,6 +2321,10 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                      "detail": f.detail[:200]}
                     for f in hypothesis_result.findings
                 ],
+                # Wave 6.3 — hypothesis-quality summary so we can detect
+                # Stage 2 regressions (kill_conditions thinning, mechanism
+                # citation density dropping) without re-querying the model.
+                "quality_metrics": hypothesis_result.quality_metrics(),
             },
         ))
         logger.info(

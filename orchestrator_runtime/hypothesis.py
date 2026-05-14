@@ -76,6 +76,41 @@ class HypothesisResult:
     cost_usd: float = 0.0
     latency_ms: int = 0
 
+    # Wave 6.3 — hypothesis-quality summary metrics. Computed at parse time
+    # so they can be persisted into stage_metrics.notes without re-walking
+    # the hypotheses list at every consumer. None when no hypotheses.
+    def quality_metrics(self) -> Dict[str, Any]:
+        if not self.hypotheses:
+            return {
+                "n_hypotheses": 0,
+                "avg_kill_conditions": None,
+                "min_kill_conditions": None,
+                "avg_supporting_fact_ids": None,
+                "avg_contradicting_fact_ids": None,
+                "citation_density_per_mechanism": None,
+            }
+        kc = [len(h.kill_conditions) for h in self.hypotheses]
+        sup = [len(h.supporting_fact_ids) for h in self.hypotheses]
+        con = [len(h.contradicting_fact_ids) for h in self.hypotheses]
+        # citation_density = (#supporting + #contradicting) / mechanism length
+        # in 100-char units, capped at 0.0 so an empty mechanism doesn't divide
+        # by zero. A higher number means the mechanism is more densely cited.
+        densities: List[float] = []
+        for h in self.hypotheses:
+            mech_len = max(1, len(h.mechanism or ""))
+            n_cites = len(h.supporting_fact_ids) + len(h.contradicting_fact_ids)
+            densities.append(n_cites / (mech_len / 100.0))
+        return {
+            "n_hypotheses": len(self.hypotheses),
+            "avg_kill_conditions": round(sum(kc) / len(kc), 2),
+            "min_kill_conditions": min(kc),
+            "avg_supporting_fact_ids": round(sum(sup) / len(sup), 2),
+            "avg_contradicting_fact_ids": round(sum(con) / len(con), 2),
+            "citation_density_per_mechanism": round(
+                sum(densities) / len(densities), 3
+            ),
+        }
+
 
 REQUIRED_LABELS = {"bull", "base", "bear"}
 VALID_LABELS = {"bull", "base", "bear", "event_specific"}

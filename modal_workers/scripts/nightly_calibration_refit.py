@@ -63,6 +63,25 @@ DEFAULT_ENABLE_PROMOTION = (
     os.environ.get("ENABLE_PROMOTION", "false").lower() == "true"
 )
 
+# Wave 4 deep-fix Phase C.3 — when True, exclude post_mortem rows whose
+# catalyst_resolution_marker is `default_*d_fallback` or `unknown_legacy`
+# from the isotonic fit. These rows have a generic +60d window that wasn't
+# anchored to a real PDUFA/AdComm/EoP2/readout; including them dilutes the
+# regression with low-signal label noise. Default false (current behavior:
+# include everything) so the operator can flip the gate on once enough
+# catalyst-anchored data has accumulated.
+EXCLUDE_DEFAULT_WINDOW_FROM_REFIT = (
+    os.environ.get("EXCLUDE_DEFAULT_WINDOW_FROM_REFIT", "false").lower() == "true"
+)
+
+# Markers we treat as "weak signal" — either the default-window fallback
+# (any digit count, e.g. 'default_60d_fallback', 'default_30d_fallback') or
+# the 'unknown_legacy' sentinel left by the backfill migration when no
+# matching fda_regulatory_events row could be found. Used by
+# `_apply_marker_policy` to drop or weight these rows.
+_DEFAULT_WINDOW_MARKER_PREFIX = "default_"
+_UNKNOWN_LEGACY_MARKER = "unknown_legacy"
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -110,7 +129,22 @@ def run_nightly_refit(
     if enable_promotion is None:
         enable_promotion = DEFAULT_ENABLE_PROMOTION
 
-    raw, realized, asset_ids = _fetch_training_pairs(sb)
+    raw, realized, asset_ids, markers = _fetch_training_pairs(sb)
+    # Wave 4 deep-fix Phase C.3 — apply catalyst-marker filtering. The default
+    # policy is "count everything, exclude nothing" so legacy behavior is
+    # unchanged until the operator flips EXCLUDE_DEFAULT_WINDOW_FROM_REFIT=1.
+    raw, realized, asset_ids, n_anchored, n_default_or_unknown = (
+        _apply_marker_policy(
+            raw, realized, asset_ids, markers,
+            exclude_default_window=EXCLUDE_DEFAULT_WINDOW_FROM_REFIT,
+        )
+    )
+    logger.info(
+        "Refit marker policy: anchored=%d default_or_unknown=%d "
+        "exclude_default_window=%s effective_n=%d",
+        n_anchored, n_default_or_unknown,
+        EXCLUDE_DEFAULT_WINDOW_FROM_REFIT, len(raw),
+    )
     n = len(raw)
     if n == 0:
         return RefitResult(
@@ -163,6 +197,12 @@ def run_nightly_refit(
 
     # Always log the eval run for audit.
     _insert_eval_run(sb, version=version, gate=gate, activated=activated)
+
+    # Wave 8.3 — when the D-103 gate FAILS for any reason other than
+    # cold-start ("no_baseline" = no prior curve, expected on first run),
+    # emit an operator_flag so the dashboard surfaces the stuck-curve risk.
+    # On gate pass, resolve any open flag to keep noise low.
+    _surface_d103_gate_status(sb, version=version, gate=gate, n_training=n)
 
     return RefitResult(
         n_training=n,
@@ -361,18 +401,26 @@ def _make_curve_version(curve: Dict[str, Any], n: int) -> str:
 
 def _fetch_training_pairs(
     sb: SupabaseClient,
-) -> Tuple[List[float], List[int], List[str]]:
-    """Pull (raw_conviction_pct/100, hit_int, asset_id) tuples for every
-    post_mortem_complete row whose convergence_assessment exists.
+) -> Tuple[List[float], List[int], List[str], List[Optional[str]]]:
+    """Pull (raw_conviction_pct/100, hit_int, asset_id, catalyst_marker)
+    tuples for every post_mortem_complete row whose convergence_assessment
+    exists.
+
+    Wave 4 deep-fix Phase C.3 — the 4th element is the
+    `catalyst_resolution_marker` (text or None for legacy rows that
+    pre-date the column). Callers use it to filter or weight rows whose
+    outcome window came from a generic default fallback rather than an
+    actual FDA event.
     """
     pms = sb._rest("GET", "post_mortem_queue", params={
-        "select": "assessment_id,asset_id,realized_outcome,predicted_direction",
+        "select": "assessment_id,asset_id,realized_outcome,"
+                  "predicted_direction,catalyst_resolution_marker",
         "status": "eq.post_mortem_complete",
         "limit": "10000",
     }) or []
 
     if not pms:
-        return [], [], []
+        return [], [], [], []
 
     assessment_ids = [p["assessment_id"] for p in pms]
     in_filter = f"in.({','.join(assessment_ids)})"
@@ -386,6 +434,7 @@ def _fetch_training_pairs(
     raw: List[float] = []
     realized: List[int] = []
     asset_ids: List[str] = []
+    markers: List[Optional[str]] = []
     for p in pms:
         ro = p.get("realized_outcome") or {}
         hit = ro.get("hit")
@@ -404,8 +453,49 @@ def _fetch_training_pairs(
         raw.append(float(raw_pct) / 100.0)
         realized.append(realized_int)
         asset_ids.append(p["asset_id"])
+        markers.append(p.get("catalyst_resolution_marker"))
 
-    return raw, realized, asset_ids
+    return raw, realized, asset_ids, markers
+
+
+def _apply_marker_policy(
+    raw: Sequence[float],
+    realized: Sequence[int],
+    asset_ids: Sequence[str],
+    markers: Sequence[Optional[str]],
+    *,
+    exclude_default_window: bool = False,
+) -> Tuple[List[float], List[int], List[str], int, int]:
+    """Wave 4 deep-fix Phase C.3 — apply the catalyst-marker policy to the
+    raw training set. Returns the filtered (raw, realized, asset_ids) plus
+    counts of (kept_anchored, dropped_default) for operator observability.
+
+    When `exclude_default_window=False` (default), nothing is dropped — the
+    function only counts the marker classes so the caller can log the mix.
+    When True, rows whose marker is `default_*d_fallback` or `unknown_legacy`
+    are excluded from the fit (low-signal label noise).
+    """
+    kept_raw: List[float] = []
+    kept_realized: List[int] = []
+    kept_asset_ids: List[str] = []
+    n_anchored = 0
+    n_default_or_unknown = 0
+    for r, y, aid, m in zip(raw, realized, asset_ids, markers):
+        is_low_signal = (
+            m is None
+            or m == _UNKNOWN_LEGACY_MARKER
+            or m.startswith(_DEFAULT_WINDOW_MARKER_PREFIX)
+        )
+        if is_low_signal:
+            n_default_or_unknown += 1
+            if exclude_default_window:
+                continue
+        else:
+            n_anchored += 1
+        kept_raw.append(r)
+        kept_realized.append(y)
+        kept_asset_ids.append(aid)
+    return kept_raw, kept_realized, kept_asset_ids, n_anchored, n_default_or_unknown
 
 
 def _direction_aligned_outcome(direction: Optional[str], hit: bool) -> int:
@@ -490,6 +580,102 @@ def _insert_eval_run(
     }
     sb._rest_with_retry("POST", "eval_runs", json_body=body,
                         prefer="return=minimal")
+
+
+# ---------------------------------------------------------------------------
+# Wave 8.3 — D-103 gate observability
+#
+# When the nightly refit ships a candidate curve that FAILS the D-103
+# paired-bootstrap gate, the prior is_active=true curve keeps serving the
+# orchestrator. That's the correct behavior — but until this hook existed
+# the operator had no visible signal that fresh data was failing to pass
+# the gate, so a stale curve could remain "active" indefinitely.
+#
+# This helper upserts an open flag when the gate fails (and the failure
+# isn't the cold-start no_baseline state), and resolves any open flag when
+# the gate passes again. Source 'calibration_refit' is new and added to the
+# operator_flags.source CHECK whitelist by the Wave 8 migration.
+# ---------------------------------------------------------------------------
+
+CALIBRATION_REFIT_FLAG_SOURCE = "calibration_refit"
+CALIBRATION_REFIT_FLAG_KIND = "d103_gate_failed"
+
+
+def _surface_d103_gate_status(
+    sb: SupabaseClient,
+    *,
+    version: str,
+    gate: GateEvaluation,
+    n_training: int,
+) -> None:
+    """Emit/resolve the D-103 gate operator_flag based on `gate.passed`.
+
+    Wrapped in try/except so a flag write failure (e.g. constraint mismatch,
+    network) never breaks the nightly refit. The eval_runs row is the source
+    of truth; this flag is operator-surface convenience.
+    """
+    try:
+        from modal_workers.observability import _resolve_flag, _upsert_flag
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("d103_gate flag helpers unavailable: %s", exc)
+        return
+
+    try:
+        if gate.passed:
+            _resolve_flag(
+                sb,
+                source=CALIBRATION_REFIT_FLAG_SOURCE,
+                kind=CALIBRATION_REFIT_FLAG_KIND,
+                note=(
+                    f"auto-resolved: gate passed at version={version} "
+                    f"(brier_new={gate.brier_new}, delta={gate.brier_delta}, "
+                    f"n_eval={gate.n_eval_cases})"
+                ),
+            )
+            return
+
+        if gate.gate_reason == "no_baseline":
+            # Cold-start: no prior curve exists. The orchestrator runs with
+            # calibration_status='no_active_curve' and that's the expected
+            # state until enough resolved post-mortems land. Not actionable.
+            return
+
+        _upsert_flag(
+            sb,
+            severity="warn",
+            source=CALIBRATION_REFIT_FLAG_SOURCE,
+            kind=CALIBRATION_REFIT_FLAG_KIND,
+            title=(
+                f"D-103 calibration gate failed: {gate.gate_reason} "
+                f"(version={version})"
+            ),
+            body=(
+                "Nightly isotonic refit produced a candidate curve that did "
+                "not beat the production curve under D-103's paired-bootstrap "
+                "gate. The production curve remains active. Investigate the "
+                "gate_reason and the n_eval_cases context; manual promotion "
+                "via fda_calibration_activate(p_version) is available if you "
+                "believe the gate is overly conservative."
+            ),
+            evidence={
+                "candidate_version": version,
+                "gate_reason": gate.gate_reason,
+                "n_eval_cases": gate.n_eval_cases,
+                "n_training": n_training,
+                "brier_prod": gate.brier_prod,
+                "brier_new": gate.brier_new,
+                "brier_delta": gate.brier_delta,
+                "paired_bootstrap_p": gate.paired_bootstrap_p,
+                "ranking_auc_delta": gate.ranking_auc_delta,
+                "max_single_asset_contribution_pct":
+                    gate.max_single_asset_contribution_pct,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "d103_gate flag emission failed (version=%s, reason=%s): %s",
+            version, gate.gate_reason, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
