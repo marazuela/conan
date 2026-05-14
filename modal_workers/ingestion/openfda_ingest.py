@@ -281,6 +281,7 @@ def _ingest_drugsfda_record(app: Dict[str, Any], writer: DocumentWriter) -> "_In
             url=f"{OPENFDA_BASE}/drug/drugsfda.json?search=application_number:{application_number}",
             title=f"{sponsor or 'Unknown sponsor'} — {', '.join(drug_names) or application_number}",
             is_pdf=False,
+            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001
@@ -456,6 +457,7 @@ def _ingest_label_record(label: Dict[str, Any], writer: DocumentWriter) -> "_Ing
             url=f"https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid={set_id}",
             title=str(title),
             is_pdf=False,
+            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001

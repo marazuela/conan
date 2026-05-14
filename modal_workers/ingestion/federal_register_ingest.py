@@ -226,6 +226,7 @@ def _ingest_one_metadata(
             url=full.get("html_url"),
             title=full.get("title"),
             is_pdf=False,
+            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions={
                 "agency_names": full.get("agency_names") or [],
                 "topics": full.get("topics") or [],
