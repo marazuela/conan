@@ -57,7 +57,7 @@ from modal_workers.shared.supabase_client import (
     SupabaseError,
 )
 
-ScannerStatus = Literal["ok", "error", "auth_required", "partial", "timeout"]
+ScannerStatus = Literal["ok", "error", "auth_required", "partial", "timeout", "skipped"]
 
 
 # ----------------------------------------------------------------------
@@ -317,6 +317,17 @@ def run_scanner(
     """
     client = client or SupabaseClient()
     cfg = client.load_scanner_config(scanner_name)
+    # v2-teardown producer halt: only operational scanners may execute. Gates
+    # the dispatcher AND manual `modal run …::<scanner>_once` / re-queue paths
+    # at one chokepoint. Early-return before open_scanner_run so a deprecated
+    # scanner leaves no scanner_runs row.
+    if cfg.status != "operational":
+        return ScannerResult(
+            scanner=scanner_name,
+            status="skipped",
+            signals=[],
+            warnings=[f"scanner status={cfg.status!r}, not operational; skipped"],
+        )
     modal_inv = os.environ.get("MODAL_TASK_ID")  # Modal sets this at runtime
     run_id = client.open_scanner_run(cfg.scanner_id, modal_invocation_id=modal_inv)
     # Expose run_id to scan_fn for per-run telemetry writes
