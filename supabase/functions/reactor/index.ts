@@ -519,6 +519,35 @@ async function processAssetDocument(link: AssetDocumentRow) {
   const triggerType: "cross_source" | "new_doc" =
     (priorLinks?.length ?? 0) > 0 ? "cross_source" : "new_doc";
 
+  // PR-2 content-aware dedup: compute md5 over the asset's current material
+  // primary document_id set and compare against the last non-superseded
+  // convergence_assessments row. If unchanged, skip the enqueue — running
+  // synthesis again can't produce new information.
+  const docSetHash = await computeDocSetHash(link.asset_id);
+  if (docSetHash !== null && !CONTENT_DEDUP_BYPASS_TRIGGERS.has(triggerType)) {
+    const { data: lastAssessment, error: lastErr } = await sb
+      .from("convergence_assessments")
+      .select("document_set_hash")
+      .eq("asset_id", link.asset_id)
+      .is("superseded_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastErr) throw lastErr;
+    if (lastAssessment?.document_set_hash === docSetHash) {
+      return {
+        processed: true,
+        asset_id: link.asset_id,
+        document_id: link.document_id,
+        trigger_type: triggerType,
+        enqueued: false,
+        orchestrator_run_id: null,
+        coalesce_dedupe: true,
+        dedupe_reason: "doc_set_unchanged",
+      };
+    }
+  }
+
   const enqueue = await enqueueOrchestratorRun({
     asset_id: link.asset_id,
     trigger_type: triggerType,
@@ -533,6 +562,35 @@ async function processAssetDocument(link: AssetDocumentRow) {
     orchestrator_run_id: enqueue.run_id,
     coalesce_dedupe: enqueue.coalesce_dedupe,
   };
+}
+
+// Compute md5 over the asset's material primary asset_documents.document_id set,
+// sorted to make the hash order-invariant. Returns null when the asset has zero
+// material primary docs (which shouldn't happen in this code path — defensive).
+//
+// Reused by orchestrator_runs.document_set_hash and (eventually) by Stage 10
+// persistence into convergence_assessments.document_set_hash.
+async function computeDocSetHash(asset_id: string): Promise<string | null> {
+  const { data, error } = await sb
+    .from("asset_documents")
+    .select("document_id")
+    .eq("asset_id", asset_id)
+    .eq("link_type", "primary")
+    .eq("is_material", true);
+  if (error) throw error;
+  if (!data || data.length === 0) return null;
+  const sorted = data
+    .map((r: { document_id: string }) => r.document_id)
+    .sort();
+  const enc = new TextEncoder().encode(sorted.join(","));
+  const buf = await crypto.subtle.digest("MD5", enc).catch(async () => {
+    // Some Deno runtimes don't expose MD5 — fall back to SHA-256 truncated.
+    return await crypto.subtle.digest("SHA-256", enc);
+  });
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
 
 async function enqueueOrchestratorRun(

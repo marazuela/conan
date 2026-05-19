@@ -377,6 +377,13 @@ def renormalize_priors(
     Returns (mutated_hypotheses, debug_payload). When the anchor has no
     base_rate, priors are returned unchanged and `debug.applied=False`.
 
+    PR-1 shadow mode (`dry_run=True`): compute the renorm and surface the
+    pre/post deltas in the debug payload, but DO NOT mutate hypotheses.
+    Caller flips dry_run from True → False once they've inspected ~1 week of
+    shadow output. See migration
+    20260527000020_v3_seed_reference_class_base_rates.sql and the
+    `renormalize_priors_dry_run` internal_config flag.
+
     Mutates `prior_estimate_pct` in place (preserving each
     `prior_estimate_pct_pre_anchor` already set during parsing).
     """
