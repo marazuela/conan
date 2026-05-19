@@ -1511,6 +1511,7 @@ def _build_stage_10_secondaries(
                 "failure_modes": failure_modes_jsonb,
                 "disconfirming_searches": v.disconfirming_searches,
                 "update_triggers": v.update_triggers,
+                "is_declined": v.is_declined,
             })
 
     # Post-mortem queue stub. NOTE: this still does a SELECT against
