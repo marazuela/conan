@@ -52,6 +52,7 @@ from modal_workers.shared.compute import (
     Stage4Anchor,
     apply_isotonic_calibration,
     build_stage_4_anchor,
+    compute_document_set_hash,
     format_anchor_for_prompt,
     get_active_calibration_curve,
     is_renormalize_priors_dry_run,
@@ -1246,6 +1247,16 @@ def stage_10_persist(
               "affected_id": f.affected_id}
              for f in constitutional_result.findings]
             if constitutional_result else None),
+        # PR-5: explicit gate outcome. Tier-1 rows always carry a non-NULL
+        # gate_status; bulk_v0 rows set 'tier2_skipped' in tier2.py. The
+        # ConstitutionalFailure abort means 'fail' here is only reachable when
+        # run_constitutional=False AND a prior gate raised findings —
+        # practically, live Tier-1 rows persist with 'pass' or 'not_evaluated'
+        # (Stage 7 skipped via --no-constitutional).
+        "gate_status": (
+            ("pass" if constitutional_result.pass_ else "fail")
+            if constitutional_result else "not_evaluated"
+        ),
         "hypotheses": hypotheses_summary,
         "pre_mortem": pre_mortem_summary,
         "adversarial_challenges": adversarial_summary,
@@ -1269,6 +1280,10 @@ def stage_10_persist(
         "total_cache_creation_tokens": total_cache_create,
         "cost_usd": round(total_cost, 4),
         "latency_ms": total_latency,
+        # PR-2 content-aware dedup: stamp the asset's current material-primary
+        # document set hash so the reactor can suppress re-enqueues whose
+        # evidence set is unchanged from the last completed synthesis.
+        "document_set_hash": compute_document_set_hash(sb, asset_id),
     }
 
     # Wave 4 deep-fix Phase B — single atomic RPC. Replaces the prior
@@ -2563,7 +2578,8 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--trigger-type", default="manual",
                    choices=["new_doc", "cross_source", "scheduled",
                             "operator_refresh", "market_move", "tier2_escalation",
-                            "backtest", "manual"])
+                            "backtest", "manual", "aging_recheck",
+                            "catalyst_proximity"])
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL)
     p.add_argument("--ensemble-n", type=int, default=1,
