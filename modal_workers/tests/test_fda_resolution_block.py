@@ -21,7 +21,6 @@ from modal_workers.scanners.fda_signal_bridge import (
     MODE_SHADOW,
     MODE_SHADOW_WITH_EMIT,
     RESOLUTION_EVENT_TYPES,
-    STATUS_TO_MODE,
     is_resolution_event,
     process_event,
     write_flags_for_mode,
@@ -168,38 +167,3 @@ def test_pending_pdufa_in_operational_mode_writes_canonical_emits():
     assert out.write_canonical is True
     assert out.write_shadow is False
     assert out.emit_signal is True
-
-
-# ---------------------------------------------------------------------------
-# F-206 — scanners.status is the single source of truth for bridge lifecycle.
-# ---------------------------------------------------------------------------
-
-
-def test_status_to_mode_covers_all_runnable_lifecycle_stages():
-    """scan(cfg) maps cfg.status → bridge mode via STATUS_TO_MODE. The mapping
-    must cover every lifecycle stage the dispatcher will spawn."""
-    assert STATUS_TO_MODE == {
-        "shadow": MODE_SHADOW,
-        "shadow_with_emit": MODE_SHADOW_WITH_EMIT,
-        "operational": MODE_OPERATIONAL,
-    }
-
-
-def test_scan_rejects_unknown_status():
-    """A scanner row whose status isn't in STATUS_TO_MODE (e.g. 'paused' that
-    somehow got past the dispatcher filter) must short-circuit with an error
-    envelope instead of running with an undefined emission policy."""
-    from dataclasses import dataclass
-
-    from modal_workers.scanners.fda_signal_bridge import scan
-
-    @dataclass
-    class _Cfg:
-        status: str = "paused"
-        timeout_soft_s: int = 60
-        config: dict | None = None
-        endpoints: dict | None = None
-
-    result = scan(_Cfg())
-    assert result.status == "error"
-    assert "invalid bridge status" in (result.error or "")

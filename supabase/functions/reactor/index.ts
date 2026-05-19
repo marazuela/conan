@@ -43,7 +43,6 @@ import {
   type GroupSignal,
   signalFingerprint,
 } from "../_shared/convergence.ts";
-import { formatError, formatErrorForDlq } from "../_shared/errors.ts";
 import {
   classifyProvisionalHeuristic,
   flattenPersistedDimensions,
@@ -55,7 +54,6 @@ import {
 } from "./convergence-window.ts";
 import {
   buildOrchestratorRunInsert,
-  CONTENT_DEDUP_BYPASS_TRIGGERS,
   type EnqueueArgs,
 } from "./orchestrator-enqueue.ts";
 import { fetchWithRetry } from "./fetch-retry.ts";
@@ -77,7 +75,6 @@ interface SignalRow extends Omit<GroupSignal, "score"> {
   band: Band | null;
   thesis_direction: Direction;
   convergence_bonus?: number | null;
-  convergence_key?: string | null;
   band_with_bonus?: Band | null;
   score_with_bonus?: number | null;
   auto_caps_triggered?: string[] | null;
@@ -162,25 +159,13 @@ const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
 });
 
 Deno.serve(async (req: Request) => {
-  // Auth gate (mandatory — F-152 fully closed 2026-05-14).
-  // Two acceptable callers:
-  //   1. Postgres webhooks (call_reactor / call_reactor_assetdoc) — send
-  //      x-supabase-webhook-secret matching the vault `webhook_secret` value.
-  //   2. dispatch_observability sweeper — sends Authorization: Bearer <service_role>
-  //      because the function is deployed --no-verify-jwt (see memory
-  //      reactor_deploy_no_verify_jwt.md). Note: edge runtime injects the new
-  //      sb_secret_… format under SUPABASE_SERVICE_ROLE_KEY, NOT the legacy
-  //      JWT that Modal uses. In practice the sweeper relies on path #1; this
-  //      Bearer path is defense-in-depth for any future caller that holds the
-  //      edge-runtime-format key.
-  // Either credential passes; missing both → 401. Constant-time compare on both.
-  const headerSecret = req.headers.get("x-supabase-webhook-secret") ?? "";
-  const authz = req.headers.get("authorization") ?? "";
-  const bearerToken = authz.toLowerCase().startsWith("bearer ") ? authz.slice(7) : "";
-  const webhookOk = WEBHOOK_SECRET !== "" && timingSafeEqual(headerSecret, WEBHOOK_SECRET);
-  const serviceOk = bearerToken !== "" && timingSafeEqual(bearerToken, SERVICE_KEY);
-  if (!webhookOk && !serviceOk) {
-    return new Response("unauthorized", { status: 401 });
+  // Webhook secret check (if configured). Set via Supabase Dashboard → Edge Functions → Secrets.
+  // Constant-time comparison so an attacker can't byte-by-byte the secret via timing.
+  if (WEBHOOK_SECRET) {
+    const got = req.headers.get("x-supabase-webhook-secret") ?? "";
+    if (!timingSafeEqual(got, WEBHOOK_SECRET)) {
+      return new Response("unauthorized", { status: 401 });
+    }
   }
 
   let payload: WebhookPayload;
@@ -210,16 +195,13 @@ Deno.serve(async (req: Request) => {
         headers: { "content-type": "application/json" },
       });
     } catch (err) {
-      const info = formatError(err);
+      const message = err instanceof Error ? err.message : String(err);
       await sb.from("failed_reactor_events").insert({
         signal_id: null,
-        payload: {
-          source: "reactor.asset_documents",
-          ...(payload as unknown as Record<string, unknown>),
-        },
-        error_message: `[asset_documents] ${formatErrorForDlq(err)}`,
+        payload: payload as unknown as Record<string, unknown>,
+        error_message: `[asset_documents] ${message}`,
       });
-      return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
+      return new Response(JSON.stringify({ error: message }), {
         status: 500,
         headers: { "content-type": "application/json" },
       });
@@ -274,16 +256,13 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     // DLQ the event so Supabase's webhook retry + our own inspection both work.
-    const info = formatError(err);
+    const message = err instanceof Error ? err.message : String(err);
     await sb.from("failed_reactor_events").insert({
       signal_id: sig?.signal_id ?? null,
-      payload: {
-        source: "reactor.signals",
-        ...(payload as unknown as Record<string, unknown>),
-      },
-      error_message: formatErrorForDlq(err),
+      payload: payload as unknown as Record<string, unknown>,
+      error_message: message,
     });
-    return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
+    return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { "content-type": "application/json" },
     });
@@ -325,24 +304,6 @@ async function processSignal(sig: SignalRow) {
     return {
       processed: true,
       skipped: "fda_profile_routed_to_orchestrator",
-      signal_id: sig.signal_id,
-      scoring_profile: sig.scoring_profile,
-    };
-  }
-
-  // --- v2-teardown non-FDA hard gate.
-  // Per the FDA-depth pivot, non-FDA profiles are sunset. Any signal that is
-  // not an FDA profile is acknowledged but does NOT run convergence, emit
-  // alerts, or enqueue thesis_jobs / needs_scoring. Defense-in-depth: producers
-  // are already halted (scanners deprecated), this blocks every remaining
-  // entrypoint (signals INSERT/UPDATE) at one point before the legacy pipeline.
-  if (
-    !sig.scoring_profile ||
-    !FDA_PROFILES_ROUTED_TO_ORCHESTRATOR.has(sig.scoring_profile)
-  ) {
-    return {
-      processed: true,
-      skipped: "non_fda_blocked_by_v2_teardown",
       signal_id: sig.signal_id,
       scoring_profile: sig.scoring_profile,
     };
@@ -492,35 +453,6 @@ async function processSignal(sig: SignalRow) {
     windowSignals,
   );
 
-  // --- Trigger-row loser stamp. If the INSERT/UPDATE that fired this reactor
-  // run did NOT win the group, ensure its convergence_key is still set so
-  // future reactor invocations see it via fetchWindow (not just via the
-  // defensive push). Previously the loser stayed in `convergence_key=null`
-  // forever, which:
-  //   (a) made orphan_convergence_sweeper repeatedly POST it to the reactor
-  //       every 6h (sweeper filter: score IS NOT NULL AND band_with_bonus IS NULL),
-  //   (b) caused each replay to defensive-push the orphan into the winner's
-  //       group, inflating the winner's bonus relative to what a canonical-key
-  //       query computes — surfacing as convergence_qa `convergence_disagreement`
-  //       flags.
-  // Stamping the loser with bonus=0 + raw score/band parity keeps it in the
-  // canonical group with no convergence boost. score_with_bonus / band_with_bonus
-  // mirror raw score/band so the row is no longer picked up by the orphan filter.
-  //
-  // The OR on band_with_bonus heals legacy orphans from before commit 0fa72da:
-  // back then clearDisplacedWinners set score_with_bonus + band_with_bonus to
-  // NULL, leaving displaced rows in an orphan-filter state forever. Those rows
-  // already have the correct convergence_key set (so the first predicate
-  // doesn't fire), but their band_with_bonus is still NULL. Including the
-  // band_with_bonus null check stamps them on first sweeper replay.
-  if (
-    sig.signal_id !== winnerRow.signal_id &&
-    ((sig.convergence_key ?? null) !== convergence_key ||
-      (sig.band_with_bonus ?? null) === null)
-  ) {
-    await stampRow(sig.signal_id, convergence_key, 0, sig.score!, sig.band!);
-  }
-
   // --- Step 8: on Immediate band, insert alert AND enqueue thesis_job in parallel.
   //   8a. alerts INSERT (ON CONFLICT DO NOTHING — same-day fingerprint dup).
   //   8b. thesis_jobs INSERT (ON CONFLICT DO NOTHING on signal_id — one draft per signal).
@@ -587,44 +519,10 @@ async function processAssetDocument(link: AssetDocumentRow) {
   const triggerType: "cross_source" | "new_doc" =
     (priorLinks?.length ?? 0) > 0 ? "cross_source" : "new_doc";
 
-  // Content-aware dedup: compute md5 over the asset's current material primary
-  // document_id set and compare against the last non-superseded
-  // convergence_assessments row. If unchanged, skip the enqueue — running
-  // synthesis again can't produce new information.
-  // AXSM was scored 17 times in 96h across the same evidence set before this
-  // landed; the partial unique index on (asset, trigger_type, trigger_doc_id)
-  // only catches duplicate doc events, not duplicate doc sets across different
-  // trigger docs.
-  const docSetHash = await computeDocSetHash(link.asset_id);
-  if (docSetHash !== null && !CONTENT_DEDUP_BYPASS_TRIGGERS.has(triggerType)) {
-    const { data: lastAssessment, error: lastErr } = await sb
-      .from("convergence_assessments")
-      .select("document_set_hash")
-      .eq("asset_id", link.asset_id)
-      .is("superseded_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastErr) throw lastErr;
-    if (lastAssessment?.document_set_hash === docSetHash) {
-      return {
-        processed: true,
-        asset_id: link.asset_id,
-        document_id: link.document_id,
-        trigger_type: triggerType,
-        enqueued: false,
-        orchestrator_run_id: null,
-        coalesce_dedupe: true,
-        dedupe_reason: "doc_set_unchanged",
-      };
-    }
-  }
-
   const enqueue = await enqueueOrchestratorRun({
     asset_id: link.asset_id,
     trigger_type: triggerType,
     trigger_doc_id: link.document_id,
-    document_set_hash: docSetHash,
   });
   return {
     processed: true,
@@ -635,37 +533,6 @@ async function processAssetDocument(link: AssetDocumentRow) {
     orchestrator_run_id: enqueue.run_id,
     coalesce_dedupe: enqueue.coalesce_dedupe,
   };
-}
-
-// Compute md5 over the asset's material primary asset_documents.document_id set,
-// sorted to make the hash order-invariant. Returns null when the asset has zero
-// material primary docs (defensive — this code path is only reached after the
-// trigger predicate matches a material primary).
-//
-// Mirror of compute.compute_document_set_hash on the Python side — must use
-// identical criteria so Stage 10 persistence and the reactor's dedup compare
-// apples to apples.
-async function computeDocSetHash(asset_id: string): Promise<string | null> {
-  const { data, error } = await sb
-    .from("asset_documents")
-    .select("document_id")
-    .eq("asset_id", asset_id)
-    .eq("link_type", "primary")
-    .eq("is_material", true);
-  if (error) throw error;
-  if (!data || data.length === 0) return null;
-  const sorted = data
-    .map((r: { document_id: string }) => r.document_id)
-    .sort();
-  const enc = new TextEncoder().encode(sorted.join(","));
-  const buf = await crypto.subtle.digest("MD5", enc).catch(async () => {
-    // Some Deno runtimes don't expose MD5 — fall back to SHA-256 truncated.
-    return await crypto.subtle.digest("SHA-256", enc);
-  });
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 32);
 }
 
 async function enqueueOrchestratorRun(
@@ -967,20 +834,12 @@ async function clearDisplacedWinners(
   );
   const ids: string[] = [];
   for (const s of toClear) {
-    // Reset to raw score/band parity rather than nulls. Previously we cleared
-    // score_with_bonus + band_with_bonus to null, which re-tripped the
-    // orphan_convergence_sweeper filter (score IS NOT NULL AND band_with_bonus
-    // IS NULL) and caused the row to be POSTed back to the reactor every 6h
-    // — the replay then defensive-pushed the row into the winner's group and
-    // inflated the winner's bonus (convergence_qa `convergence_disagreement`).
-    // shouldClearDisplacedWinner already only fires on stamped rows, so s.score
-    // and s.band are non-null on every row we update here.
     const { error } = await sb
       .from("signals")
       .update({
         convergence_bonus: 0,
-        score_with_bonus: s.score,
-        band_with_bonus: s.band,
+        score_with_bonus: null,
+        band_with_bonus: null,
       })
       .eq("signal_id", s.signal_id)
       .eq("convergence_key", convergence_key);

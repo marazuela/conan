@@ -35,15 +35,7 @@ def fake_client(monkeypatch):
         # Minimal canned responses so callers don't crash.
         if method == "GET" and path == "scanners":
             status_filter = (params or {}).get("status")
-            # scanner_probe now widens to the full runnable set (operational +
-            # shadow + shadow_with_emit). Return the canned row for the
-            # in-list filter; legacy eq.operational still supported for tests
-            # that haven't been updated.
-            if status_filter and (
-                status_filter == "eq.operational"
-                or status_filter.startswith("in.(")
-                and "operational" in status_filter
-            ):
+            if status_filter == "eq.operational":
                 return [{
                     "id": "sc-1", "name": "edgar_filing_monitor",
                     "endpoints": {"primary": "https://example.com/primary"},
@@ -231,66 +223,6 @@ def test_scanner_probe_skips_requires_auth_scanners(monkeypatch):
     assert result["results"] == []
     # Must PATCH scanners to record the check — status+latency NULL signals
     # "skipped, not drifted" to the dashboard.
-    patches = [c for c in captured if c["method"] == "PATCH" and c["path"] == "scanners"]
-    assert len(patches) == 1
-    assert patches[0]["json_body"]["last_probe_status"] is None
-    assert patches[0]["json_body"]["last_probe_latency_ms"] is None
-    assert "last_probe_at" in patches[0]["json_body"]
-
-
-def test_scanner_probe_queries_runnable_status_set(monkeypatch):
-    """scanner_probe must query operational + shadow + shadow_with_emit, not
-    just operational. The fda_signal_bridge runs in shadow lifecycle stage and
-    still needs probe coverage."""
-    captured = []
-
-    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path, "params": params})
-        return []
-
-    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
-    client = SupabaseClient.__new__(SupabaseClient)
-    observability.scanner_probe(client)
-
-    initial_get = next(
-        c for c in captured if c["method"] == "GET" and c["path"] == "scanners"
-    )
-    status_filter = initial_get["params"]["status"]
-    assert status_filter.startswith("in.("), \
-        f"expected status=in.(...) filter, got {status_filter!r}"
-    for stage in ("operational", "shadow", "shadow_with_emit"):
-        assert stage in status_filter, f"{stage} missing from {status_filter!r}"
-
-
-def test_scanner_probe_records_skip_when_no_primary_endpoint(monkeypatch):
-    """Scanners whose endpoints jsonb lacks a `primary` key (e.g. fda_signal_bridge
-    with provider-named keys) must be recorded as skipped with reason
-    'no_primary_endpoint', not silently dropped. F-206 regression lock."""
-    captured = []
-
-    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path, "params": params,
-                         "json_body": json_body, "prefer": prefer})
-        if method == "GET" and path == "scanners":
-            return [{
-                "id": "sc-bridge", "name": "fda_signal_bridge",
-                "endpoints": {"polygon": "https://api.polygon.io",
-                              "federal_register": "https://www.federalregister.gov/api/v1/documents"},
-                "config": {},
-                "last_run_status": None,
-            }]
-        return None
-
-    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
-    client = SupabaseClient.__new__(SupabaseClient)
-
-    result = observability.scanner_probe(client)
-
-    assert result["skipped"] == [{"scanner": "fda_signal_bridge",
-                                  "reason": "no_primary_endpoint"}]
-    assert result["results"] == []
-    # Probe evaluation must be recorded so the dashboard can distinguish
-    # "evaluated but no probe target" from "silently missed".
     patches = [c for c in captured if c["method"] == "PATCH" and c["path"] == "scanners"]
     assert len(patches) == 1
     assert patches[0]["json_body"]["last_probe_status"] is None

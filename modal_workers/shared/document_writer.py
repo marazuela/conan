@@ -11,12 +11,8 @@ The flow:
   2. Dedupe via UNIQUE (source, source_content_hash). On conflict, return existing id.
   3. If raw_text > 512KB, upload bytes to Supabase Storage and store storage_path
      (raw_text column left NULL to keep row size manageable).
-  4. If upload_to_anthropic=True, the orchestrator API key is configured, and
-     raw_text_bytes >= MIN_UPLOAD_BYTES, upload to Anthropic Files API and store
-     anthropic_file_id. Gate is on size (not file type) — Files API + Citations
-     work for both PDF and text/plain. The threshold is set so that only
-     documents large enough to be truncated by Stage-1's text-fallback path
-     (DOC_EXCERPT_CHARS=4000) are uploaded; smaller docs stay inline.
+  4. If is_pdf and the orchestrator API key is configured, upload to Anthropic
+     Files API and store anthropic_file_id (deferred; stub for Phase 5).
   5. INSERT into documents table; PostgREST returns the row id.
   6. (Future) Postgres trigger fires NOTIFY document_inserted, doc_id — subscribed
      by extractor + asset linker Modal workers. For now, callers can poll or
@@ -52,16 +48,6 @@ DOCUMENT_STORAGE_BUCKET = "documents"
 # Anthropic Files API endpoint (used by _maybe_upload_to_anthropic).
 ANTHROPIC_FILES_ENDPOINT = "https://api.anthropic.com/v1/files"
 
-# Files API upload size gate. The Stage-1 text-fallback path truncates raw_text
-# at DOC_EXCERPT_CHARS (4000 chars, see orchestrator_runtime/runtime.py:131), so
-# only documents materially larger than that benefit from native Files API +
-# Citations API (lazy retrieval avoids the truncation hit and reduces input
-# tokens). 20KB ≈ 5× truncation boundary — covers EDGAR 10-K/10-Q/424B2,
-# federal_register Rule/Proposed Rule, and the long tail of dailymed SPLs.
-# Below this threshold the inline text excerpt is cheaper than a file_id round
-# trip. Tunable post-launch via the MIN_UPLOAD_BYTES env override.
-MIN_UPLOAD_BYTES = int(os.environ.get("ANTHROPIC_FILES_MIN_UPLOAD_BYTES", "20000"))
-
 # Source values must match the CHECK constraint in 20260506000010_v3_phase_0_1_schema.sql.
 VALID_SOURCES = {
     "edgar", "federal_register", "openfda", "clinicaltrials", "dailymed",
@@ -89,21 +75,11 @@ class DocumentWriter:
     def __init__(self, client: Optional[SupabaseClient] = None,
                  anthropic_api_key: Optional[str] = None):
         self.client = client or SupabaseClient()
-        # If set, documents that pass the size gate get uploaded to Anthropic
-        # Files API and the file_id stored in documents.anthropic_file_id.
-        # If None, the upload is silently skipped and the Stage-1 text-fallback
-        # path handles the document.
-        #
-        # Env-var order matches the rest of the repo: ANTHROPIC_API_KEY is the
-        # canonical name (used by extractor, asset_linker, sub_agents, runtime
-        # entrypoints, Modal `anthropic-orchestrator` secret). The legacy
-        # ANTHROPIC_ORCHESTRATOR_KEY alias is kept for backwards-compat with
-        # any pre-existing operator scripts that still set the old name.
-        self.anthropic_api_key = (
-            anthropic_api_key
-            or os.environ.get("ANTHROPIC_API_KEY")
-            or os.environ.get("ANTHROPIC_ORCHESTRATOR_KEY")
-        )
+        # If set, PDFs are uploaded to Anthropic Files API and the file_id stored
+        # in documents.anthropic_file_id. If None, we skip the upload (orchestrator
+        # will upload lazily on first use). Phase 5 wiring.
+        self.anthropic_api_key = anthropic_api_key or os.environ.get(
+            "ANTHROPIC_ORCHESTRATOR_KEY")
 
     def write_document(
         self,
@@ -146,22 +122,12 @@ class DocumentWriter:
             )
             inline_text = None  # don't duplicate in Postgres row
 
-        # Anthropic Files API upload — opt-in, size-gated.
-        # Gate is on raw size, not file type: native Citations API works for both
-        # PDFs and text/plain documents, and the win (avoiding DOC_EXCERPT_CHARS
-        # truncation + lazy retrieval) only materializes for documents large
-        # enough to be truncated. Small docs stay inline (cheaper, no upload
-        # round-trip). See MIN_UPLOAD_BYTES above for the threshold rationale.
+        # Anthropic Files API upload — only if explicitly requested AND key configured.
+        # Most callers leave this False; orchestrator does the upload lazily on first use.
         anthropic_file_id: Optional[str] = None
-        if (upload_to_anthropic
-                and self.anthropic_api_key
-                and raw_text_bytes >= MIN_UPLOAD_BYTES):
-            ext = "pdf" if is_pdf else "txt"
+        if upload_to_anthropic and self.anthropic_api_key and is_pdf:
             anthropic_file_id = self._upload_to_anthropic(
-                raw_text.encode("utf-8"),
-                title or f"{source}_{source_doc_id}.{ext}",
-                is_pdf=is_pdf,
-            )
+                raw_text.encode("utf-8"), title or f"{source}_{source_doc_id}.pdf")
 
         # Insert via PostgREST. Conflict on (source, source_content_hash) returns the
         # existing row's id.
@@ -217,16 +183,11 @@ class DocumentWriter:
             anthropic_file_id=record.get("anthropic_file_id"),
         )
 
-    def _upload_to_anthropic(
-        self, body: bytes, filename: str, *, is_pdf: bool = False,
-    ) -> Optional[str]:
+    def _upload_to_anthropic(self, body: bytes, filename: str) -> Optional[str]:
         """Upload bytes to Anthropic Files API. Returns file_id or None on failure.
 
-        MIME type is chosen from is_pdf: PDFs use application/pdf so Claude's
-        native citation walker treats them as document blocks; text payloads
-        use text/plain so Claude indexes them line-by-line. Both flow through
-        the same Files API endpoint and Citations API.
-
+        Stream 3.2: real implementation. Uses the anthropic SDK Beta files API
+        (the GA endpoint accepts the same call shape — see Anthropic Files docs).
         Failure returns None and logs; the caller falls back to raw_text.
         """
         try:
@@ -238,7 +199,6 @@ class DocumentWriter:
             )
             return None
 
-        mime_type = "application/pdf" if is_pdf else "text/plain"
         try:
             client = anthropic.Anthropic(api_key=self.anthropic_api_key)
             # files.create accepts a tuple (filename, bytes, mime_type) under the
@@ -252,29 +212,14 @@ class DocumentWriter:
                     "skipping upload for %s", filename,
                 )
                 return None
-            # Method name has changed across SDK versions: newer releases
-            # expose `.upload(...)`, older releases expose `.create(...)`.
-            # Both accept the same file tuple shape. We probe upload first
-            # because newer SDKs sometimes keep `.create` as an alias that
-            # raises, sometimes drop it entirely.
-            upload_fn = getattr(files_api, "upload", None) or getattr(
-                files_api, "create", None
-            )
-            if upload_fn is None:
-                logger.warning(
-                    "document_writer: anthropic SDK files API has neither "
-                    "upload() nor create(); skipping upload for %s", filename,
-                )
-                return None
-            resp = upload_fn(
-                file=(filename, body, mime_type),
+            resp = files_api.create(
+                file=(filename, body, "application/pdf"),
             )
             file_id = getattr(resp, "id", None)
             if file_id:
                 logger.info(
-                    "document_writer: uploaded to anthropic files api "
-                    "filename=%s mime=%s bytes=%d file_id=%s",
-                    filename, mime_type, len(body), file_id,
+                    "document_writer: uploaded to anthropic files api filename=%s file_id=%s",
+                    filename, file_id,
                 )
             return file_id
         except Exception as exc:  # noqa: BLE001

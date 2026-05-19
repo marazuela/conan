@@ -24,45 +24,10 @@ logger = logging.getLogger(__name__)
 PER_RUN_HARD_KILL_USD = 15.0
 ASSET_24H_SOFT_USD = 20.0
 GLOBAL_24H_SOFT_USD = 500.0
-# Per-component HARD halt for asset_linker. Soft alerts (above) only emit
-# operator_flag rows; this ceiling causes the linker run loop to return
-# early and the */15 cron will idle until the 24h window rolls forward.
-# Raised 2026-05-12 from $10 to $20 after PR #34 moved pass-1 to Haiku 4.5.
-# Sonnet pass-1 burned $40+ in 8h on 2026-05-11; Haiku is ~3× cheaper, so
-# $20/24h is the expected steady-state ceiling with headroom for bursts.
-ASSET_LINKER_24H_HARD_USD = 20.0
-# Per-component HARD halt for the orchestrator drain. Sized as 6× the
-# observed healthy daily rate (~$8/day for ~22 runs at ~$0.36/run avg) to
-# allow legit expansion but cap a runaway scenario (e.g. ensemble_n stuck
-# at 7 or extractor stage in an infinite loop) at $50 instead of letting
-# 12 drain ticks × 5 runs × $2 = $120/hour leak unbounded.
-ORCHESTRATOR_24H_HARD_USD = 50.0
-# Per-component HARD halt for sonnet_fact_extractor. The cron runs hourly
-# (jobid 12, schedule="20 * * * *") with a $5/run per-tick cap, so the
-# unbounded theoretical worst case is 24 × $5 = $120/day. We cap at $20
-# (~4 max runs) — enough headroom for legit operator-triggered backfills
-# but bounded against a runaway. Tightenable to $10 if Haiku takes over
-# pass-1 of fact extraction in the future.
-FACT_EXTRACTOR_24H_HARD_USD = 20.0
-
-# Per-component HARD halt for Anthropic Files API uploads. The Files API has
-# no per-upload charge as of 2026-05, but tracking accumulated activity in
-# dollar terms keeps the safety machinery uniform — if Anthropic introduces
-# upload billing or if a misconfigured loop starts hammering the endpoint,
-# we cap before it becomes a real bill. Notional cost per upload is set so
-# 1000 uploads/day = $5 — comfortably above the at-ingest path's organic
-# rate (~hundreds/day) and the backfill scanner's daily cap (500/day),
-# leaving headroom but tripping before unbounded behavior.
-FILES_API_24H_HARD_USD = 5.0
-FILES_API_NOTIONAL_PER_UPLOAD_USD = 0.005
 
 OPERATOR_FLAG_SOURCE = "orchestrator_cost"
 ASSET_FLAG_KIND = "asset_24h_budget_breached"
 GLOBAL_FLAG_KIND = "global_24h_budget_breached"
-ASSET_LINKER_FLAG_KIND = "asset_linker_24h_hard_halt"
-ORCHESTRATOR_FLAG_KIND = "orchestrator_24h_hard_halt"
-FACT_EXTRACTOR_FLAG_KIND = "fact_extractor_24h_hard_halt"
-FILES_API_FLAG_KIND = "anthropic_files_24h_hard_halt"
 
 
 def asset_24h_cost_usd(sb, asset_id: str) -> float:
@@ -107,9 +72,9 @@ def asset_24h_cost_usd(sb, asset_id: str) -> float:
 
 
 def global_24h_cost_usd(sb) -> float:
-    """SUM(cost_usd) over the last 24h across both orchestrator and
-    asset_linker spend. Bounded by select limit; for accurate accounting
-    beyond ~5000 rows/day add a SQL RPC."""
+    """SUM(cost_usd) over convergence_assessments rows in the last 24h.
+    Bounded by select limit; for accurate accounting beyond ~1000 runs/day
+    add a SQL RPC."""
     rpc_payload: Dict[str, Any] = {}
     try:
         rows = sb._rest(
@@ -123,7 +88,7 @@ def global_24h_cost_usd(sb) -> float:
     from datetime import datetime, timedelta, timezone
     cutoff_iso = (datetime.now(timezone.utc)
                   - timedelta(hours=24)).isoformat()
-    orch_rows = sb._rest(
+    rows = sb._rest(
         "GET", "convergence_assessments",
         params={
             "created_at": f"gte.{cutoff_iso}",
@@ -131,263 +96,7 @@ def global_24h_cost_usd(sb) -> float:
             "limit": "5000",
         },
     ) or []
-    orch_total = sum(float(r.get("cost_usd") or 0.0) for r in orch_rows)
-
-    # asset_linker spend is logged separately in asset_linker_runs.
-    # Missing table (pre-migration deploys) → treat as zero.
-    try:
-        linker_rows = sb._rest(
-            "GET", "asset_linker_runs",
-            params={
-                "started_at": f"gte.{cutoff_iso}",
-                "select": "cost_usd",
-                "limit": "5000",
-            },
-        ) or []
-        linker_total = sum(float(r.get("cost_usd") or 0.0) for r in linker_rows)
-    except Exception:  # noqa: BLE001
-        linker_total = 0.0
-    return orch_total + linker_total
-
-
-def asset_linker_24h_cost_usd(sb) -> float:
-    """SUM(cost_usd) over asset_linker_runs rows started in the last 24h.
-    Pure-table read; no RPC. Missing-table → zero (pre-migration safety)."""
-    from datetime import datetime, timedelta, timezone
-    cutoff_iso = (datetime.now(timezone.utc)
-                  - timedelta(hours=24)).isoformat()
-    try:
-        rows = sb._rest(
-            "GET", "asset_linker_runs",
-            params={
-                "started_at": f"gte.{cutoff_iso}",
-                "select": "cost_usd",
-                "limit": "5000",
-            },
-        ) or []
-    except Exception:  # noqa: BLE001
-        return 0.0
     return sum(float(r.get("cost_usd") or 0.0) for r in rows)
-
-
-def orchestrator_24h_cost_usd(sb) -> float:
-    """SUM(cost_usd) over convergence_assessments rows created in the last
-    24h. Pure-table read; no RPC. Missing-table → zero (pre-migration
-    safety, mirrors asset_linker_24h_cost_usd)."""
-    from datetime import datetime, timedelta, timezone
-    cutoff_iso = (datetime.now(timezone.utc)
-                  - timedelta(hours=24)).isoformat()
-    try:
-        rows = sb._rest(
-            "GET", "convergence_assessments",
-            params={
-                "created_at": f"gte.{cutoff_iso}",
-                "select": "cost_usd",
-                "limit": "5000",
-            },
-        ) or []
-    except Exception:  # noqa: BLE001
-        return 0.0
-    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
-
-
-def check_orchestrator_hard_halt(sb) -> Dict[str, Any]:
-    """Return {"halt": bool, "total_24h_usd": float}. Caller (the
-    orchestrator drain loop) MUST check this BEFORE pulling pending
-    orchestrator_runs rows and bail out if halt=True. On halt, also opens
-    an operator_flag so the breach is visible in the dashboard. Pending
-    rows stay pending — they'll be picked up by the next drain tick once
-    the rolling 24h drops back below the ceiling."""
-    total = orchestrator_24h_cost_usd(sb)
-    halt = total >= ORCHESTRATOR_24H_HARD_USD
-    if halt:
-        upsert_cost_flag(
-            sb,
-            severity="critical",
-            kind=ORCHESTRATOR_FLAG_KIND,
-            title=(
-                f"orchestrator 24h spend ${total:.2f} ≥ hard halt "
-                f"${ORCHESTRATOR_24H_HARD_USD:.0f}"
-            ),
-            body=(
-                f"convergence_assessments cost in the last 24h is "
-                f"${total:.2f}, ≥ the ${ORCHESTRATOR_24H_HARD_USD:.0f} "
-                "HARD halt. Drain ticks return early without dispatching "
-                "pending runs until the rolling 24h falls back below the "
-                "ceiling. Pending runs stay queued. Investigate the spike "
-                "(stuck ensemble_n, extractor infinite loop, asset thrash) "
-                "before raising the ceiling."
-            ),
-            evidence={
-                "orchestrator_24h_usd": round(total, 4),
-                "hard_halt_usd": ORCHESTRATOR_24H_HARD_USD,
-            },
-        )
-    return {"halt": halt, "total_24h_usd": round(total, 4)}
-
-
-def fact_extractor_24h_cost_usd(sb) -> float:
-    """SUM(cost_usd) over fact_extractor_runs rows started in the last 24h.
-    Pure-table read; no RPC. Missing-table → zero (the table was added in
-    migration 20260522000020 and may not be applied on older deploys yet)."""
-    from datetime import datetime, timedelta, timezone
-    cutoff_iso = (datetime.now(timezone.utc)
-                  - timedelta(hours=24)).isoformat()
-    try:
-        rows = sb._rest(
-            "GET", "fact_extractor_runs",
-            params={
-                "started_at": f"gte.{cutoff_iso}",
-                "select": "cost_usd",
-                "limit": "5000",
-            },
-        ) or []
-    except Exception:  # noqa: BLE001
-        return 0.0
-    return sum(float(r.get("cost_usd") or 0.0) for r in rows)
-
-
-def check_fact_extractor_hard_halt(sb) -> Dict[str, Any]:
-    """Return {"halt": bool, "total_24h_usd": float}. Caller (the
-    sonnet_fact_extractor main()) MUST check this before fetching docs and
-    bail out if halt=True. Mirror of check_asset_linker_hard_halt — same
-    observability semantics (single open operator_flag, dashboard surfacing,
-    auto-resume when 24h cost rolls below ceiling)."""
-    total = fact_extractor_24h_cost_usd(sb)
-    halt = total >= FACT_EXTRACTOR_24H_HARD_USD
-    if halt:
-        upsert_cost_flag(
-            sb,
-            severity="critical",
-            kind=FACT_EXTRACTOR_FLAG_KIND,
-            title=(
-                f"fact_extractor 24h spend ${total:.2f} ≥ hard halt "
-                f"${FACT_EXTRACTOR_24H_HARD_USD:.0f}"
-            ),
-            body=(
-                f"fact_extractor_runs cost in the last 24h is ${total:.2f}, "
-                f"≥ the ${FACT_EXTRACTOR_24H_HARD_USD:.0f} HARD halt. New "
-                "extractor runs return early without fetching docs until "
-                "the rolling 24h falls back below the ceiling. Investigate "
-                "the spike (asset_documents backlog spike, 10-K bulk-publish, "
-                "loop in fact insert) before raising the ceiling."
-            ),
-            evidence={
-                "fact_extractor_24h_usd": round(total, 4),
-                "hard_halt_usd": FACT_EXTRACTOR_24H_HARD_USD,
-            },
-        )
-    return {"halt": halt, "total_24h_usd": round(total, 4)}
-
-
-def check_asset_linker_hard_halt(sb) -> Dict[str, Any]:
-    """Return {"halt": bool, "total_24h_usd": float}. Caller (asset_linker
-    pass-1 main) MUST check this before fetching docs and bail out if
-    halt=True. On halt, also opens an operator_flag so the breach is visible
-    in the dashboard."""
-    total = asset_linker_24h_cost_usd(sb)
-    halt = total >= ASSET_LINKER_24H_HARD_USD
-    if halt:
-        upsert_cost_flag(
-            sb,
-            severity="critical",
-            kind=ASSET_LINKER_FLAG_KIND,
-            title=(
-                f"asset_linker 24h spend ${total:.2f} ≥ hard halt "
-                f"${ASSET_LINKER_24H_HARD_USD:.0f}"
-            ),
-            body=(
-                f"asset_linker_runs cost in the last 24h is ${total:.2f}, "
-                f"≥ the ${ASSET_LINKER_24H_HARD_USD:.0f} HARD halt. New "
-                "pass-1 runs return early without enqueuing docs until the "
-                "rolling 24h falls back below the ceiling. Investigate the "
-                "spike before raising the ceiling."
-            ),
-            evidence={
-                "asset_linker_24h_usd": round(total, 4),
-                "hard_halt_usd": ASSET_LINKER_24H_HARD_USD,
-            },
-        )
-    return {"halt": halt, "total_24h_usd": round(total, 4)}
-
-
-def files_api_24h_uploads(sb) -> int:
-    """COUNT(*) of documents uploaded to Anthropic Files API in the last 24h.
-    Uses `documents.anthropic_file_id IS NOT NULL` paired with `fetched_at`
-    as a proxy for upload time — fetched_at is set on initial INSERT and the
-    upload is idempotent at the row level (PATCH-only, never re-uploads).
-
-    The proxy is slightly loose for the backfill path: a row fetched 30 days
-    ago but uploaded today still attributes against the 24h window correctly
-    because the backfill only counts rows it just PATCHed in this run via the
-    scanner's run_metrics, not this function. This function is the read-side
-    cap — it under-counts the backfill's drain by exactly that much, which
-    biases toward false-negatives (no spurious halts) rather than runaway."""
-    from datetime import datetime, timedelta, timezone
-    cutoff_iso = (datetime.now(timezone.utc)
-                  - timedelta(hours=24)).isoformat()
-    try:
-        rows = sb._rest(
-            "GET", "documents",
-            params={
-                "fetched_at": f"gte.{cutoff_iso}",
-                "anthropic_file_id": "not.is.null",
-                "select": "id",
-                "limit": "5000",
-            },
-        ) or []
-        return len(rows)
-    except Exception:  # noqa: BLE001
-        return 0
-
-
-def files_api_24h_cost_usd(sb) -> float:
-    """Notional 24h cost from Files API uploads. See FILES_API_24H_HARD_USD
-    docstring for why we use a notional rate rather than a real per-upload
-    Anthropic charge."""
-    return files_api_24h_uploads(sb) * FILES_API_NOTIONAL_PER_UPLOAD_USD
-
-
-def check_files_api_hard_halt(sb) -> Dict[str, Any]:
-    """Return {"halt": bool, "total_24h_usd": float, "uploads_24h": int}.
-    Caller (anthropic_files_backfill scanner main) MUST check this before
-    starting upload work and bail out if halt=True. On halt, also opens an
-    operator_flag so the breach is visible in the dashboard."""
-    uploads = files_api_24h_uploads(sb)
-    total = uploads * FILES_API_NOTIONAL_PER_UPLOAD_USD
-    halt = total >= FILES_API_24H_HARD_USD
-    if halt:
-        upsert_cost_flag(
-            sb,
-            severity="critical",
-            kind=FILES_API_FLAG_KIND,
-            title=(
-                f"anthropic_files 24h uploads={uploads} "
-                f"(notional ${total:.2f}) ≥ hard halt "
-                f"${FILES_API_24H_HARD_USD:.0f}"
-            ),
-            body=(
-                f"Anthropic Files API uploads in the last 24h reached "
-                f"{uploads} (notional cost ${total:.2f} at "
-                f"${FILES_API_NOTIONAL_PER_UPLOAD_USD:.3f}/upload), at or "
-                f"above the ${FILES_API_24H_HARD_USD:.0f} HARD halt. New "
-                "backfill runs return early. Investigate the volume "
-                "(unexpected reupload loop? misconfigured ingester?) before "
-                "raising the ceiling. If volume is legitimate, raise "
-                "FILES_API_24H_HARD_USD in code, not via env."
-            ),
-            evidence={
-                "uploads_24h": uploads,
-                "notional_cost_24h_usd": round(total, 4),
-                "per_upload_usd": FILES_API_NOTIONAL_PER_UPLOAD_USD,
-                "hard_halt_usd": FILES_API_24H_HARD_USD,
-            },
-        )
-    return {
-        "halt": halt,
-        "total_24h_usd": round(total, 4),
-        "uploads_24h": uploads,
-    }
 
 
 def upsert_cost_flag(

@@ -255,7 +255,6 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "asset_linker_run",
         "asset_linker_pass2_run",
         "fact_extractor_run",
-        "aging_bulk_enqueue",
     })
 
 
@@ -530,9 +529,8 @@ def test_dispatch_asset_linker_pass2_run_passes_through_optional_args(monkeypatc
 # ---------------------------------------------------------------------------
 
 def test_dispatch_fact_extractor_run_spawns_remote_fn(monkeypatch):
-    """Fact extractor action with a valid asset_id must look up
-    fact_extractor_run in the deployed conan-v3-orchestrator app and spawn
-    it fire-and-forget."""
+    """Fact extractor action must look up fact_extractor_run in the
+    deployed conan-v3-orchestrator app and spawn it fire-and-forget."""
     spawned: Dict[str, Any] = {}
 
     class _Handle:
@@ -552,110 +550,11 @@ def test_dispatch_fact_extractor_run_spawns_remote_fn(monkeypatch):
     monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
     from modal_workers.orchestrator_app import _dispatch_compute_v3_action
 
-    out = _dispatch_compute_v3_action(
-        "fact_extractor_run", {"asset_id": "asset-1"},
-    )
+    out = _dispatch_compute_v3_action("fact_extractor_run", {})
     assert out == {"spawned": True, "function_call_id": "fc-fact-abc"}
     assert spawned["app"] == "conan-v3-orchestrator"
     assert spawned["fn"] == "fact_extractor_run"
-    assert spawned["kwargs"] == {"asset_id": "asset-1"}
-
-
-def test_dispatch_fact_extractor_run_rejects_blank_args(monkeypatch):
-    """Blank-mode invocation (args without asset_id) is rejected — the
-    hourly v3-fact-extractor cron was unscheduled 2026-05-11 and the
-    dispatcher must not let a stale caller resurrect it accidentally."""
-    from fastapi import HTTPException
-
-    # Sanity: even if someone monkeypatches from_name, the validation should
-    # short-circuit before Modal is touched. Install a from_name that would
-    # blow the test up if reached.
-    import modal as _modal
-
-    def _explode(*a, **kw):
-        raise AssertionError("from_name must not be called when args lack asset_id")
-
-    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(_explode))
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    with pytest.raises(HTTPException) as exc_info:
-        _dispatch_compute_v3_action("fact_extractor_run", {})
-    assert exc_info.value.status_code == 400
-    detail = exc_info.value.detail
-    assert "asset_id" in detail["error"]
-
-
-def test_dispatch_fact_extractor_run_rejects_non_string_asset_id(monkeypatch):
-    """asset_id must be a string — bare numerics, None, dicts all rejected."""
-    from fastapi import HTTPException
-
-    import modal as _modal
-    monkeypatch.setattr(_modal.Function, "from_name",
-                        staticmethod(lambda *a, **kw: pytest.fail("unreachable")))
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    for bad in (None, 42, {"id": "asset-1"}, ""):
-        with pytest.raises(HTTPException) as exc_info:
-            _dispatch_compute_v3_action(
-                "fact_extractor_run", {"asset_id": bad},
-            )
-        assert exc_info.value.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Lazy fact-extraction hook (Tier-1)
-# ---------------------------------------------------------------------------
-
-def test_lazy_extraction_passes_through_on_rc_zero(monkeypatch):
-    """rc=0 from the extractor = success (or benign no-op). The hook must
-    return None silently — Tier-1 synthesis proceeds."""
-    captured: Dict[str, Any] = {}
-
-    def fake_main(argv):
-        captured["argv"] = argv
-        return 0
-
-    monkeypatch.setattr(
-        "modal_workers.extractor.sonnet_fact_extractor.main", fake_main,
-    )
-    from modal_workers.orchestrator_app import _ensure_facts_extracted_for_asset
-
-    _ensure_facts_extracted_for_asset("asset-xyz")
-    # argv shape: ['--asset-id', '<id>', '--max', '<n>', '--budget-usd', '<n>']
-    assert "--asset-id" in captured["argv"]
-    assert "asset-xyz" in captured["argv"]
-
-
-def test_lazy_extraction_raises_on_rc3(monkeypatch):
-    """rc=3 = systemic exhaustion (credits out / every doc errored). The
-    hook must raise FactExtractorExhaustedError so the drain loop's
-    exception handler marks the orchestrator_runs row failed."""
-    monkeypatch.setattr(
-        "modal_workers.extractor.sonnet_fact_extractor.main",
-        lambda argv: 3,
-    )
-    from modal_workers.orchestrator_app import (
-        FactExtractorExhaustedError,
-        _ensure_facts_extracted_for_asset,
-    )
-
-    with pytest.raises(FactExtractorExhaustedError) as exc_info:
-        _ensure_facts_extracted_for_asset("asset-doomed")
-    assert "asset-doomed" in str(exc_info.value)
-
-
-def test_lazy_extraction_raises_on_rc2_missing_api_key(monkeypatch):
-    """rc=2 = missing ANTHROPIC_API_KEY (config bug, not transient). The
-    hook must raise so the run fails visibly rather than silently producing
-    a fact-less assessment."""
-    monkeypatch.setattr(
-        "modal_workers.extractor.sonnet_fact_extractor.main",
-        lambda argv: 2,
-    )
-    from modal_workers.orchestrator_app import _ensure_facts_extracted_for_asset
-
-    with pytest.raises(RuntimeError):
-        _ensure_facts_extracted_for_asset("asset-x")
+    assert spawned["kwargs"] == {}
 
 
 def test_dispatch_fact_extractor_run_passes_through_optional_args(monkeypatch):

@@ -419,7 +419,7 @@ def _parse_form4(xml_bytes: bytes, *, accession: str, filing_url: str,
                 for fref in txn.findall(".//footnoteId"):
                     fid = fref.attrib.get("id")
                     if fid and fid in footnotes:
-                        if re.search(r"\b10\s*b\s*5\s*[-\s]?\s*1\b|\brule\s+10b5-1\b",
+                        if re.search(r"10\s*b\s*5\s*[-\s]?\s*1|rule\s+10b5-1",
                                      footnotes[fid], re.IGNORECASE):
                             is_10b51 = True
                             break

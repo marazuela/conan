@@ -83,7 +83,7 @@ def test_build_tier2_input_blob_assembles_all_fields(monkeypatch):
         if method == "GET" and path == "extracted_facts":
             return [{"id": "f1"}, {"id": "f2"}]
         if method == "GET" and path == "asset_documents":
-            return [{"document_id": "d1"}]
+            return [{"document_id": "d1", "link_type": "primary", "is_material": True}]
         if method == "GET" and path == "convergence_assessments":
             return [{
                 "id": "prev-1", "tier": 1, "thesis_direction": "long",
@@ -104,6 +104,8 @@ def test_build_tier2_input_blob_assembles_all_fields(monkeypatch):
     # indication_normalized preferred when present
     assert blob.indication == "mdd"
     assert blob.reference_class_signature == "phase3_psych_NDA"
+    assert blob.evidence_packet["ok"] is True
+    assert blob.evidence_packet["counts"]["material_primary_documents"] == 1
     assert len(blob.extracted_facts) == 2
     assert len(blob.asset_documents) == 1
     assert blob.prior_assessment is not None
@@ -143,6 +145,24 @@ def test_build_tier2_input_blob_handles_no_prior(monkeypatch):
 
     blob = tier2.build_tier2_input_blob(sb, "a")
     assert blob.prior_assessment is None
+    assert blob.evidence_packet["ok"] is False
+    assert "missing_material_primary_document" in blob.evidence_packet["errors"]
+
+
+def test_build_tier2_input_blob_can_require_evidence_packet(monkeypatch):
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        if method == "GET" and path == "fda_assets":
+            return [{"id": "a", "ticker": "T", "drug_name": "D",
+                     "indication": "i"}]
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    with pytest.raises(ValueError, match="evidence packet incomplete"):
+        tier2.build_tier2_input_blob(sb, "a", require_evidence_packet=True)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +178,13 @@ def test_validate_tier2_output_rejects_missing_required_field():
     del payload["thesis_direction"]
     errors = tier2.validate_tier2_output(payload)
     assert any("thesis_direction" in e for e in errors)
+
+
+def test_validate_tier2_output_rejects_missing_hypotheses_field():
+    payload = _valid_payload()
+    del payload["hypotheses"]
+    errors = tier2.validate_tier2_output(payload)
+    assert any("hypotheses" in e for e in errors)
 
 
 def test_validate_tier2_output_rejects_wrong_tier():
@@ -195,6 +222,31 @@ def test_validate_tier2_output_rejects_hypothesis_with_too_few_kill_conditions()
     ]
     errors = tier2.validate_tier2_output(_valid_payload(hypotheses=bad_hyps))
     assert any("kill_conditions" in e for e in errors)
+
+
+def test_validate_tier2_output_accepts_keyed_hypotheses_object():
+    """Production Cowork drift emitted {bull,base,bear}; canonicalize it."""
+    keyed = {
+        "bull": {"claim": "approval", "kill_conditions": ["k1", "k2"]},
+        "base": {"claim": "delay", "kill_conditions": ["k3", "k4"]},
+        "bear": {"claim": "crl", "kill_conditions": ["k5", "k6"]},
+    }
+    assert tier2.validate_tier2_output(_valid_payload(hypotheses=keyed)) == []
+
+    normalized = tier2.normalize_tier2_payload(
+        _valid_payload(hypotheses=keyed),
+    )
+    assert [h["label"] for h in normalized["hypotheses"]] == [
+        "bull", "base", "bear",
+    ]
+
+
+def test_validate_tier2_output_rejects_scalar_list_fields():
+    errors = tier2.validate_tier2_output(
+        _valid_payload(citations="not-a-list"),
+    )
+
+    assert any("citations must be a list" in e for e in errors)
 
 
 def test_validate_tier2_output_rejects_tier1_only_fields_set():
@@ -250,6 +302,12 @@ def test_persist_tier2_assessment_writes_tier_and_supersedes_prior(monkeypatch):
     assert body["model_id"] == tier2.TIER2_MODEL_ID
     assert body["asset_id"] == "asset-uuid-1"
     assert body["trigger_type"] == "scheduled"
+    assert body["trigger_doc_id"] is None
+    assert body["document_window_start"]
+    assert body["document_window_end"]
+    assert body["document_ids"] == []
+    assert body["fact_ids"] == []
+    assert body["evidence_ledger"] == {}
     assert body["conviction_pct"] == 52.0
     assert body["cost_usd"] == 0.42
     assert body["latency_ms"] == 45000
@@ -282,6 +340,53 @@ def test_persist_tier2_assessment_validates_before_writing(monkeypatch):
     assert all(c["method"] not in ("POST", "PATCH") for c in captured)
 
 
+def test_persist_tier2_assessment_honors_payload_window_and_keyed_hypotheses(monkeypatch):
+    captured: List[Dict[str, Any]] = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "json_body": json_body})
+        if method == "POST" and path == "convergence_assessments":
+            return [{"id": "new-assessment-1"}]
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    tier2.persist_tier2_assessment(
+        sb,
+        "asset-uuid-1",
+        _valid_payload(
+            hypotheses={
+                "bull": {"claim": "approval", "kill_conditions": ["k1", "k2"]},
+                "base": {"claim": "delay", "kill_conditions": ["k3", "k4"]},
+                "bear": {"claim": "crl", "kill_conditions": ["k5", "k6"]},
+            },
+            document_ids=["11111111-1111-1111-1111-111111111111"],
+            document_window_start="2026-01-01T00:00:00+00:00",
+            document_window_end="2026-05-01T00:00:00+00:00",
+            thesis_summary="Tier-2 summary",
+            reasoning_trace="Tier-2 reasoning",
+        ),
+        trigger_type="new_doc",
+        trigger_doc_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    body = next(c for c in captured
+                if c["method"] == "POST")["json_body"]
+    assert body["trigger_type"] == "new_doc"
+    assert body["trigger_doc_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["document_window_start"] == "2026-01-01T00:00:00+00:00"
+    assert body["document_window_end"] == "2026-05-01T00:00:00+00:00"
+    assert body["document_ids"] == ["11111111-1111-1111-1111-111111111111"]
+    assert [h["label"] for h in body["hypotheses"]] == [
+        "bull", "base", "bear",
+    ]
+    assert body["thesis_summary"] == "Tier-2 summary"
+    assert body["reasoning_trace"] == "Tier-2 reasoning"
+
+
 # ---------------------------------------------------------------------------
 # check_tier1_escalation
 # ---------------------------------------------------------------------------
@@ -302,6 +407,15 @@ def test_check_tier1_escalation_below_threshold_no_escalate():
     )
     assert not decision.escalate
     assert decision.reasons == []
+
+
+def test_check_tier1_escalation_high_uncertainty_material_asset():
+    decision = tier2.check_tier1_escalation(
+        prior=None,
+        current=_valid_payload(conviction_pct=48.0, evidence_quality=0.30),
+    )
+    assert decision.escalate
+    assert any("high_uncertainty_material_asset" in r for r in decision.reasons)
 
 
 def test_check_tier1_escalation_direction_change():
@@ -383,6 +497,7 @@ def test_enqueue_tier1_escalation_inserts_orchestrator_run(monkeypatch):
     assert body["trigger_type"] == "tier2_escalation"
     assert body["tier"] == 1
     assert body["status"] == "pending"
+    assert body["scheduled_at"]
     assert body["notes"]["triggering_assessment_id"] == "assess-1"
     assert "high_conviction" in body["notes"]["escalation_reasons"][0]
 
@@ -412,8 +527,9 @@ def test_tier2_input_blob_to_json_is_serializable():
         drug_name="D",
         indication="i",
         reference_class_signature="rc",
+        evidence_packet={"ok": True, "errors": []},
         extracted_facts=[{"id": "f1"}],
-        asset_documents=[{"document_id": "d1"}],
+        asset_documents=[{"document_id": "d1", "link_type": "primary", "is_material": True}],
         prior_assessment=None,
     )
     out = json.loads(blob.to_json())
@@ -472,7 +588,7 @@ def test_enqueue_tier2_bulk_inserts_per_asset(monkeypatch):
             "indication": "MDD", "indication_normalized": "mdd",
         }],
         facts=[{"id": "f1"}],
-        asset_documents=[{"document_id": "d1"}],
+        asset_documents=[{"document_id": "d1", "link_type": "primary", "is_material": True}],
         prior_convergence=[],
     )
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
@@ -509,8 +625,10 @@ def test_enqueue_tier2_bulk_isolates_per_asset_failures(monkeypatch):
         if method == "GET" and path == "fda_assets":
             asset_id = (params or {}).get("id", "").replace("eq.", "")
             if asset_id == "good":
-                return [{"id": "good", "ticker": "T"}]
+                return [{"id": "good", "ticker": "T", "drug_name": "D"}]
             return []  # 'bad' triggers ValueError in build_tier2_input_blob
+        if method == "GET" and path == "asset_documents":
+            return [{"document_id": "d1", "link_type": "primary", "is_material": True}]
         return []
 
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
@@ -528,7 +646,8 @@ def test_enqueue_tier2_bulk_isolates_per_asset_failures(monkeypatch):
 def test_complete_tier2_run_happy_path(monkeypatch):
     fake_rest, captured = _make_rest_recorder(
         run_row={"id": "run-X", "asset_id": "a1", "status": "pending",
-                 "tier": 2},
+                 "tier": 2, "trigger_type": "scheduled",
+                 "trigger_doc_id": None},
         prior_convergence=[],
         insert_assessment_id="assess-X",
     )
@@ -551,6 +670,9 @@ def test_complete_tier2_run_happy_path(monkeypatch):
              if c["method"] == "POST" and c["path"] == "convergence_assessments"]
     assert len(posts) == 1
     assert posts[0]["json_body"]["tier"] == 2
+    assert posts[0]["json_body"]["trigger_type"] == "scheduled"
+    assert posts[0]["json_body"]["document_window_start"]
+    assert posts[0]["json_body"]["document_window_end"]
 
     # Run patched twice: running → completed
     run_patches = [c for c in captured

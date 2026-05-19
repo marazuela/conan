@@ -149,7 +149,7 @@ BEGIN
     RAISE EXCEPTION 'fda_event_request_specialist_refresh: event % not found', p_event_id;
   END IF;
 
-  v_snapshot_hash := 'manual:' || encode(gen_random_bytes(8), 'hex');
+  v_snapshot_hash := 'manual:' || encode(extensions.gen_random_bytes(8), 'hex');
 
   INSERT INTO public.fda_agent_reviews (
     event_id, agent_kind, version, snapshot_hash, status

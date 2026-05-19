@@ -28,39 +28,10 @@ Endpoints:
 
 from __future__ import annotations
 
-import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import modal
-
-logger = logging.getLogger(__name__)
-
-# Wave 3.2 — trigger → (ensemble_n, ensemble_mode) selection table.
-# Keep streaming everywhere until the batch async-drain pattern exists
-# (batch ensemble blocks the cron worker for up to 1h synchronously, which
-# breaks the */5 drain cadence). When batch async drain ships, switch
-# 'scheduled' and 'tier2_escalation' to ("batch", 7).
-#
-# Cost note: bumping scheduled from N=1 to N=3 ~triples the orchestrator
-# spend per scheduled run. We keep scheduled at N=1 today; flip when the
-# operator opts in (e.g. via orchestrator_runs.config_overrides, Wave 9).
-TRIGGER_ENSEMBLE_TABLE: Dict[str, Tuple[int, str]] = {
-    "cross_source":     (3, "streaming"),
-    "market_move":      (3, "streaming"),
-    "operator_refresh": (3, "streaming"),
-    "new_doc":          (3, "streaming"),
-    "scheduled":        (1, "streaming"),   # cost guard; bump via config_overrides
-    "tier2_escalation": (1, "streaming"),   # cost guard; bump via config_overrides
-    "manual":           (1, "streaming"),
-}
-DEFAULT_TRIGGER_ENSEMBLE: Tuple[int, str] = (1, "streaming")
-
-
-def select_ensemble_for_trigger(trigger: str) -> Tuple[int, str]:
-    """Look up (ensemble_n, ensemble_mode) for a given orchestrator trigger.
-    Falls back to single-shot streaming for unknown triggers."""
-    return TRIGGER_ENSEMBLE_TABLE.get(trigger, DEFAULT_TRIGGER_ENSEMBLE)
 
 # Distinct Modal app name. Coexists with conan-v2 in the same Modal workspace.
 app = modal.App("conan-v3-orchestrator")
@@ -198,24 +169,16 @@ def ingest_asset_corpus(
 )
 def asset_linker_run(
     asset_id: Optional[str] = None,
-    max_docs: int = 100,
-    budget_usd: float = 5.0,
-    ignore_24h_halt: bool = False,
-    doc_ids: Optional[str] = None,
+    max_docs: int = 200,
+    budget_usd: float = 15.0,
 ) -> Dict[str, Any]:
     """Classify unlinked documents into asset_documents. Use --asset-id to
-    restrict to one asset or omit for all is_active=true. `ignore_24h_halt`
-    and `doc_ids` are operator overrides for one-off test invocations — the
-    cron-driven call path never sets them."""
+    restrict to one asset or omit for all is_active=true."""
     from modal_workers.extractor.asset_linker import main as linker_main
 
     argv = ["--max", str(max_docs), "--budget-usd", str(budget_usd)]
     if asset_id:
         argv.extend(["--asset-id", asset_id])
-    if ignore_24h_halt:
-        argv.append("--ignore-24h-halt")
-    if doc_ids:
-        argv.extend(["--doc-ids", doc_ids])
     rc = linker_main(argv)
     return {"return_code": rc}
 
@@ -263,78 +226,17 @@ def asset_linker_pass2_run(
 )
 def fact_extractor_run(
     asset_id: Optional[str] = None,
-    max_links: int = 50,
-    budget_usd: float = 5.0,
-    ignore_24h_halt: bool = False,
+    max_links: int = 200,
+    budget_usd: float = 30.0,
 ) -> Dict[str, Any]:
-    """Extract structured facts from material asset_documents links.
-
-    `ignore_24h_halt` is an operator override for one-off backfills — the
-    cron-driven call path never sets it.
-    """
+    """Extract structured facts from material asset_documents links."""
     from modal_workers.extractor.sonnet_fact_extractor import main as extractor_main
 
     argv = ["--max", str(max_links), "--budget-usd", str(budget_usd)]
     if asset_id:
         argv.extend(["--asset-id", asset_id])
-    if ignore_24h_halt:
-        argv.append("--ignore-24h-halt")
     rc = extractor_main(argv)
     return {"return_code": rc}
-
-
-# Lazy-extraction caps for the on-demand path. Scoped per asset, so values
-# are << the blanket batch caps in fact_extractor_run above.
-LAZY_FACT_EXTRACT_MAX_DOCS = 50
-LAZY_FACT_EXTRACT_BUDGET_USD = 5.0
-
-
-class FactExtractorExhaustedError(RuntimeError):
-    """Raised when the per-asset extractor returns rc=3 — meaning every
-    attempted document failed (credits out, quota out, persistent 5xx) and
-    no new facts landed. Propagated up to orchestrator_drain_queue's
-    exception handler so the orchestrator_runs row gets marked failed with
-    a visible error_message instead of producing a zero-new-fact synthesis."""
-
-
-def _ensure_facts_extracted_for_asset(asset_id: str) -> None:
-    """Lazy fact extraction for one asset, run synchronously before an
-    assessment. Idempotent — `load_unextracted_links` in the extractor skips
-    documents that already have extracted_facts rows, so repeat calls on a
-    fully-extracted asset cost ~one Supabase round-trip.
-
-    Replaces the blanket hourly v3-fact-extractor cron (unscheduled
-    2026-05-11): extraction spend now follows actual Tier-1 assessment demand
-    instead of pre-building inputs for assets nothing currently assesses.
-
-    Return-code handling (per sonnet_fact_extractor.main contract):
-      rc=0  → success (including the benign "no unextracted material" case)
-      rc=2  → missing ANTHROPIC_API_KEY (config bug) → RuntimeError
-      rc=3  → every attempted doc errored, 0 facts inserted (credits/quota
-              regression) → FactExtractorExhaustedError, caught by the drain
-              loop's exception handler and persisted as a failed run
-
-    Tier-2 is intentionally NOT covered by this hook — enqueue_tier2_bulk
-    builds its input blob synchronously at enqueue time, so spawning
-    extraction there wouldn't help the current bulk run. Tier-2 reads
-    whatever facts already exist; Tier-1's lazy passes populate them over
-    time. Revisit if/when Tier-2 volume justifies the two-stage queue.
-    """
-    from modal_workers.extractor.sonnet_fact_extractor import main as extractor_main
-    rc = extractor_main([
-        "--asset-id", asset_id,
-        "--max", str(LAZY_FACT_EXTRACT_MAX_DOCS),
-        "--budget-usd", str(LAZY_FACT_EXTRACT_BUDGET_USD),
-    ])
-    if rc == 3:
-        raise FactExtractorExhaustedError(
-            f"fact_extractor exhausted for asset_id={asset_id} "
-            f"(all documents errored, 0 facts inserted) — see Modal logs"
-        )
-    if rc != 0:
-        raise RuntimeError(
-            f"fact_extractor returned unexpected rc={rc} for asset_id={asset_id}"
-        )
 
 
 # ============================================================================
@@ -392,13 +294,6 @@ def orchestrator_run_one(
 
     sb = SupabaseClient()
     a_client = OrchestratorClient()
-    # Lazy fact extraction: ensure this asset's facts are fresh before the
-    # synthesis pipeline reads them. Idempotent + bounded ($5/asset cap).
-    # Skipped on dry_run so prompt evals and smoke tests don't burn
-    # extraction credits — dry_run already skips the Stage 10 persist; it
-    # should also skip extraction side effects for symmetry.
-    if not dry_run:
-        _ensure_facts_extracted_for_asset(asset_id)
     # CLI-style invocation: no orchestrator_runs row, kill switch off by
     # default (operator already chose to spawn this run). Pass
     # hard_kill_usd via env var ORCH_HARD_KILL_USD to opt in.
@@ -451,37 +346,18 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     from modal_workers.shared.supabase_client import SupabaseClient
     from modal_workers.shared.cost_budget import (
         PER_RUN_HARD_KILL_USD, check_24h_thresholds,
-        check_orchestrator_hard_halt,
     )
     from orchestrator_runtime.client import (
         BudgetExceededError, DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL,
         OrchestratorClient,
     )
-    from orchestrator_runtime.runtime import (
-        ConstitutionalFailure, Stage9ParseError, run_one,
-    )
+    from orchestrator_runtime.runtime import run_one
 
     sb = SupabaseClient()
-
-    # 24h hard halt — check BEFORE pulling pending rows. Pending runs stay
-    # queued and will be picked up on a later drain tick once cost rolls off
-    # the 24h window.
-    halt_status = check_orchestrator_hard_halt(sb)
-    if halt_status["halt"]:
-        return {
-            "drained": 0, "completed": 0, "failed": 0,
-            "failed_constitutional": 0, "killed_budget": 0,
-            "halted": True,
-            "orchestrator_24h_usd": halt_status["total_24h_usd"],
-        }
-
     pending = sb._rest(
         "GET", "orchestrator_runs",
         params={
-            # Wave 9.1 — also pull config_overrides so per-run knobs (e.g.
-            # sub_agent_max_turns, ensemble_n bumps) plumb through to runtime.
-            "select": ("id,asset_id,trigger_type,trigger_doc_id,tier,"
-                       "config_overrides"),
+            "select": "id,asset_id,trigger_type,trigger_doc_id,tier",
             "status": "eq.pending",
             "tier": "eq.1",
             "order": "scheduled_at.asc",
@@ -494,17 +370,12 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     drained = 0
     completed = 0
     failed = 0
-    failed_constitutional = 0
     killed_budget = 0
-    skipped_prior_failure = 0
 
     for run_row in pending:
         run_id = run_row["id"]
         asset_id = run_row["asset_id"]
         trigger = run_row["trigger_type"]
-        # Wave 9.1 — config_overrides is jsonb-nullable; coerce to dict so
-        # the runtime never needs to distinguish "absent" from "empty".
-        config_overrides = run_row.get("config_overrides") or {}
 
         # Mark running
         sb._rest(
@@ -516,68 +387,20 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
             },
         )
 
-        # v3 §8a prior-failure guard. Block dispatch when the asset has an
-        # open kill verdict in the last 24h with challenger=kill AND
-        # aging_extensions.routine_declined='true'. The flag clears on next
-        # passing Stage B promotion. Operator can override via
-        # trigger_type='operator_refresh' (skips the SQL gate by design).
-        if trigger != "operator_refresh":
-            try:
-                guard = sb._rest(
-                    "POST", "rpc/v3_prior_failure_guard",
-                    json_body={"p_asset_id": asset_id},
-                )
-                allow = bool(guard) if isinstance(guard, bool) else (
-                    bool(guard[0]) if isinstance(guard, list) and guard else True
-                )
-            except Exception:
-                # Guard failures must never block drain progression. Telemetry
-                # would catch this via the RPC error log; we proceed as if
-                # the guard had returned True (allow).
-                allow = True
-            if not allow:
-                sb._rest(
-                    "PATCH", "orchestrator_runs",
-                    params={"id": f"eq.{run_id}"},
-                    json_body={
-                        "status": "skipped_dedupe",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "notes": {
-                            "skip_reason": "prior_failure_guard",
-                            "guard": "v3_prior_failure_guard",
-                        },
-                    },
-                )
-                skipped_prior_failure += 1
-                drained += 1
-                continue
-
         a_client = OrchestratorClient()
-        ensemble_n, ensemble_mode = select_ensemble_for_trigger(trigger)
-        # Wave 9.1 — config_overrides can bump these too. ensemble_n/mode wins
-        # over the trigger-mapped default when explicitly set.
-        if isinstance(config_overrides.get("ensemble_n"), int):
-            ensemble_n = max(1, min(15, config_overrides["ensemble_n"]))
-        if config_overrides.get("ensemble_mode") in {"streaming", "batch"}:
-            ensemble_mode = config_overrides["ensemble_mode"]
         try:
-            # Lazy fact extraction before synthesis. Failures here propagate to
-            # the except below and mark the run failed — same handling as a
-            # synthesis-stage failure, which is what we want when credits /
-            # quotas dry up.
-            _ensure_facts_extracted_for_asset(asset_id)
             aid = run_one(
                 sb, a_client,
                 asset_id=asset_id,
                 trigger_type=trigger,
                 model=DEFAULT_MODEL,
                 extractor_model=DEFAULT_EXTRACTOR_MODEL,
-                ensemble_n=ensemble_n,
-                ensemble_mode=ensemble_mode,
+                ensemble_n=3 if trigger in {"cross_source", "market_move",
+                                            "operator_refresh"} else 1,
+                ensemble_mode="streaming",
                 run_constitutional=True,
                 run_id=run_id,
                 hard_kill_usd=PER_RUN_HARD_KILL_USD,
-                config_overrides=config_overrides,
             )
             # cost_actual_usd lookup — convergence_assessments.cost_usd is
             # already populated by runtime.run_one() at line 638.
@@ -617,82 +440,6 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 },
             )
             killed_budget += 1
-        except ConstitutionalFailure as exc:
-            # D-117: Stage 7 gate fired. The run paid for Stages 1-7 of
-            # compute; persist that as cost_actual_usd so dashboards stay
-            # accurate. No convergence_assessments row exists for this run.
-            partial_cost = a_client.get_accumulated_cost()
-            sb._rest(
-                "PATCH", "orchestrator_runs",
-                params={"id": f"eq.{run_id}"},
-                json_body={
-                    "status": "failed_constitutional",
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "cost_actual_usd": round(partial_cost, 4),
-                    "error_message": str(exc)[:1000],
-                },
-            )
-            # Wave 2.1 — also emit an operator_flag so the dashboard's
-            # operator-surface picks this up. orchestrator_runs.status alone
-            # is invisible to the flags page. severity='warn' (not 'critical')
-            # because a constitutional fail is an expected gate, not breakage.
-            try:
-                finding_checks = sorted({
-                    getattr(f, "check", None) or
-                    (f.get("check") if isinstance(f, dict) else None)
-                    for f in (exc.findings or [])
-                    if getattr(f, "check", None) or
-                       (isinstance(f, dict) and f.get("check"))
-                })
-                # entity_id has FK → v2 entities(id) so we cannot stamp the
-                # fda_assets.id there. asset_id lives in evidence jsonb for
-                # filtering; dashboard joins on evidence->>'asset_id'.
-                sb._rest(
-                    "POST", "operator_flags",
-                    json_body={
-                        "severity": "warn",
-                        "source": "constitutional_check",
-                        "kind": "stage_7_gate",
-                        "title": (
-                            f"Stage 7 gate fired ({len(exc.findings or [])} "
-                            f"error finding(s))"
-                        ),
-                        "body": str(exc)[:1000],
-                        "evidence": {
-                            "orchestrator_run_id": run_id,
-                            "asset_id": asset_id,
-                            "trigger_type": trigger,
-                            "partial_cost_usd": round(partial_cost, 4),
-                            "finding_checks": finding_checks,
-                            "n_findings": len(exc.findings or []),
-                        },
-                    },
-                )
-            except Exception as flag_exc:  # noqa: BLE001
-                # Telemetry must never break drain progression. Log loudly,
-                # don't re-raise — the orchestrator_runs status patch is the
-                # canonical record; this flag is convenience for the dashboard.
-                logger.warning(
-                    "constitutional operator_flag emit failed for run %s: %s",
-                    run_id, flag_exc,
-                )
-            failed_constitutional += 1
-        except Stage9ParseError as exc:
-            # Stage 9 produced unparseable JSON. Previously this returned
-            # None and was silently marked 'completed' with assessment_id=null
-            # — now it cleanly lands as status='failed' with a specific tag.
-            partial_cost = a_client.get_accumulated_cost()
-            sb._rest(
-                "PATCH", "orchestrator_runs",
-                params={"id": f"eq.{run_id}"},
-                json_body={
-                    "status": "failed",
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "cost_actual_usd": round(partial_cost, 4),
-                    "error_message": f"stage_9_parse_error: {exc}"[:1000],
-                },
-            )
-            failed += 1
         except Exception as exc:
             sb._rest(
                 "PATCH", "orchestrator_runs",
@@ -718,9 +465,7 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
         "drained": drained,
         "completed": completed,
         "failed": failed,
-        "failed_constitutional": failed_constitutional,
         "killed_budget": killed_budget,
-        "skipped_prior_failure": skipped_prior_failure,
     }
 
 
@@ -816,14 +561,7 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 def tier2_bulk_enqueue(asset_ids: list) -> Dict[str, Any]:
     """Phase 4B: enqueue Tier-2 scheduled bulk runs. Thin wrapper around
     `orchestrator_runtime.tier2.enqueue_tier2_bulk` — see that function for
-    the full contract.
-
-    Tier-2 deliberately does NOT trigger lazy fact extraction (unlike the
-    Tier-1 paths). `enqueue_tier2_bulk` builds the input blob synchronously
-    here and returns it for Cowork to cache, so any fire-and-forget
-    extraction spawn would race the blob build and lose. Tier-2 reads the
-    facts that already exist; Tier-1's lazy hook (orchestrator_run_one +
-    orchestrator_drain_queue) populates them over time."""
+    the full contract."""
     from modal_workers.shared.supabase_client import SupabaseClient
     from orchestrator_runtime.tier2 import enqueue_tier2_bulk
 
@@ -905,7 +643,6 @@ COMPUTE_V3_ACTIONS = frozenset({
     "asset_linker_run",
     "asset_linker_pass2_run",
     "fact_extractor_run",
-    "aging_bulk_enqueue",
 })
 
 
@@ -1005,32 +742,14 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         return {"spawned": True, "function_call_id": handle.object_id}
 
     if action == "fact_extractor_run":
-        # Fire-and-forget spawn of the Sonnet fact_extractor for ONE asset.
-        # The hourly v3-fact-extractor cron was unscheduled 2026-05-11 — this
-        # path is now operator-only (manual one-shot for an asset that needs
-        # re-extraction). Blanket-mode invocation (`args` without asset_id)
-        # is rejected to prevent accidental resurrection of the old spend
-        # pattern.
-        asset_id = args.get("asset_id")
-        if not asset_id or not isinstance(asset_id, str):
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        "fact_extractor_run requires args.asset_id (string). "
-                        "Blanket-mode extraction was retired with the "
-                        "v3-fact-extractor cron on 2026-05-11; use Tier-1 "
-                        "lazy extraction (orchestrator_run_one / "
-                        "orchestrator_drain_queue) for routine fact freshness."
-                    ),
-                },
-            )
+        # Fire-and-forget spawn of the Sonnet fact_extractor over material
+        # asset_documents links. Fired by pg_cron job `v3-fact-extractor`
+        # (hourly at :20).
         fn = modal.Function.from_name(
             "conan-v3-orchestrator", "fact_extractor_run",
         )
-        kwargs: Dict[str, Any] = {"asset_id": asset_id}
-        for k in ("max_links", "budget_usd"):
+        kwargs: Dict[str, Any] = {}
+        for k in ("asset_id", "max_links", "budget_usd"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
@@ -1046,8 +765,6 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
 
     sb = SupabaseClient()
     if action == "tier2_bulk_enqueue":
-        # Tier-2 reads existing facts only — see tier2_bulk_enqueue() docstring
-        # for why fire-and-forget extraction spawns would race the blob build.
         return enqueue_tier2_bulk(sb, args["asset_ids"])
     if action == "tier2_complete":
         return complete_tier2_run(
@@ -1059,56 +776,6 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
     if action == "tier2_fail":
         return fail_tier2_run(sb, args["run_id"], args.get("error_message", ""))
-    if action == "aging_bulk_enqueue":
-        # Cowork-only path: return up to N kill_pending watch=1-2 assets that
-        # haven't been Stage-B-evaluated today. NO orchestrator_runs writes —
-        # the fda_aging_review Cowork skill consumes this list directly,
-        # writes verdicts to fda_aging_verdicts (stage='b_claude_review').
-        # Quota gate (10/UTC-day) is also enforced server-side here so the
-        # caller can't request more than today's remaining budget.
-        from datetime import datetime, timezone
-        max_assets = int(args.get("max_assets", 10))
-        max_assets = max(0, min(max_assets, 10))
-        today_count_rows = sb._rest(
-            "GET", "fda_aging_verdicts",
-            params={
-                "select": "id",
-                "stage": "eq.b_claude_review",
-                "created_at": "gte." + datetime.now(timezone.utc).date().isoformat(),
-                "limit": "11",
-            },
-        ) or []
-        remaining = max(0, 10 - len(today_count_rows))
-        cap = min(max_assets, remaining)
-        if cap == 0:
-            return {
-                "assets": [],
-                "remaining_quota": 0,
-                "today_count": len(today_count_rows),
-            }
-        rows = sb._rest(
-            "GET", "fda_assets",
-            params={
-                "select": "id,ticker,drug_name,indication,watch_priority,"
-                          "aging_state,next_catalyst_date,aging_extensions,"
-                          "last_aging_evaluated_at",
-                "is_active": "eq.true",
-                "aging_state": "eq.kill_pending",
-                "watch_priority": "in.(1,2)",
-                "or": (
-                    "(last_aging_evaluated_at.is.null,"
-                    f"last_aging_evaluated_at.lt."
-                    f"{datetime.now(timezone.utc).date().isoformat()})"
-                ),
-                "order": "next_catalyst_date.asc.nullsfirst",
-                "limit": str(cap),
-            },
-        ) or []
-        return {
-            "assets": rows,
-            "remaining_quota": remaining,
-            "today_count": len(today_count_rows),
-        }
     # ic_memo_run
     return run_ic_memo(
         sb,

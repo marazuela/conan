@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from modal_workers.biotech_enricher import biotech_enrichment_sweep, enrich_biotech_signal
+from modal_workers.legal_enricher import enrich_legal_signal, legal_enrichment_sweep
 from modal_workers.shared.supabase_client import SupabaseClient
 
 
@@ -25,6 +26,56 @@ def _make_client(monkeypatch, dispatcher):
     client = SupabaseClient.__new__(SupabaseClient)
     client.captured = captured  # type: ignore[attr-defined]
     return client
+
+
+def test_enrich_legal_signal_builds_risk_and_regulations():
+    signal = {
+        "signal_type": "settlement",
+        "raw_payload": {
+            "title": "Antitrust class action settlement announced",
+            "summary": "Major antitrust settlement",
+            "nos": "410",
+            "source_feed": "litrel",
+            "ticker_hint": "ACME",
+        },
+    }
+
+    out = enrich_legal_signal(signal)
+
+    assert out["schema_version"] == "legal_enrichment_v1"
+    assert out["risk_color"] == "red"
+    assert out["risk_score"] >= 16
+    assert "Antitrust" in out["regulations"]
+    assert out["case_family"] == "sec_litigation"
+    assert out["procedural_stage"] == "settlement"
+    assert out["ticker_hint_present"] is True
+
+
+def test_legal_enrichment_sweep_merges_extensions(monkeypatch):
+    def dispatch(method, path, *, params=None, json_body=None, prefer=None):
+        if method == "GET" and path == "signals":
+            return [{
+                "signal_id": "sig-1",
+                "signal_type": "settlement",
+                "raw_payload": {
+                    "title": "Antitrust settlement filed",
+                    "summary": "Settlement summary",
+                    "nos": "410",
+                    "source_feed": "litrel",
+                },
+                "extensions": {"existing": True},
+            }]
+        return None
+
+    client = _make_client(monkeypatch, dispatch)
+    result = legal_enrichment_sweep(client)
+
+    assert result["updated"] == 1
+    patches = [c for c in client.captured if c["method"] == "PATCH" and c["path"] == "signals"]
+    assert len(patches) == 1
+    extensions = patches[0]["json_body"]["extensions"]
+    assert extensions["existing"] is True
+    assert extensions["legal_enrichment"]["schema_version"] == "legal_enrichment_v1"
 
 
 def test_enrich_biotech_signal_uses_trial_and_history():

@@ -50,10 +50,6 @@ class ScannerConfig:
     timeout_soft_s: int
     timeout_hard_s: int
     config: Dict[str, Any] = field(default_factory=dict)
-    # Set by scanner_base.run_scanner after open_scanner_run. Lets scanners
-    # write per-run telemetry (e.g. unresolved_sponsor_log) cross-referenced
-    # to the originating scanner_runs row.
-    scanner_run_id: Optional[str] = None
 
 
 @dataclass
@@ -212,15 +208,9 @@ class SupabaseClient:
             if row.get("name") and row.get("status")
         }
 
-    # Runnable statuses for the dispatcher — kept in sync with
-    # modal_workers/app._ALLOWED_DISPATCH_STATUSES. `shadow` and
-    # `shadow_with_emit` are lifecycle stages of operational scanners (the
-    # scanner decides internally whether to emit signals).
-    _RUNNABLE_STATUS_IN = '("operational","active","shadow","shadow_with_emit")'
-
     def load_operational_daily_names_for_hour(self, hour_utc: int,
                                               null_default_hour: int = 13) -> List[str]:
-        """Names of `cadence='daily'` scanners in a runnable status and scheduled
+        """Names of `cadence='daily'` scanners operational right now and scheduled
         for `hour_utc`. Rows with NULL `scheduled_hour_utc` route to `null_default_hour`
         so a newly-registered scanner still fires once a day without manual timing.
 
@@ -234,7 +224,7 @@ class SupabaseClient:
             "scanners",
             params={
                 "cadence": "eq.daily",
-                "status": f"in.{self._RUNNABLE_STATUS_IN}",
+                "status": "eq.operational",
                 "scheduled_hour_utc": f"eq.{hour_utc}",
                 "select": "name",
             },
@@ -246,7 +236,7 @@ class SupabaseClient:
                 "scanners",
                 params={
                     "cadence": "eq.daily",
-                    "status": f"in.{self._RUNNABLE_STATUS_IN}",
+                    "status": "eq.operational",
                     "scheduled_hour_utc": "is.null",
                     "select": "name",
                 },
@@ -255,17 +245,16 @@ class SupabaseClient:
         return sorted(set(names))
 
     def load_operational_names_by_cadence(self, cadence: str) -> List[str]:
-        """Names of scanners in a runnable status with the given cadence. Used
-        by the 3h and weekly dispatchers (daily uses
-        load_operational_daily_names_for_hour because it routes by
-        scheduled_hour_utc).
+        """Names of operational scanners with the given cadence. Used by the 3h
+        and weekly dispatchers (daily uses load_operational_daily_names_for_hour
+        because it routes by scheduled_hour_utc).
         """
         rows = self._rest(
             "GET",
             "scanners",
             params={
                 "cadence": f"eq.{cadence}",
-                "status": f"in.{self._RUNNABLE_STATUS_IN}",
+                "status": "eq.operational",
                 "select": "name",
             },
         ) or []
@@ -308,38 +297,6 @@ class SupabaseClient:
                               params={"id": f"eq.{run_id}"},
                               json_body=patch)
 
-    def log_unresolved_sponsors(self, scanner_name: str, scanner_run_id: Optional[str],
-                                 rows: List[Dict[str, Any]]) -> int:
-        """Batch-insert unresolved-sponsor occurrences into unresolved_sponsor_log.
-
-        `rows` items shape: {"sponsor_name": str, "context": dict (optional)}.
-        Each row's `sponsor_name_normalized` is derived here via
-        sec_issuer_lookup._strip_suffix so the aggregation column aligns with
-        what IssuerIndex.resolve() actually compares against.
-
-        Best-effort: insert failure raises a single SupabaseError; callers
-        should treat this as fire-and-forget (telemetry, not load-bearing).
-        """
-        if not rows:
-            return 0
-        from modal_workers.shared.sec_issuer_lookup import _strip_suffix
-        body: List[Dict[str, Any]] = []
-        for r in rows:
-            name = (r.get("sponsor_name") or "").strip()
-            if not name:
-                continue
-            body.append({
-                "sponsor_name": name,
-                "sponsor_name_normalized": _strip_suffix(name),
-                "scanner_name": scanner_name,
-                "scanner_run_id": scanner_run_id,
-                "context": r.get("context") or {},
-            })
-        if not body:
-            return 0
-        self._rest("POST", "unresolved_sponsor_log", json_body=body)
-        return len(body)
-
     @staticmethod
     def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         if not value:
@@ -349,7 +306,7 @@ class SupabaseClient:
         except ValueError:
             return None
 
-    def reap_orphan_runs(self, max_age_seconds: int = 1500) -> List[Dict[str, Any]]:
+    def reap_orphan_runs(self, max_age_seconds: int = 1200) -> List[Dict[str, Any]]:
         """Sweep `scanner_runs` where status='running' AND started_at is older than
         `max_age_seconds`. Flip them to status='timeout' with an errors note.
 

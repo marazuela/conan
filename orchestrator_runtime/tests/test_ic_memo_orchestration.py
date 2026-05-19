@@ -219,19 +219,13 @@ def test_load_context_raises_on_missing_assessment(monkeypatch):
 
 def test_load_context_raises_when_no_specialists_present(monkeypatch):
     """Refusing to synthesize an IC memo with zero specialist inputs is
-    safer than silently emitting a vague memo. Must be empty in BOTH
-    sub_agent_calls (4-role) AND fda_agent_reviews (Phase 0 fallback)."""
+    safer than silently emitting a vague memo."""
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
         if method == "GET" and path == "convergence_assessments":
             return [_make_assessment_row()]
         if method == "GET" and path == "fda_assets":
             return [_make_asset_row()]
         if method == "GET" and path == "sub_agent_calls":
-            return []
-        # Phase 0 fallback also returns nothing — no events, no reviews
-        if method == "GET" and path == "fda_regulatory_events":
-            return []
-        if method == "GET" and path == "fda_agent_reviews":
             return []
         return []
 
@@ -241,103 +235,6 @@ def test_load_context_raises_when_no_specialists_present(monkeypatch):
     with pytest.raises(ic_memo_runner.ICMemoOrchestrationError,
                        match="no schema-passing specialist"):
         ic_memo_runner.load_ic_memo_context(sb, "assess-1")
-
-
-def test_load_context_falls_back_to_phase0_fda_agent_reviews(monkeypatch):
-    """When sub_agent_calls is empty for an assessment but the asset has
-    completed Phase 0 reviews on fda_agent_reviews, the loader bridges
-    the 3-role → 4-role taxonomy and returns those payloads. Unblocks
-    IC memo synthesis while sub-agent dispatch is gated off."""
-    captured: List[Dict[str, Any]] = []
-
-    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path, "params": params})
-        if method == "GET" and path == "convergence_assessments":
-            return [_make_assessment_row()]
-        if method == "GET" and path == "fda_assets":
-            return [_make_asset_row()]
-        if method == "GET" and path == "sub_agent_calls":
-            return []  # 4-role path empty — trigger fallback
-        if method == "GET" and path == "fda_regulatory_events":
-            return [{"id": "evt-1"}, {"id": "evt-0-older"}]
-        if method == "GET" and path == "fda_agent_reviews":
-            return [
-                # Newest per role — these should win
-                {"agent_kind": "medical",
-                 "structured_output": {"summary": "medical NEW"},
-                 "status": "completed",
-                 "ran_at": "2026-05-13T08:00:00Z"},
-                {"agent_kind": "regulatory",
-                 "structured_output": {"summary": "regulatory NEW"},
-                 "status": "completed",
-                 "ran_at": "2026-05-13T08:01:00Z"},
-                {"agent_kind": "microstructure",
-                 "structured_output": {"summary": "microstructure NEW"},
-                 "status": "completed",
-                 "ran_at": "2026-05-13T08:02:00Z"},
-                # Older medical for the prior event — must NOT override
-                {"agent_kind": "medical",
-                 "structured_output": {"summary": "medical OLD"},
-                 "status": "completed",
-                 "ran_at": "2026-05-10T08:00:00Z"},
-            ]
-        return []
-
-    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
-    sb = _stub_client(fake_rest)
-
-    ctx = ic_memo_runner.load_ic_memo_context(sb, "assess-1")
-
-    # Phase 0 roles remapped to the new 4-role taxonomy keys
-    assert set(ctx["specialists"].keys()) == {
-        "literature", "regulatory_history", "options_microstructure",
-    }
-    # competitive has no Phase 0 equivalent — left absent (build_user_content
-    # will render the placeholder text)
-    assert "competitive" not in ctx["specialists"]
-    # Newest-per-role wins (asset has reviews from two events, medical from
-    # 2026-05-13 should beat 2026-05-10)
-    assert ctx["specialists"]["literature"]["summary"] == "medical NEW"
-    assert ctx["specialists"]["regulatory_history"]["summary"] == "regulatory NEW"
-    assert ctx["specialists"]["options_microstructure"]["summary"] == "microstructure NEW"
-
-    # The fallback fired only after sub_agent_calls returned empty
-    paths = [c["path"] for c in captured if c["method"] == "GET"]
-    assert paths.index("sub_agent_calls") < paths.index("fda_regulatory_events")
-
-    # fda_agent_reviews query targeted only completed Phase-0 roles
-    review_call = next(c for c in captured
-                       if c["method"] == "GET" and c["path"] == "fda_agent_reviews")
-    assert review_call["params"]["status"] == "eq.completed"
-    assert "medical" in review_call["params"]["agent_kind"]
-    assert "regulatory" in review_call["params"]["agent_kind"]
-    assert "microstructure" in review_call["params"]["agent_kind"]
-
-
-def test_load_context_skips_phase0_fallback_when_sub_agent_calls_has_rows(monkeypatch):
-    """Don't read fda_agent_reviews when sub_agent_calls already has data —
-    sub_agent_calls is the canonical 4-role path; Phase 0 is the bridge."""
-    captured: List[Dict[str, Any]] = []
-
-    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path})
-        if method == "GET" and path == "convergence_assessments":
-            return [_make_assessment_row()]
-        if method == "GET" and path == "fda_assets":
-            return [_make_asset_row()]
-        if method == "GET" and path == "sub_agent_calls":
-            return [_make_specialist("literature", "from sub_agent_calls")]
-        # If the fallback fires, this would shadow sub_agent_calls — but it shouldn't fire
-        if method == "GET" and path == "fda_regulatory_events":
-            pytest.fail("Phase 0 fallback fired even though sub_agent_calls had rows")
-        return []
-
-    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
-    sb = _stub_client(fake_rest)
-
-    ctx = ic_memo_runner.load_ic_memo_context(sb, "assess-1")
-    assert ctx["specialists"]["literature"]["summary"] == "from sub_agent_calls"
-    assert "fda_regulatory_events" not in [c["path"] for c in captured]
 
 
 def test_load_context_handles_missing_anchor(monkeypatch):
@@ -366,24 +263,14 @@ def test_load_context_handles_missing_anchor(monkeypatch):
 # persist_ic_memo_result
 # ---------------------------------------------------------------------------
 
-def test_persist_inserts_fda_agent_review_row(monkeypatch):
-    """The canonical write target is fda_agent_reviews (event-scoped), NOT
-    sub_agent_calls (assessment-scoped). See audit doc §F-IC4."""
+def test_persist_inserts_ic_memo_role_row(monkeypatch):
     captured: List[Dict[str, Any]] = []
 
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path, "params": params,
+        captured.append({"method": method, "path": path,
                          "json_body": json_body, "prefer": prefer})
-        # event_id resolver chain
-        if method == "GET" and path == "convergence_assessments":
-            return [{"asset_id": "asset-1"}]
-        if method == "GET" and path == "fda_regulatory_events":
-            return [{"id": "evt-pending-1"}]
-        if method == "POST" and path == "fda_agent_reviews":
-            return [{"id": "rev-new-1"}]
-        # Catch the OLD wrong table — should never be POSTed to
         if method == "POST" and path == "sub_agent_calls":
-            pytest.fail("persist wrote to legacy sub_agent_calls table")
+            return [{"id": "sac-new-1"}]
         return []
 
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
@@ -391,12 +278,7 @@ def test_persist_inserts_fda_agent_review_row(monkeypatch):
 
     result = SubAgentResult(
         role="ic_memo", schema_pass=True, schema_retries=0,
-        output={
-            "schema_version": 1,
-            "thesis": {"direction": "long", "headline": "PDUFA likely"},
-            "citations": [{"ref": "lit-1", "source": "literature"}],
-            "confidence": 0.74,
-        },
+        output={"thesis": {"direction": "long"}},
         tokens_input=1200, tokens_output=500,
         cost_usd=0.04, latency_ms=3800,
     )
@@ -404,71 +286,23 @@ def test_persist_inserts_fda_agent_review_row(monkeypatch):
     new_id = ic_memo_runner.persist_ic_memo_result(
         sb, "assess-1", "Synthesize the case.", result,
     )
-    assert new_id == "rev-new-1"
+    assert new_id == "sac-new-1"
 
-    # event_id resolver fired with status=pending filter
-    evt_call = next(c for c in captured
-                    if c["method"] == "GET" and c["path"] == "fda_regulatory_events")
-    assert evt_call["params"]["asset_id"] == "eq.asset-1"
-    assert evt_call["params"]["event_status"] == "eq.pending"
-
-    # POST body shape — all NOT NULL columns populated, snapshot_hash deterministic
-    post = next(c for c in captured
-                if c["method"] == "POST" and c["path"] == "fda_agent_reviews")
-    body = post["json_body"]
-    assert body["event_id"] == "evt-pending-1"
-    assert body["agent_kind"] == "ic_memo"
-    assert body["version"] == ic_memo_runner.IC_MEMO_VERSION
-    assert body["status"] == "completed"
-    assert body["structured_output"]["thesis"]["direction"] == "long"
-    assert body["citations"] == [{"ref": "lit-1", "source": "literature"}]
-    assert body["confidence"] == 0.74
-    # snapshot_hash is a 64-char hex SHA-256
-    assert len(body["snapshot_hash"]) == 64
-    int(body["snapshot_hash"], 16)  # raises if not hex
-    assert "ran_at" in body
-    assert post["prefer"] == "return=representation"
-
-
-def test_persist_returns_none_when_asset_has_no_pending_event(monkeypatch):
-    """Honest-empty: surrounding assessment pipeline still completes; the
-    operator just can't promote-to-thesis since there's no event anchor."""
-    captured: List[Dict[str, Any]] = []
-
-    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        captured.append({"method": method, "path": path})
-        if method == "GET" and path == "convergence_assessments":
-            return [{"asset_id": "asset-1"}]
-        if method == "GET" and path == "fda_regulatory_events":
-            return []  # no pending events
-        if method == "POST" and path == "fda_agent_reviews":
-            pytest.fail("persist wrote without a resolved event_id")
-        return []
-
-    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
-    sb = _stub_client(fake_rest)
-
-    result = SubAgentResult(
-        role="ic_memo", schema_pass=True, schema_retries=0, output={},
-    )
-    new_id = ic_memo_runner.persist_ic_memo_result(sb, "assess-1", "q", result)
-    assert new_id is None
-
-    # No POST attempted
-    posts = [c for c in captured if c["method"] == "POST"]
-    assert posts == []
+    body = captured[0]["json_body"]
+    assert body["assessment_id"] == "assess-1"
+    assert body["role"] == "ic_memo"
+    assert body["query"] == "Synthesize the case."
+    assert body["output"] == {"thesis": {"direction": "long"}}
+    assert body["schema_pass"] is True
+    assert body["tokens"] == 1700  # input + output
+    assert body["cost_usd"] == 0.04
+    assert body["latency_ms"] == 3800
+    assert captured[0]["prefer"] == "return=representation"
 
 
 def test_persist_raises_when_insert_returns_no_row(monkeypatch):
-    """RPC succeeded but returned 0 rows — unexpected; surface it."""
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
-        if method == "GET" and path == "convergence_assessments":
-            return [{"asset_id": "asset-1"}]
-        if method == "GET" and path == "fda_regulatory_events":
-            return [{"id": "evt-1"}]
-        if method == "POST" and path == "fda_agent_reviews":
-            return []  # POST returns no rows — anomalous
-        return []
+        return []  # POST returns no rows
 
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
     sb = _stub_client(fake_rest)
@@ -480,30 +314,11 @@ def test_persist_raises_when_insert_returns_no_row(monkeypatch):
         ic_memo_runner.persist_ic_memo_result(sb, "a", "q", result)
 
 
-def test_compute_snapshot_hash_is_deterministic_on_inputs():
-    """Same inputs → same hash (operators can dedup re-runs)."""
-    out = {"thesis": {"direction": "long"}, "confidence": 0.7}
-    h1 = ic_memo_runner._compute_ic_memo_snapshot_hash("evt-1", "assess-1", out)
-    h2 = ic_memo_runner._compute_ic_memo_snapshot_hash("evt-1", "assess-1", out)
-    assert h1 == h2
-    # Different output → different hash
-    h3 = ic_memo_runner._compute_ic_memo_snapshot_hash(
-        "evt-1", "assess-1", {"thesis": {"direction": "short"}},
-    )
-    assert h1 != h3
-    # All 64-char hex
-    for h in (h1, h2, h3):
-        assert len(h) == 64
-        int(h, 16)
-
-
 # ---------------------------------------------------------------------------
 # run_ic_memo (end-to-end)
 # ---------------------------------------------------------------------------
 
 def test_run_ic_memo_end_to_end(monkeypatch):
-    """Full happy path: load context (with the bridge if needed), synthesize,
-    persist to fda_agent_reviews (NOT sub_agent_calls)."""
     captured: List[Dict[str, Any]] = []
 
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
@@ -520,13 +335,8 @@ def test_run_ic_memo_end_to_end(monkeypatch):
                 _make_specialist("regulatory_history"),
                 _make_specialist("options_microstructure"),
             ]
-        # persist path needs an event_id
-        if method == "GET" and path == "fda_regulatory_events":
-            return [{"id": "evt-pending-1"}]
-        if method == "POST" and path == "fda_agent_reviews":
-            return [{"id": "rev-new-1"}]
         if method == "POST" and path == "sub_agent_calls":
-            pytest.fail("persist wrote to legacy sub_agent_calls table")
+            return [{"id": "sac-new-1"}]
         return []
 
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
@@ -556,10 +366,8 @@ def test_run_ic_memo_end_to_end(monkeypatch):
     assert ctx["thesis"]["direction"] == "long"
     assert fake_runner.calls[0]["question"] == "Custom synthesis prompt for AXS-05."
 
-    # Result returned + persisted to the right table
-    # (key name "sub_agent_call_id" preserved for backwards compat; value is
-    # now an fda_agent_reviews.id — see run_ic_memo docstring)
-    assert out["sub_agent_call_id"] == "rev-new-1"
+    # Result returned + persisted
+    assert out["sub_agent_call_id"] == "sac-new-1"
     assert out["assessment_id"] == "assess-1"
     assert out["output"]["thesis"]["direction"] == "long"
     assert out["cost_usd"] == 0.05
@@ -567,12 +375,12 @@ def test_run_ic_memo_end_to_end(monkeypatch):
     assert out["tokens_output"] == 600
     assert out["latency_ms"] == 4200
 
+    # Persistence happened with correct shape
     posts = [c for c in captured
-             if c["method"] == "POST" and c["path"] == "fda_agent_reviews"]
+             if c["method"] == "POST" and c["path"] == "sub_agent_calls"]
     assert len(posts) == 1
-    body = posts[0]["json_body"]
-    assert body["event_id"] == "evt-pending-1"
-    assert body["agent_kind"] == "ic_memo"
+    assert posts[0]["json_body"]["role"] == "ic_memo"
+    assert posts[0]["json_body"]["assessment_id"] == "assess-1"
 
 
 def test_run_ic_memo_uses_default_question_when_none(monkeypatch):
@@ -583,10 +391,8 @@ def test_run_ic_memo_uses_default_question_when_none(monkeypatch):
             return [_make_asset_row()]
         if method == "GET" and path == "sub_agent_calls":
             return [_make_specialist("literature")]
-        if method == "GET" and path == "fda_regulatory_events":
-            return [{"id": "evt-1"}]
-        if method == "POST" and path == "fda_agent_reviews":
-            return [{"id": "rev-1"}]
+        if method == "POST" and path == "sub_agent_calls":
+            return [{"id": "sac-1"}]
         return []
 
     monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
@@ -618,11 +424,9 @@ def test_run_ic_memo_persist_false_skips_db_write(monkeypatch):
         sb, "assess-1", runner=fake_runner, persist=False,
     )
     assert out["sub_agent_call_id"] is None
-    # Neither table should receive a write
-    posts = [c for c in captured if c["method"] == "POST"]
+    posts = [c for c in captured
+             if c["method"] == "POST" and c["path"] == "sub_agent_calls"]
     assert posts == []
-    # Nor should the event_id resolver be queried (persist=False short-circuits)
-    assert "fda_regulatory_events" not in {c["path"] for c in captured}
 
 
 def test_run_ic_memo_propagates_schema_error(monkeypatch):

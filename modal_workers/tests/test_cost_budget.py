@@ -16,25 +16,13 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "x")
 from modal_workers.shared.cost_budget import (
     ASSET_24H_SOFT_USD,
     ASSET_FLAG_KIND,
-    ASSET_LINKER_24H_HARD_USD,
-    ASSET_LINKER_FLAG_KIND,
-    FACT_EXTRACTOR_24H_HARD_USD,
-    FACT_EXTRACTOR_FLAG_KIND,
     GLOBAL_24H_SOFT_USD,
     GLOBAL_FLAG_KIND,
     OPERATOR_FLAG_SOURCE,
-    ORCHESTRATOR_24H_HARD_USD,
-    ORCHESTRATOR_FLAG_KIND,
     PER_RUN_HARD_KILL_USD,
     asset_24h_cost_usd,
-    asset_linker_24h_cost_usd,
     check_24h_thresholds,
-    check_asset_linker_hard_halt,
-    check_fact_extractor_hard_halt,
-    check_orchestrator_hard_halt,
-    fact_extractor_24h_cost_usd,
     global_24h_cost_usd,
-    orchestrator_24h_cost_usd,
     upsert_cost_flag,
 )
 
@@ -110,258 +98,19 @@ def test_asset_24h_uses_rpc_when_available():
 
 
 # ---------------------------------------------------------------------------
-# global_24h_cost_usd — sums BOTH convergence_assessments and asset_linker_runs
+# global_24h_cost_usd
 # ---------------------------------------------------------------------------
 
-def _split_sb(orch_rows: list, linker_rows: list, rpc_raises: bool = True):
-    """Table-aware SupabaseClient stub for global_24h_cost_usd. Returns
-    `orch_rows` for convergence_assessments and `linker_rows` for
-    asset_linker_runs. RPC path raises by default to force the fallback."""
-    sb = MagicMock()
-
-    def _rest(method, path, **_kwargs):
-        if path.startswith("rpc/"):
-            if rpc_raises:
-                raise Exception("RPC not available")
-            return []
-        if path == "convergence_assessments":
-            return orch_rows
-        if path == "asset_linker_runs":
-            return linker_rows
-        return []
-    sb._rest = MagicMock(side_effect=_rest)
-    return sb
-
-
-def test_global_24h_sums_orchestrator_only_when_linker_empty():
-    sb = _split_sb(
-        orch_rows=[{"cost_usd": "1.00"}, {"cost_usd": "2.50"}, {"cost_usd": "0.10"}],
-        linker_rows=[],
-    )
-    assert global_24h_cost_usd(sb) == 3.60
-
-
-def test_global_24h_sums_linker_only_when_orchestrator_empty():
-    """The 2026-05-11 incident burned ~$27 in asset_linker spend while
-    convergence_assessments showed only $5.18. The new UNION must surface
-    linker-only days."""
-    sb = _split_sb(
-        orch_rows=[],
-        linker_rows=[{"cost_usd": "2.40"}, {"cost_usd": "2.45"}, {"cost_usd": "2.41"}],
-    )
-    assert global_24h_cost_usd(sb) == pytest.approx(7.26)
-
-
-def test_global_24h_sums_both_tables():
-    sb = _split_sb(
-        orch_rows=[{"cost_usd": "5.00"}, {"cost_usd": "0.50"}],
-        linker_rows=[{"cost_usd": "1.20"}, {"cost_usd": "0.80"}],
-    )
-    assert global_24h_cost_usd(sb) == pytest.approx(7.50)
-
-
-def test_global_24h_treats_missing_linker_table_as_zero():
-    """Pre-migration deploys won't have asset_linker_runs. Function must
-    gracefully treat missing-table as zero, not crash."""
-    sb = MagicMock()
-
-    def _rest(method, path, **_kwargs):
-        if path.startswith("rpc/"):
-            raise Exception("RPC not available")
-        if path == "convergence_assessments":
-            return [{"cost_usd": "3.00"}]
-        # asset_linker_runs not yet migrated
-        raise Exception('relation "asset_linker_runs" does not exist')
-    sb._rest = MagicMock(side_effect=_rest)
-    assert global_24h_cost_usd(sb) == 3.00
+def test_global_24h_sums_all_recent():
+    rows = [{"cost_usd": "1.00"}, {"cost_usd": "2.50"}, {"cost_usd": "0.10"}]
+    sb = _fallback_sb(rows)
+    total = global_24h_cost_usd(sb)
+    assert total == 3.60
 
 
 def test_global_24h_handles_empty():
-    sb = _split_sb(orch_rows=[], linker_rows=[])
+    sb = _fallback_sb([])
     assert global_24h_cost_usd(sb) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# asset_linker_24h_cost_usd / check_asset_linker_hard_halt — HARD halt
-# Catches the 2026-05-11 incident vector at $10 instead of $40+.
-# ---------------------------------------------------------------------------
-
-def _linker_sb(rows, raise_missing_table: bool = False):
-    sb = MagicMock()
-
-    def _rest(method, path, **_kwargs):
-        if path == "asset_linker_runs":
-            if raise_missing_table:
-                raise Exception('relation "asset_linker_runs" does not exist')
-            return rows
-        if path == "operator_flags":
-            return []
-        return []
-    sb._rest = MagicMock(side_effect=_rest)
-    return sb
-
-
-def test_asset_linker_24h_sums_cost_usd():
-    sb = _linker_sb([
-        {"cost_usd": "4.50"}, {"cost_usd": "3.10"}, {"cost_usd": "0.40"},
-    ])
-    assert asset_linker_24h_cost_usd(sb) == pytest.approx(8.00)
-
-
-def test_asset_linker_24h_missing_table_returns_zero():
-    """Pre-migration safety — same pattern as global_24h_cost_usd."""
-    sb = _linker_sb([], raise_missing_table=True)
-    assert asset_linker_24h_cost_usd(sb) == 0.0
-
-
-def test_hard_halt_does_not_fire_below_ceiling():
-    sb = _linker_sb([{"cost_usd": "4.99"}])
-    result = check_asset_linker_hard_halt(sb)
-    assert result["halt"] is False
-    assert result["total_24h_usd"] == pytest.approx(4.99)
-    # No operator_flag insert on the non-halt path.
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert inserts == []
-
-
-def test_hard_halt_fires_at_ceiling_and_opens_flag():
-    """At ASSET_LINKER_24H_HARD_USD the run loop must halt AND the breach
-    must be visible in operator_flags so the dashboard surfaces it."""
-    sb = _linker_sb([{"cost_usd": str(ASSET_LINKER_24H_HARD_USD)}])
-    result = check_asset_linker_hard_halt(sb)
-    assert result["halt"] is True
-    assert result["total_24h_usd"] == pytest.approx(ASSET_LINKER_24H_HARD_USD)
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert len(inserts) == 1
-    body = inserts[0].kwargs["json_body"]
-    assert body["source"] == OPERATOR_FLAG_SOURCE
-    assert body["kind"] == ASSET_LINKER_FLAG_KIND
-    # 'critical' (not 'error') to satisfy the operator_flags severity CHECK
-    # constraint which whitelists info/warn/critical only.
-    assert body["severity"] == "critical"
-
-
-# ---------------------------------------------------------------------------
-# orchestrator_24h_cost_usd / check_orchestrator_hard_halt — drain-queue HARD
-# halt. Mirror of the asset_linker pattern; reads convergence_assessments
-# instead of asset_linker_runs.
-# ---------------------------------------------------------------------------
-
-def _orchestrator_sb(rows, raise_missing_table: bool = False):
-    sb = MagicMock()
-
-    def _rest(method, path, **_kwargs):
-        if path == "convergence_assessments":
-            if raise_missing_table:
-                raise Exception('relation "convergence_assessments" does '
-                                'not exist')
-            return rows
-        if path == "operator_flags":
-            return []
-        return []
-    sb._rest = MagicMock(side_effect=_rest)
-    return sb
-
-
-def test_orchestrator_24h_sums_cost_usd():
-    sb = _orchestrator_sb([
-        {"cost_usd": "12.30"}, {"cost_usd": "8.40"}, {"cost_usd": "3.10"},
-    ])
-    assert orchestrator_24h_cost_usd(sb) == pytest.approx(23.80)
-
-
-def test_orchestrator_24h_missing_table_returns_zero():
-    sb = _orchestrator_sb([], raise_missing_table=True)
-    assert orchestrator_24h_cost_usd(sb) == 0.0
-
-
-def test_orchestrator_hard_halt_does_not_fire_below_ceiling():
-    sb = _orchestrator_sb([{"cost_usd": str(ORCHESTRATOR_24H_HARD_USD - 0.01)}])
-    result = check_orchestrator_hard_halt(sb)
-    assert result["halt"] is False
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert inserts == []
-
-
-def test_orchestrator_hard_halt_fires_at_ceiling_and_opens_flag():
-    """Sized at $50 — 6× the observed healthy daily rate. Mirrors the
-    asset_linker halt semantics: drain returns early, pending rows stay
-    queued, single operator_flag opens for dashboard surfacing."""
-    sb = _orchestrator_sb([{"cost_usd": str(ORCHESTRATOR_24H_HARD_USD)}])
-    result = check_orchestrator_hard_halt(sb)
-    assert result["halt"] is True
-    assert result["total_24h_usd"] == pytest.approx(ORCHESTRATOR_24H_HARD_USD)
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert len(inserts) == 1
-    body = inserts[0].kwargs["json_body"]
-    assert body["source"] == OPERATOR_FLAG_SOURCE
-    assert body["kind"] == ORCHESTRATOR_FLAG_KIND
-    assert body["severity"] == "critical"
-
-
-# ---------------------------------------------------------------------------
-# fact_extractor_24h_cost_usd / check_fact_extractor_hard_halt — sized at
-# $20/24h (vs asset_linker $10 and orchestrator $50). Mirror semantics.
-# ---------------------------------------------------------------------------
-
-def _fact_extractor_sb(rows, raise_missing_table: bool = False):
-    sb = MagicMock()
-
-    def _rest(method, path, **_kwargs):
-        if path == "fact_extractor_runs":
-            if raise_missing_table:
-                raise Exception('relation "fact_extractor_runs" does not exist')
-            return rows
-        if path == "operator_flags":
-            return []
-        return []
-    sb._rest = MagicMock(side_effect=_rest)
-    return sb
-
-
-def test_fact_extractor_24h_sums_cost_usd():
-    sb = _fact_extractor_sb([
-        {"cost_usd": "3.20"}, {"cost_usd": "5.00"}, {"cost_usd": "1.10"},
-    ])
-    assert fact_extractor_24h_cost_usd(sb) == pytest.approx(9.30)
-
-
-def test_fact_extractor_24h_missing_table_returns_zero():
-    """Pre-migration deploys won't have fact_extractor_runs. The check must
-    return 0.0 rather than crash — same safety as the asset_linker variant."""
-    sb = _fact_extractor_sb([], raise_missing_table=True)
-    assert fact_extractor_24h_cost_usd(sb) == 0.0
-
-
-def test_fact_extractor_hard_halt_does_not_fire_below_ceiling():
-    sb = _fact_extractor_sb([
-        {"cost_usd": str(FACT_EXTRACTOR_24H_HARD_USD - 0.01)},
-    ])
-    result = check_fact_extractor_hard_halt(sb)
-    assert result["halt"] is False
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert inserts == []
-
-
-def test_fact_extractor_hard_halt_fires_at_ceiling_and_opens_flag():
-    """Same shape as asset_linker / orchestrator halt: critical severity,
-    correct kind, one operator_flag insert."""
-    sb = _fact_extractor_sb([{"cost_usd": str(FACT_EXTRACTOR_24H_HARD_USD)}])
-    result = check_fact_extractor_hard_halt(sb)
-    assert result["halt"] is True
-    assert result["total_24h_usd"] == pytest.approx(FACT_EXTRACTOR_24H_HARD_USD)
-    inserts = [c for c in sb._rest.call_args_list
-               if c.args == ("POST", "operator_flags")]
-    assert len(inserts) == 1
-    body = inserts[0].kwargs["json_body"]
-    assert body["source"] == OPERATOR_FLAG_SOURCE
-    assert body["kind"] == FACT_EXTRACTOR_FLAG_KIND
-    assert body["severity"] == "critical"
 
 
 # ---------------------------------------------------------------------------

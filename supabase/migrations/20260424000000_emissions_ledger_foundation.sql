@@ -169,6 +169,8 @@ COMMENT ON TABLE catalyst_universe IS
 -- became a candidate — necessary for recall analysis (coverage auditor sees
 -- "emitted but auto_capped" and "never_promoted" alongside "promoted").
 
+DROP VIEW IF EXISTS emissions_ledger;
+
 CREATE OR REPLACE VIEW emissions_ledger AS
 SELECT
   s.signal_id,

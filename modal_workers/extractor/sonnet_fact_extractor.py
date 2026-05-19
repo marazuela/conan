@@ -37,6 +37,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import anthropic
@@ -92,20 +93,10 @@ VALID_FACT_TYPES = {
 # Sonnet 4.5 pricing
 COST_INPUT_PER_M = 3.0
 COST_OUTPUT_PER_M = 15.0
-# Prompt caching (5-min ephemeral): write = 1.25× base, read = 0.1× base.
-COST_CACHE_WRITE_PER_M = COST_INPUT_PER_M * 1.25  # 3.75
-COST_CACHE_READ_PER_M = COST_INPUT_PER_M * 0.10   # 0.30
 
 
-def _estimate_cost(input_tokens: int, output_tokens: int,
-                   cache_read_tokens: int = 0,
-                   cache_creation_tokens: int = 0) -> float:
-    return (
-        input_tokens * COST_INPUT_PER_M
-        + cache_creation_tokens * COST_CACHE_WRITE_PER_M
-        + cache_read_tokens * COST_CACHE_READ_PER_M
-        + output_tokens * COST_OUTPUT_PER_M
-    ) / 1_000_000
+def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens * COST_INPUT_PER_M + output_tokens * COST_OUTPUT_PER_M) / 1_000_000
 
 
 @dataclass
@@ -116,10 +107,40 @@ class ExtractStats:
     api_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_creation_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
+
+
+def record_fact_extractor_run_summary(
+    client: SupabaseClient,
+    stats: ExtractStats,
+    started_at: datetime,
+    *,
+    status: str,
+    notes: Optional[str] = None,
+) -> None:
+    """Persist the operational rollup row consumed by dashboard/audit queries."""
+    row = {
+        "model": MODEL,
+        "started_at": started_at.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "docs_seen": stats.docs_seen,
+        "docs_extracted": stats.docs_extracted,
+        "facts_inserted": stats.facts_inserted,
+        "api_calls": stats.api_calls,
+        "errors": stats.errors,
+        "input_tokens": stats.input_tokens,
+        "output_tokens": stats.output_tokens,
+        "cost_usd": round(stats.cost_usd, 4),
+        "notes": notes,
+    }
+    client._rest_with_retry(
+        "POST",
+        "fact_extractor_runs",
+        json_body=row,
+        prefer="return=minimal",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,13 +347,12 @@ def extract_facts(
     doc: Dict[str, Any],
     asset: Dict[str, Any],
     link: Dict[str, Any],
-) -> tuple[List[Dict[str, Any]], int, int, int, int]:
+) -> tuple[List[Dict[str, Any]], int, int]:
     """Send a doc + asset context to Sonnet for fact extraction. Returns
-    (facts, input_tokens, output_tokens, cache_read_tokens,
-     cache_creation_tokens)."""
+    (facts, input_tokens, output_tokens)."""
     raw_text = doc.get("raw_text") or ""
     if not raw_text:
-        return [], 0, 0, 0, 0
+        return [], 0, 0
 
     sponsor_first = None
     sponsor = asset.get("sponsor_name") or ""
@@ -369,27 +389,14 @@ separated by […trim…]):
 {trimmed}
 """
 
-    # cache_control on the SYSTEM_PROMPT prefix. At current SYSTEM_PROMPT
-    # tokenization (~500 tokens per Anthropic's tokenizer) this is BELOW the
-    # 1024-token minimum for Sonnet caching and the API silently returns
-    # cache_*_input_tokens=0 — same situation as the asset_linker prefix.
-    # Kept as a forward-looking no-op: engages automatically once the prompt
-    # grows past the minimum (e.g. if VALID_FACT_TYPES guidance is expanded).
-    system_blocks = [
-        {"type": "text", "text": SYSTEM_PROMPT,
-         "cache_control": {"type": "ephemeral"}},
-    ]
-
     resp = a_client.messages.create(
         model=MODEL,
         max_tokens=4096,
-        system=system_blocks,
+        system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
     in_tokens = resp.usage.input_tokens
     out_tokens = resp.usage.output_tokens
-    cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
-    cache_create = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
 
     text_out = "".join(b.text for b in resp.content if b.type == "text")
     text_out = text_out.strip()
@@ -402,7 +409,7 @@ separated by […trim…]):
     except json.JSONDecodeError as exc:
         logger.warning("JSON parse failed for doc %s: %s — output[:200]: %s",
                        doc.get("id"), exc, text_out[:200])
-        return [], in_tokens, out_tokens, cache_read, cache_create
+        return [], in_tokens, out_tokens
 
     facts = parsed.get("facts", [])
     out: List[Dict[str, Any]] = []
@@ -433,7 +440,7 @@ separated by […trim…]):
             "citation_span": citation_span,
             "confidence": confidence,
         })
-    return out, in_tokens, out_tokens, cache_read, cache_create
+    return out, in_tokens, out_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -470,92 +477,6 @@ def insert_facts(client: SupabaseClient, asset_id: str, document_id: str,
 
 
 # ---------------------------------------------------------------------------
-# Run-row lifecycle — fact_extractor_runs (added 2026-05-12 as the storage
-# half of the 24h hard halt). Mirror of asset_linker_runs lifecycle.
-# ---------------------------------------------------------------------------
-
-STALE_RUNNING_AFTER_MINUTES = 30
-LOCK_CONFLICT = "fact_extractor_runs_one_running"
-
-
-def _start_fact_extractor_run_row(
-    client: SupabaseClient, model: str
-) -> tuple[Optional[str], bool]:
-    """Acquire the per-pass concurrency lock by INSERTing a row with
-    status='running'. Returns (run_id, lock_held). lock_held=False means
-    another instance is actively running and this caller should exit."""
-    from datetime import datetime, timedelta, timezone
-    cutoff_iso = (datetime.now(timezone.utc)
-                  - timedelta(minutes=STALE_RUNNING_AFTER_MINUTES)).isoformat()
-    # Reclaim any zombie 'running' row older than the cutoff.
-    try:
-        client._rest(
-            "PATCH", "fact_extractor_runs",
-            params={
-                "status": "eq.running",
-                "started_at": f"lt.{cutoff_iso}",
-            },
-            json_body={
-                "status": "failed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "notes": "reclaimed: stale running row exceeded "
-                         f"{STALE_RUNNING_AFTER_MINUTES}min threshold",
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("stale-running reclaim PATCH failed: %s", exc)
-
-    try:
-        res = client._rest(
-            "POST", "fact_extractor_runs",
-            json_body={"model": model, "status": "running"},
-            prefer="return=representation",
-        )
-    except Exception as exc:  # noqa: BLE001
-        # 409 from the partial unique index means another runner already
-        # holds the lock — exit cleanly.
-        if LOCK_CONFLICT in str(exc) or "409" in str(exc):
-            return None, False
-        logger.warning("start_run_row INSERT failed: %s", exc)
-        return None, True
-    if isinstance(res, list) and res:
-        return res[0].get("id"), True
-    return None, True
-
-
-def _finish_fact_extractor_run_row(
-    client: SupabaseClient, run_id: Optional[str],
-    status: str, stats: "ExtractStats",
-) -> None:
-    """PATCH the run row with terminal stats. Best-effort — silent on failure."""
-    if not run_id:
-        return
-    from datetime import datetime, timezone
-    patch: Dict[str, Any] = {
-        "status": status,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-        "docs_seen": stats.docs_seen,
-        "docs_extracted": stats.docs_extracted,
-        "facts_inserted": stats.facts_inserted,
-        "api_calls": stats.api_calls,
-        "errors": stats.errors,
-        "input_tokens": stats.input_tokens,
-        "output_tokens": stats.output_tokens,
-        "cache_read_tokens": stats.cache_read_tokens,
-        "cache_creation_tokens": stats.cache_creation_tokens,
-        "cost_usd": round(float(stats.cost_usd), 4),
-    }
-    try:
-        client._rest(
-            "PATCH", "fact_extractor_runs",
-            params={"id": f"eq.{run_id}"},
-            json_body=patch,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("finish_run_row PATCH failed: %s", exc)
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -563,20 +484,10 @@ def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="sonnet_fact_extractor")
     p.add_argument("--asset-id", default=None,
                    help="Restrict to one fda_asset (default: all material links)")
-    p.add_argument("--max", type=int, default=50,
-                   help="Max linked documents to extract this run (reduced "
-                        "from 100 on 2026-05-11 in the asset_linker incident "
-                        "hardening sweep — keep tight until per-doc cost is "
-                        "verified)")
-    p.add_argument("--budget-usd", type=float, default=5.0,
-                   help="Stop early if cumulative cost exceeds this (reduced "
-                        "from $30 on 2026-05-11; per-doc Sonnet 4.5 fact "
-                        "extraction is ~$0.05-0.15, so $5 gives 30-100 docs "
-                        "of headroom)")
+    p.add_argument("--max", type=int, default=100,
+                   help="Max linked documents to extract this run")
+    p.add_argument("--budget-usd", type=float, default=30.0)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--ignore-24h-halt", action="store_true",
-                   help="Bypass the 24h hard-halt check. Operator override "
-                        "for one-off backfills; cron never sets this.")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -587,150 +498,87 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     sb = SupabaseClient()
-
-    # 24h hard halt — check BEFORE acquiring the lock or fetching docs.
-    # Skipped in dry-run (offline operator path) and behind --ignore-24h-halt
-    # for explicit backfills.
-    if not args.dry_run and not args.ignore_24h_halt:
-        from modal_workers.shared.cost_budget import (
-            check_fact_extractor_hard_halt,
-        )
-        halt_status = check_fact_extractor_hard_halt(sb)
-        if halt_status["halt"]:
-            logger.error(
-                "fact_extractor 24h spend $%.2f has reached the hard halt — "
-                "exiting without work. (See operator_flags for the breach.)",
-                halt_status["total_24h_usd"],
-            )
-            return 0
-    elif args.ignore_24h_halt:
-        logger.warning("--ignore-24h-halt active: 24h hard halt bypassed.")
-
     a_client = anthropic.Anthropic()
     stats = ExtractStats()
-    run_id: Optional[str] = None
-    lock_held = True
-    if not args.dry_run:
-        run_id, lock_held = _start_fact_extractor_run_row(sb, MODEL)
-        if not lock_held:
-            logger.info("Another fact_extractor run is active — exiting.")
-            return 0
-    crashed = False
-    budget_exceeded = False
+    started_at = datetime.now(timezone.utc)
 
-    try:
-        links = load_unextracted_links(
-            sb, asset_id=args.asset_id, max_links=args.max,
-        )
-        logger.info("Loaded %d unextracted asset_documents link(s)", len(links))
-        stats.docs_seen = len(links)
+    links = load_unextracted_links(sb, asset_id=args.asset_id, max_links=args.max)
+    logger.info("Loaded %d unextracted asset_documents link(s)", len(links))
+    stats.docs_seen = len(links)
 
-        # Cache asset rows since many links share the same asset
-        asset_cache: Dict[str, Dict[str, Any]] = {}
+    # Cache asset rows since many links share the same asset
+    asset_cache: Dict[str, Dict[str, Any]] = {}
 
-        for link in links:
-            if stats.cost_usd > args.budget_usd:
-                logger.warning("Budget exceeded ($%.2f > $%.2f); stopping",
-                               stats.cost_usd, args.budget_usd)
-                budget_exceeded = True
-                break
+    for link in links:
+        if stats.cost_usd > args.budget_usd:
+            logger.warning("Budget exceeded ($%.2f > $%.2f); stopping",
+                           stats.cost_usd, args.budget_usd)
+            break
 
-            asset_id = link["asset_id"]
-            document_id = link["document_id"]
+        asset_id = link["asset_id"]
+        document_id = link["document_id"]
 
-            if asset_id not in asset_cache:
-                a = load_asset(sb, asset_id)
-                if not a:
-                    logger.warning("Asset %s not found; skipping", asset_id)
-                    stats.errors += 1
-                    continue
-                asset_cache[asset_id] = a
-            asset = asset_cache[asset_id]
-
-            doc = load_doc_with_text(sb, document_id)
-            if not doc or not doc.get("raw_text"):
-                logger.warning("Doc %s has no text; skipping", document_id)
+        if asset_id not in asset_cache:
+            a = load_asset(sb, asset_id)
+            if not a:
+                logger.warning("Asset %s not found; skipping", asset_id)
                 stats.errors += 1
                 continue
+            asset_cache[asset_id] = a
+        asset = asset_cache[asset_id]
 
-            try:
-                (facts, in_tok, out_tok, cache_read_tok,
-                 cache_create_tok) = extract_facts(a_client, doc, asset, link)
-            except anthropic.APIError as exc:
-                logger.warning("API error for doc %s: %s", document_id, exc)
-                stats.errors += 1
-                time.sleep(2.0)
-                continue
+        doc = load_doc_with_text(sb, document_id)
+        if not doc or not doc.get("raw_text"):
+            logger.warning("Doc %s has no text; skipping", document_id)
+            stats.errors += 1
+            continue
 
-            stats.api_calls += 1
-            stats.input_tokens += in_tok
-            stats.output_tokens += out_tok
-            stats.cache_read_tokens += cache_read_tok
-            stats.cache_creation_tokens += cache_create_tok
-            stats.cost_usd += _estimate_cost(
-                in_tok, out_tok,
-                cache_read_tokens=cache_read_tok,
-                cache_creation_tokens=cache_create_tok,
-            )
-            stats.docs_extracted += 1
+        try:
+            facts, in_tok, out_tok = extract_facts(a_client, doc, asset, link)
+        except anthropic.APIError as exc:
+            logger.warning("API error for doc %s: %s", document_id, exc)
+            stats.errors += 1
+            time.sleep(2.0)
+            continue
 
-            if not facts:
-                logger.info("doc %s [%s] %s -> no facts (cost so far $%.3f)",
-                            document_id, doc.get("source"), doc.get("doc_type"),
-                            stats.cost_usd)
-                continue
+        stats.api_calls += 1
+        stats.input_tokens += in_tok
+        stats.output_tokens += out_tok
+        stats.cost_usd += _estimate_cost(in_tok, out_tok)
+        stats.docs_extracted += 1
 
-            if args.dry_run:
-                logger.info("[dry-run] doc %s -> %d facts: %s",
-                            document_id, len(facts),
-                            [f["fact_type"] for f in facts])
-                continue
-
-            n = insert_facts(sb, asset_id, document_id, facts)
-            stats.facts_inserted += n
-            logger.info("doc %s [%s] %s -> %d facts inserted (cost $%.3f)",
+        if not facts:
+            logger.info("doc %s [%s] %s -> no facts (cost so far $%.3f)",
                         document_id, doc.get("source"), doc.get("doc_type"),
-                        n, stats.cost_usd)
+                        stats.cost_usd)
+            continue
+
+        if args.dry_run:
+            logger.info("[dry-run] doc %s -> %d facts: %s",
+                        document_id, len(facts),
+                        [f["fact_type"] for f in facts])
+            continue
+
+        n = insert_facts(sb, asset_id, document_id, facts)
+        stats.facts_inserted += n
+        logger.info("doc %s [%s] %s -> %d facts inserted (cost $%.3f)",
+                    document_id, doc.get("source"), doc.get("doc_type"),
+                    n, stats.cost_usd)
+
+    logger.info("=" * 60)
+    logger.info("Extractor summary:")
+    logger.info("  docs_seen=%d  docs_extracted=%d  errors=%d",
+                stats.docs_seen, stats.docs_extracted, stats.errors)
+    logger.info("  facts_inserted=%d  api_calls=%d",
+                stats.facts_inserted, stats.api_calls)
+    logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
+                stats.input_tokens, stats.output_tokens, stats.cost_usd)
+    status = "budget_exceeded" if stats.cost_usd > args.budget_usd else "completed"
+    notes = "dry_run=true" if args.dry_run else None
+    try:
+        record_fact_extractor_run_summary(sb, stats, started_at, status=status, notes=notes)
     except Exception as exc:  # noqa: BLE001
-        # Uncaught exception escaped the per-doc loop — finalize the run row
-        # with status='failed' so observability + the watchdog can see it,
-        # and we don't leave a zombie status='running' row blocking the next
-        # cron tick (via the partial unique index).
-        logger.exception("Unexpected exception in fact_extractor main: %s", exc)
-        crashed = True
-    finally:
-        logger.info("=" * 60)
-        logger.info("Extractor summary:")
-        logger.info("  docs_seen=%d  docs_extracted=%d  errors=%d",
-                    stats.docs_seen, stats.docs_extracted, stats.errors)
-        logger.info("  facts_inserted=%d  api_calls=%d",
-                    stats.facts_inserted, stats.api_calls)
-        logger.info("  tokens: in=%d  out=%d  cache_read=%d  cache_create=%d  "
-                    "cost_usd=$%.3f",
-                    stats.input_tokens, stats.output_tokens,
-                    stats.cache_read_tokens, stats.cache_creation_tokens,
-                    stats.cost_usd)
-        if crashed:
-            final_status = "failed"
-        elif budget_exceeded:
-            final_status = "budget_exceeded"
-        else:
-            final_status = "completed"
-        _finish_fact_extractor_run_row(sb, run_id, final_status, stats)
-    if crashed:
-        return 1
-    # rc=3 signals systemic exhaustion: we had work to do, every attempt
-    # failed, and nothing landed. Distinguishes credits-out / quota-out from
-    # the benign "nothing to extract" case (docs_seen==0 → rc=0) and from
-    # partial success (some errors, some inserts → rc=0). The lazy hook in
-    # orchestrator_app uses this to fail loud instead of letting Sonnet
-    # synthesis proceed against zero new facts.
-    if (stats.docs_seen > 0
-            and stats.facts_inserted == 0
-            and stats.errors >= stats.docs_seen):
-        logger.error("Extractor exhausted: %d/%d docs errored, 0 facts inserted",
-                     stats.errors, stats.docs_seen)
-        return 3
+        logger.warning("fact_extractor_runs summary insert failed: %s", exc)
     return 0
 
 

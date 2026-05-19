@@ -111,18 +111,10 @@ def _make_form4_xml(
     ad: str = "A",
     is_10b5_1_attr: bool = False,
     footnote_10b5_1: bool = False,
-    footnote_text: str | None = None,
 ) -> bytes:
     plan_el = "<rule10b5-1>1</rule10b5-1>" if is_10b5_1_attr else ""
-    if footnote_text is not None:
-        fn_ref = '<footnoteId id="F1"/>'
-        fn_block = f'<footnote id="F1">{footnote_text}</footnote>'
-    elif footnote_10b5_1:
-        fn_ref = '<footnoteId id="F1"/>'
-        fn_block = '<footnote id="F1">Transaction made under Rule 10b5-1 plan.</footnote>'
-    else:
-        fn_ref = ""
-        fn_block = ""
+    fn_ref = '<footnoteId id="F1"/>' if footnote_10b5_1 else ""
+    fn_block = '<footnote id="F1">Transaction made under Rule 10b5-1 plan.</footnote>' if footnote_10b5_1 else ""
     xml = f"""<?xml version="1.0"?>
 <ownershipDocument>
   <issuer>
@@ -191,35 +183,6 @@ class TestParseForm4:
         txns = ifs._parse_form4(xml, accession="x", filing_url="", file_date="")
         assert len(txns) == 1
         assert txns[0].is_10b5_1 is True
-
-    def test_10b5_1_footnote_rule_phrase(self):
-        xml = _make_form4_xml(txn_code="S", ad="D",
-                              footnote_text="Rule 10b5-1 plan")
-        txns = ifs._parse_form4(xml, accession="x", filing_url="", file_date="")
-        assert len(txns) == 1
-        assert txns[0].is_10b5_1 is True
-
-    def test_10b5_1_footnote_does_not_match_10b5_12(self):
-        # Must NOT false-positive on regulation 10b5-12 or similar tokens.
-        xml = _make_form4_xml(txn_code="S", ad="D",
-                              footnote_text="Rule 10b5-12 plan")
-        txns = ifs._parse_form4(xml, accession="x", filing_url="", file_date="")
-        assert len(txns) == 1
-        assert txns[0].is_10b5_1 is False
-
-    def test_10b5_1_footnote_spaced_form(self):
-        xml = _make_form4_xml(txn_code="S", ad="D",
-                              footnote_text="10 b 5 1 plan")
-        txns = ifs._parse_form4(xml, accession="x", filing_url="", file_date="")
-        assert len(txns) == 1
-        assert txns[0].is_10b5_1 is True
-
-    def test_10b5_1_footnote_does_not_match_10b5_100(self):
-        xml = _make_form4_xml(txn_code="S", ad="D",
-                              footnote_text="10b5-100 plan")
-        txns = ifs._parse_form4(xml, accession="x", filing_url="", file_date="")
-        assert len(txns) == 1
-        assert txns[0].is_10b5_1 is False
 
     def test_non_discretionary_codes_dropped(self):
         # Code M = option exercise, not discretionary → dropped.

@@ -437,20 +437,7 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
     sponsor_class = sponsor_mod.get("class", "")  # INDUSTRY, NIH, etc.
     conditions = conditions_mod.get("conditions", []) or []
     enrollment = (design.get("enrollmentInfo") or {}).get("count")
-    raw_interventions = arms_mod.get("interventions") or []
-    interventions = _extract_drug_interventions(raw_interventions)
-    # Preserve the unfiltered intervention list (placebos, devices, behavioral
-    # arms, etc.) so downstream consumers can apply their own filtering — e.g.
-    # distinguish placebo-controlled from open-label, or surface combination
-    # therapy arms that _extract_drug_interventions drops by type.
-    interventions_all = [
-        {
-            "name": (iv.get("name") or "").strip(),
-            "type": (iv.get("type") or "").strip().upper(),
-        }
-        for iv in raw_interventions
-        if (iv.get("name") or "").strip()
-    ]
+    interventions = _extract_drug_interventions(arms_mod.get("interventions") or [])
 
     # Indication + base-rate from Supabase table
     base_key, matched_indications = _map_conditions_to_base_key(conditions)
@@ -498,7 +485,6 @@ def _score_trial(trial: Dict[str, Any], base_rates: Dict[str, float]) -> Dict[st
         "enrollment": enrollment,
         "conditions": conditions,
         "interventions": interventions,
-        "interventions_all": interventions_all,
         "primary_outcomes": primary_outcomes[:3],
         "base_rate_key": base_key,
         "base_rate_approval": approval_prob,
@@ -586,15 +572,10 @@ def _build_signal(
 
     source_url = f"https://clinicaltrials.gov/study/{nct}" if nct else None
 
-    # Lead drug — first non-placebo, non-comparator DRUG-type intervention.
-    # Surfaced as a top-level raw_payload field so scoring, TAM modelling, and
-    # competitive-landscape downstream consumers can key off a single drug name
-    # instead of collapsing every signal into the heuristic-only dimension
-    # vector when raw_payload.lead_drug is NULL.
-    lead_drug = _pick_lead_drug_name(scored.get("interventions", []))
-
     raw_payload: Dict[str, Any] = {
         "nct_id": nct,
+        "discovery_lane": "pre_readout",
+        "review_priority": 2,
         "trial_title": scored["brief_title"],
         "sponsor_name": sponsor,
         "sponsor_class": scored["sponsor_class"],
@@ -605,9 +586,6 @@ def _build_signal(
         "meaningful_enrollment": isinstance(scored["enrollment"], int) and scored["enrollment"] >= 200,
         "conditions": scored["conditions"],
         "interventions": scored.get("interventions", []),
-        "interventions_all": scored.get("interventions_all", []),
-        "lead_drug": lead_drug,
-        "indication_keywords": scored["matched_indications"],
         "primary_outcomes": scored["primary_outcomes"],
         "single_primary_endpoint": len(scored["primary_outcomes"]) == 1,
         "industry_sponsored": scored["sponsor_class"] == "INDUSTRY",
@@ -640,6 +618,7 @@ def _build_signal(
     # so the v3 asset_linker cron can begin ingesting docs for this asset. The
     # trigger only fires when this key is present and the entity has no
     # existing fda_asset; missing/empty fields are a no-op.
+    lead_drug = _pick_lead_drug_name(scored.get("interventions", []))
     if issuer_match is not None and lead_drug:
         raw_payload["auto_seed_fda_asset"] = {
             "ticker": issuer_match.ticker,
@@ -680,75 +659,6 @@ def _build_signal(
 
 
 # ---------------------------------------------------------------------------
-# operator_flags helper
-# ---------------------------------------------------------------------------
-
-def _flag_unresolved_entity(client: SupabaseClient, *,
-                            scanner_id: Optional[str],
-                            sponsor_name: str,
-                            nct_id: str,
-                            signal_id: str) -> None:
-    """UPSERT a `pre_phase3_unresolved_entity` operator_flag.
-
-    Surfaces sponsors that cleared the triage gate but couldn't be mapped to
-    any public-issuer identifier. The partial unique index
-    `operator_flags_open_uniq` collapses repeated upserts on the same
-    (source, kind, scanner_id) tuple, so the evidence carries the latest
-    sample (sponsor + nct). Best-effort: never raises into the scanner loop.
-    """
-    try:
-        evidence = {
-            "sponsor_name": sponsor_name,
-            "nct_id": nct_id,
-            "signal_id_dropped": signal_id,
-        }
-        title = f"pre_phase3_readout: sponsor '{sponsor_name[:60]}' did not resolve to a public issuer"
-        body = (
-            f"Scanner dropped trial {nct_id} because SEC issuer lookup + OpenFIGI "
-            f"produced no figi/ticker/cik for sponsor '{sponsor_name}'. Emitting "
-            f"would strand the signal (band_with_bonus never stamps; thesis_writer "
-            f"and v3 orchestrator can't enqueue without a ticker)."
-        )
-        filt = {
-            "source": "eq.scanner:pre_phase3_readout_scanner",
-            "kind": "eq.pre_phase3_unresolved_entity",
-            "resolved_at": "is.null",
-            "scanner_id": f"eq.{scanner_id}" if scanner_id else "is.null",
-            "entity_id": "is.null",
-            "signal_id": "is.null",
-            "candidate_id": "is.null",
-        }
-        existing = client._rest(
-            "GET", "operator_flags",
-            params={**filt, "select": "id", "limit": 1},
-        ) or []
-        row = {
-            "severity": "info",
-            "source": "scanner:pre_phase3_readout_scanner",
-            "kind": "pre_phase3_unresolved_entity",
-            "title": title,
-            "body": body,
-            "evidence": evidence,
-            "scanner_id": scanner_id,
-        }
-        if existing:
-            client._rest(
-                "PATCH", "operator_flags",
-                params={"id": f"eq.{existing[0]['id']}"},
-                json_body={k: row[k] for k in ("title", "body", "evidence", "severity")},
-                prefer="return=minimal",
-            )
-        else:
-            client._rest(
-                "POST", "operator_flags",
-                json_body=row,
-                prefer="return=minimal",
-            )
-    except Exception:  # noqa: BLE001 — observability MUST NOT break the scanner
-        pass
-
-
-# ---------------------------------------------------------------------------
 # scan entrypoint
 # ---------------------------------------------------------------------------
 
@@ -775,6 +685,27 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     base_rates = _load_base_rates(client)
 
+    # Tradeable-universe gate (2026-05-18). Historically this scanner emitted a
+    # binary_catalyst signal for EVERY INDUSTRY Phase-3 sponsor, including ones
+    # that never resolve to a US SEC issuer — large diversified pharma listed
+    # abroad, Chinese/Japanese/Korean firms, and academic/private sponsors.
+    # Those are not company-defining tradeable binary catalysts; they only
+    # generated bridge `operator_flags` that were later bulk-excluded as
+    # non-target (141-flag dead-end, 2026-05-18). Gating emission on a
+    # successful SEC issuer resolution removes that noise at the source and
+    # aligns with the FDA-depth / anti-breadth strategy.
+    #
+    # Precision-over-recall by design: a genuine US small-cap whose CT.gov
+    # sponsor string fails IssuerIndex fuzzy-match is suppressed (still listed
+    # in the unresolved_sponsors warning so an alias can be added). Reversible
+    # via config `require_resolved_issuer: false` to restore emit-anyway.
+    # NOTE: this gate does NOT exclude resolved-but-mega-cap (e.g. AbbVie→ABBV
+    # still passes). A market-cap ceiling for resolved issuers is a follow-up
+    # that needs the Polygon market-cap wiring used by edgar_filing_monitor
+    # (`_load_market_cap_usd_mm`); intentionally out of scope here.
+    _scan_cfg = getattr(cfg, "config", {}) or {}
+    require_resolved_issuer = bool(_scan_cfg.get("require_resolved_issuer", True))
+
     scan_date = datetime.now(timezone.utc)
     budget = max(10, cfg.timeout_soft_s - 5)  # leave headroom for final ops
     scan_start = time.time()
@@ -789,14 +720,10 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     warnings.extend(fetch_warnings)
 
     below_gate = 0
-    skipped_no_drug_intervention = 0
     skipped_already_approved = 0
-    skipped_unresolved_entity = 0
+    universe_filtered = 0
     unresolved_sponsors: List[str] = []
-    # Parallel structured capture for unresolved_sponsor_log telemetry. The
-    # string list above feeds the human warning; this list feeds the log
-    # table that Phase-2 prioritization queries against.
-    unresolved_log_rows: List[Dict[str, Any]] = []
+    suppressed_candidates: List[Dict[str, Any]] = []
     for t in trials:
         if time.time() - scan_start > budget:
             warnings.append(f"wall-clock budget ({budget}s) exceeded during scoring")
@@ -810,20 +737,6 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         if not nct or nct in seen_nct:
             continue
         seen_nct.add(nct)
-
-        # Drop trials with no drug-like intervention left after filtering
-        # placebo / device / behavioral arms. Without a drug, the binary
-        # catalyst rubric has nothing scorable to say and the resulting
-        # signal collapses into the heuristic-only dimension vector. Placed
-        # before the triage gate so it doesn't burn an openFDA Orange Book
-        # lookup on a no-drug trial.
-        if not scored.get("interventions"):
-            skipped_no_drug_intervention += 1
-            warnings.append(
-                f"skipped {nct}: no drug-like intervention "
-                f"(all arms placebo/device/behavioral)"
-            )
-            continue
 
         # Triage gate (v1 parity): >= 3 of 5 patterns AND INDUSTRY sponsor.
         if scored["patterns_hit"] < 3:
@@ -854,77 +767,46 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         sig = _build_signal(scored, scan_date, issuer_index=issuer_index)
         if sig is None:
             continue
-        # Phase-1 R4 telemetry: log every sponsor that cleared the triage
-        # gate but failed SEC issuer-index resolution. This list is a
-        # superset of the drop block below — a signal may have a FIGI from
-        # OpenFIGI yet still miss the SEC index (EU/Asian listings, odd-
-        # spelled subsidiaries). Phase-2 alias/name-search work ranks
-        # against this log.
+        # Track sponsors that cleared the gate but didn't resolve to a public
+        # issuer. Every emitted sponsor here funded an INDUSTRY-class Phase 3
+        # with patterns_hit>=3 — most are large pharmas that should resolve.
+        # Misses are usually EU/Asian listings absent from SEC's US-only list,
+        # private biotechs, or odd-spelled subsidiaries (e.g. "Sanofi-Aventis
+        # Recherche & Développement"). Worth a warning so the audit can
+        # decide whether to add an alias map.
         if issuer_index is not None and not sig.raw_payload.get("universe_resolved"):
-            sponsor_name = scored["sponsor_name"] or "?"
-            unresolved_log_rows.append({
-                "sponsor_name": sponsor_name,
-                "context": {
-                    "nct_id": nct,
-                    "sponsor_class": scored.get("sponsor_class"),
-                    "patterns_hit": scored.get("patterns_hit"),
-                },
-            })
-
-        # Drop signals whose sponsor failed to resolve to any public-issuer
-        # identifier (no FIGI, no ticker, no CIK). Emitting these strands the
-        # signal downstream: resolve_or_create_entity falls through to name-
-        # only matching and creates an entity with primary_ticker/primary_mic
-        # NULL, which the convergence reactor and v3 orchestrator can't act on
-        # — `band_with_bonus` never stamps and the row sits in
-        # dashboard_signal_rows as display_band='immediate' forever.
-        # Surface upstream via operator_flags so the audit can decide whether
-        # to extend the SEC alias map or accept private-biotech blind spots.
-        if (
-            sig.entity_hints is None
-            or (
-                not sig.entity_hints.issuer_figi
-                and not sig.entity_hints.ticker
-                and not sig.entity_hints.cik
-            )
-        ):
-            skipped_unresolved_entity += 1
-            sponsor_name = scored["sponsor_name"] or "?"
-            unresolved_sponsors.append(sponsor_name)
-            warnings.append(
-                f"skipped {nct}: sponsor '{sponsor_name}' did not resolve to a "
-                f"public issuer (no figi/ticker/cik); emit would strand signal"
-            )
-            _flag_unresolved_entity(
-                client,
-                scanner_id=getattr(cfg, "scanner_id", None),
-                sponsor_name=sponsor_name,
-                nct_id=nct,
-                signal_id=sig.signal_id,
-            )
-            continue
+            unresolved_sponsors.append(scored["sponsor_name"] or "?")
+            if require_resolved_issuer:
+                # Tradeable-universe gate: no US SEC issuer match → not a
+                # company-defining tradeable binary catalyst for this strategy.
+                # Suppress emission (audited via unresolved_sponsors warning +
+                # universe_filtered metric). Reversible via config.
+                universe_filtered += 1
+                if len(suppressed_candidates) < 25:
+                    suppressed_candidates.append({
+                        "nct_id": nct,
+                        "sponsor_name": scored["sponsor_name"],
+                        "trial_title": scored["brief_title"],
+                        "primary_completion_date": scored["primary_completion_date"],
+                        "days_until_readout": scored["days_until_readout"],
+                        "base_rate_key": scored["base_rate_key"],
+                        "patterns_hit": scored["patterns_hit"],
+                        "pattern_names": scored["pattern_names"],
+                    })
+                continue
         signals.append(sig)
 
     if unresolved_sponsors:
         sample = ", ".join(sorted(set(unresolved_sponsors))[:5])
-        warnings.append(
-            f"dropped {len(unresolved_sponsors)} INDUSTRY sponsor(s) — no public "
-            f"issuer identifier resolved: {sample}"
+        action = (
+            f"filtered {universe_filtered} (require_resolved_issuer=on)"
+            if require_resolved_issuer
+            else "emitted without ticker (gate off)"
         )
-
-    # Best-effort: write per-occurrence telemetry to unresolved_sponsor_log.
-    # Phase-1 of R4 (sponsor→FIGI resolution gap) — frequency rank against
-    # this table to drive Phase 2A (seed-migration aliases) and 2B (OpenFIGI
-    # name-search fallback). Failure here must not break the scan run.
-    if unresolved_log_rows:
-        try:
-            client.log_unresolved_sponsors(
-                NAME,
-                cfg.scanner_run_id,
-                unresolved_log_rows,
-            )
-        except Exception as e:  # noqa: BLE001 — telemetry, not load-bearing
-            warnings.append(f"unresolved_sponsor_log write failed: {type(e).__name__}: {e}")
+        warnings.append(
+            f"sec_issuer_lookup unresolved for {len(unresolved_sponsors)} INDUSTRY "
+            f"sponsor(s) [{action}]: {sample}"
+        )
 
     status = "partial" if warnings else "ok"
     if warnings and not signals and not trials:
@@ -938,8 +820,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         fetched_records=len(trials),
         run_metrics={
             "below_gate": below_gate,
-            "skipped_no_drug_intervention": skipped_no_drug_intervention,
             "skipped_already_approved": skipped_already_approved,
-            "skipped_unresolved_entity": skipped_unresolved_entity,
+            "universe_filtered": universe_filtered,
+            "suppressed_candidate_sample": suppressed_candidates,
+            "require_resolved_issuer": require_resolved_issuer,
         },
     )

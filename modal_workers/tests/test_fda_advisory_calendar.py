@@ -85,45 +85,6 @@ def test_fetch_advisory_committee_meetings_parses_real_shape(monkeypatch):
     assert odac.meeting_date == "2026-03-04"
 
 
-def test_fetch_parses_meeting_date_from_structured_dates_field(monkeypatch):
-    """Real FDA AdComm notices put the meeting date in the structured `dates`
-    field, NOT the abstract (which is boilerplate). 2026-05-14 production
-    invocation returned 5 fetched / 0 upserted because the helper was only
-    parsing title + abstract. Regression guard: ensure a notice whose
-    `dates` field carries the only date string still gets meeting_date."""
-    payload = {
-        "results": [
-            {
-                "title": ("Vaccines and Related Biological Products Advisory "
-                          "Committee; Notice of Meeting"),
-                # Boilerplate abstract — no parseable date.
-                "abstract": ("The Food and Drug Administration (FDA) announces "
-                             "a forthcoming public advisory committee meeting "
-                             "of the Vaccines and Related Biological Products "
-                             "Advisory Committee."),
-                # Structured DATES section — where the real date lives.
-                "dates": ("The meeting will be held on May 28, 2026, "
-                          "from 8:30 a.m. to 4:30 p.m. Eastern Time."),
-                "publication_date": "2026-04-27",
-                "html_url": "https://www.federalregister.gov/d/2026-99999",
-            },
-        ],
-    }
-    fake_resp = MagicMock()
-    fake_resp.status_code = 200
-    fake_resp.json.return_value = payload
-    fake_resp.raise_for_status = lambda: None
-    monkeypatch.setattr(cal.requests, "get", lambda *_a, **_kw: fake_resp)
-
-    fake_client = MagicMock()
-    fake_client.read_cache.return_value = None
-    fake_client.write_cache.return_value = None
-
-    meetings = fetch_advisory_committee_meetings(client=fake_client)
-    assert len(meetings) == 1
-    assert meetings[0].meeting_date == "2026-05-28"
-
-
 def test_fetch_returns_empty_on_http_failure(monkeypatch):
     import requests as _r
 

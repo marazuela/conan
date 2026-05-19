@@ -54,7 +54,6 @@ class Hypothesis:
     supporting_fact_ids: List[str] = field(default_factory=list)
     contradicting_fact_ids: List[str] = field(default_factory=list)
     kill_conditions: List[str] = field(default_factory=list)
-    deliver_conditions: List[str] = field(default_factory=list)
     prior_estimate_pct: int = 50
     # D-118: pre-anchor prior preserved for observability + A/B
     prior_estimate_pct_pre_anchor: Optional[int] = None
@@ -68,49 +67,8 @@ class HypothesisResult:
     raw_response: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
-    # Cache token bookkeeping — the Stage 2 call reuses the shared cached
-    # system prefix built once per assessment (D-119). Without surfacing these
-    # to the caller, StageMetric.cache_read_tokens stays at 0 on persist and
-    # assessment_stage_metrics loses the cache hit signal.
-    cache_read_tokens: int = 0
-    cache_creation_tokens: int = 0
     cost_usd: float = 0.0
     latency_ms: int = 0
-
-    # Wave 6.3 — hypothesis-quality summary metrics. Computed at parse time
-    # so they can be persisted into stage_metrics.notes without re-walking
-    # the hypotheses list at every consumer. None when no hypotheses.
-    def quality_metrics(self) -> Dict[str, Any]:
-        if not self.hypotheses:
-            return {
-                "n_hypotheses": 0,
-                "avg_kill_conditions": None,
-                "min_kill_conditions": None,
-                "avg_supporting_fact_ids": None,
-                "avg_contradicting_fact_ids": None,
-                "citation_density_per_mechanism": None,
-            }
-        kc = [len(h.kill_conditions) for h in self.hypotheses]
-        sup = [len(h.supporting_fact_ids) for h in self.hypotheses]
-        con = [len(h.contradicting_fact_ids) for h in self.hypotheses]
-        # citation_density = (#supporting + #contradicting) / mechanism length
-        # in 100-char units, capped at 0.0 so an empty mechanism doesn't divide
-        # by zero. A higher number means the mechanism is more densely cited.
-        densities: List[float] = []
-        for h in self.hypotheses:
-            mech_len = max(1, len(h.mechanism or ""))
-            n_cites = len(h.supporting_fact_ids) + len(h.contradicting_fact_ids)
-            densities.append(n_cites / (mech_len / 100.0))
-        return {
-            "n_hypotheses": len(self.hypotheses),
-            "avg_kill_conditions": round(sum(kc) / len(kc), 2),
-            "min_kill_conditions": min(kc),
-            "avg_supporting_fact_ids": round(sum(sup) / len(sup), 2),
-            "avg_contradicting_fact_ids": round(sum(con) / len(con), 2),
-            "citation_density_per_mechanism": round(
-                sum(densities) / len(densities), 3
-            ),
-        }
 
 
 REQUIRED_LABELS = {"bull", "base", "bear"}
@@ -136,20 +94,12 @@ Every claim is grounded with [F:<fact_id_short>] for facts or \
 you cannot cite, omit the clause.** Citations must use the 8-char short id \
 exactly as it appears in the structured fact layer.
 
-For every hypothesis you list `kill_conditions` AND `deliver_conditions`: \
-specific facts or events that, if observed, would respectively falsify or \
-confirm the hypothesis. A hypothesis without named kill_conditions is \
-invalid — emit at least 2 plain-text kill conditions per hypothesis. They \
-are events ("AdComm votes against approval"), specific data ("Phase 3 pCR \
-rate < 35%"), or filings ("FDA issues CRL"), not generic risks.
-
-`deliver_conditions` are the symmetric counterpart: specific events or data \
-that would confirm the hypothesis's upside (FDA approval letter, deal-close \
-8-K, Phase 3 met primary endpoint). The aging loop watches both lists — \
-when an extracted_fact matches a kill_condition the asset moves toward \
-kill, when it matches a deliver_condition the asset moves toward deliver. \
-Emit at least 1 deliver_condition per hypothesis when an upside path \
-exists; empty list is acceptable only for pure-downside bear hypotheses.
+For every hypothesis you list `kill_conditions`: specific facts or events \
+that, if observed, would falsify the hypothesis. A hypothesis without named \
+kill conditions is invalid — emit at least 2 plain-text kill conditions per \
+hypothesis. They are events ("AdComm votes against approval"), specific \
+data ("Phase 3 pCR rate < 35%"), or filings ("FDA issues CRL"), not generic \
+risks.
 
 Surface contradictions. If two facts conflict (e.g. one trial positive, one \
 trial negative), route them into bull and bear hypotheses respectively rather \
@@ -168,7 +118,6 @@ Output ONLY a JSON object — no commentary, no markdown fences:
       "supporting_fact_ids": ["<8-char fact_id_short>", ...],
       "contradicting_fact_ids": ["<8-char fact_id_short>", ...],
       "kill_conditions": ["<event/data/filing that would falsify>", ...],
-      "deliver_conditions": ["<event/data/filing that would confirm>", ...],
       "prior_estimate_pct": <int 0-100>
     },
     ...
@@ -184,8 +133,6 @@ be exact (Stage 4 reference-class anchoring will renormalize).
 - supporting_fact_ids / contradicting_fact_ids: 8-char short ids, no [F:] \
 prefix in the JSON arrays themselves.
 - kill_conditions: 2+ items per hypothesis, plain text.
-- deliver_conditions: 1+ items per hypothesis when an upside path exists \
-(bull/base hypotheses usually have ≥1; pure bear may emit []).
 - mechanism citations use [F:abc12345] notation inline, exactly as in the \
 upstream cited prose.
 
@@ -291,23 +238,6 @@ def _validate_and_parse_hypotheses(
                        f"({len(kill_conditions)}); strict-sourcing requires 2+.",
                 affected_id=str(h.get("hypothesis_id") or f"H{idx+1}")))
 
-        deliver_conditions = h.get("deliver_conditions") or []
-        if not isinstance(deliver_conditions, list):
-            deliver_conditions = []
-        deliver_conditions = [
-            str(k).strip() for k in deliver_conditions if str(k).strip()
-        ]
-        # Soft signal: bull/base hypotheses should have ≥1 deliver_condition.
-        # Empty list permissible for pure-bear hypotheses. Emit a warning
-        # rather than error so old fixtures continue to parse.
-        if not deliver_conditions and label in ("bull", "base"):
-            findings.append(HypothesisFinding(
-                severity="warning", check="missing_deliver_conditions",
-                detail=f"hypothesis[{idx}] label={label!r} has no "
-                       f"deliver_conditions; aging Stage B will only be "
-                       f"able to trigger kill, not deliver.",
-                affected_id=str(h.get("hypothesis_id") or f"H{idx+1}")))
-
         supporting = [s for s in (h.get("supporting_fact_ids") or [])
                       if isinstance(s, str)]
         contradicting = [s for s in (h.get("contradicting_fact_ids") or [])
@@ -345,7 +275,6 @@ def _validate_and_parse_hypotheses(
             supporting_fact_ids=supporting,
             contradicting_fact_ids=contradicting,
             kill_conditions=kill_conditions,
-            deliver_conditions=deliver_conditions,
             prior_estimate_pct=prior,
             prior_estimate_pct_pre_anchor=prior,  # snapshot before renormalize
         ))
@@ -416,8 +345,6 @@ def run_hypothesis_enumeration(
         raw_response=result.text,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
-        cache_read_tokens=result.cache_read_tokens,
-        cache_creation_tokens=result.cache_creation_tokens,
         cost_usd=result.cost_usd,
         latency_ms=latency_ms,
     )
@@ -441,8 +368,6 @@ def renormalize_priors(
     hypotheses: List[Hypothesis],
     anchor: Optional[Stage4Anchor],
     evidence_quality: Optional[float],
-    *,
-    dry_run: bool = False,
 ) -> tuple[List[Hypothesis], Dict[str, Any]]:
     """Blend per-hypothesis `prior_estimate_pct` toward the empirical base
     rate from Stage 4. Bull priors anchor to base_rate * 100; bear priors
@@ -452,15 +377,8 @@ def renormalize_priors(
     Returns (mutated_hypotheses, debug_payload). When the anchor has no
     base_rate, priors are returned unchanged and `debug.applied=False`.
 
-    Shadow mode (`dry_run=True`): compute the renorm and surface pre/post
-    deltas in the debug payload but DO NOT mutate hypotheses. Used to inspect
-    ~1 week of would-be shifts before flipping
-    `internal_config.renormalize_priors_dry_run` to 'false'. See migration
-    20260527000020_v3_seed_reference_class_base_rates.sql.
-
     Mutates `prior_estimate_pct` in place (preserving each
-    `prior_estimate_pct_pre_anchor` already set during parsing) unless
-    `dry_run=True`.
+    `prior_estimate_pct_pre_anchor` already set during parsing).
     """
     if not hypotheses or anchor is None or anchor.base_rate is None:
         return hypotheses, {"applied": False, "reason": "no_anchor_or_no_base_rate"}
@@ -497,20 +415,15 @@ def renormalize_priors(
     for h, new_val in zip(hypotheses, rescaled):
         pre_priors.append(int(round(h.prior_estimate_pct)))
         new_int = int(round(max(0.0, min(100.0, new_val))))
-        if not dry_run:
-            h.prior_estimate_pct = new_int
+        h.prior_estimate_pct = new_int
         post_priors.append(new_int)
 
-    shift_magnitude = sum(abs(a - b) for a, b in zip(pre_priors, post_priors))
-
     return hypotheses, {
-        "applied": not dry_run,
-        "dry_run": dry_run,
+        "applied": True,
         "base_rate": base_rate,
         "evidence_quality": eq,
         "blend_weight": round(w, 3),
         "pre_priors": pre_priors,
         "post_priors": post_priors,
-        "shift_magnitude": shift_magnitude,
         "labels": [h.label for h in hypotheses],
     }

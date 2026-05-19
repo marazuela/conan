@@ -28,13 +28,9 @@ from orchestrator_runtime.pricing import estimate_cost as _estimate_cost
 
 logger = logging.getLogger(__name__)
 
-# Model selection — Opus 4.7 is the production synthesis model per the
-# module docstring. Set ORCHESTRATOR_MODEL=claude-sonnet-4-5-20250929 to fall
-# back to Sonnet for cost or rate-limit reasons. The extractor sub-call stays
-# on Sonnet because it's a structured-output extraction (no synthesis judgment)
-# where Sonnet quality is sufficient at 1/5th the cost.
+# Model selection — swap to Opus 4.7 + xhigh thinking when rate-limit tier permits
 DEFAULT_MODEL = os.environ.get(
-    "ORCHESTRATOR_MODEL", "claude-opus-4-7")
+    "ORCHESTRATOR_MODEL", "claude-sonnet-4-5-20250929")
 DEFAULT_EXTRACTOR_MODEL = os.environ.get(
     "ORCHESTRATOR_EXTRACTOR_MODEL", "claude-sonnet-4-5-20250929")
 
@@ -132,7 +128,6 @@ class OrchestratorClient:
         messages: List[Dict[str, Any]],
         model: str = DEFAULT_MODEL,
         max_tokens: int = 4096,
-        temperature: Optional[float] = None,
         thinking_effort: Optional[str] = None,    # 'low'|'medium'|'high'|'xhigh' on Opus 4.7
         thinking_budget_tokens: Optional[int] = None,
         extra_headers: Optional[Dict[str, str]] = None,
@@ -145,14 +140,6 @@ class OrchestratorClient:
             "system": system,
             "messages": messages,
         }
-        # Ensemble runs pass temperature for cross-run diversity; the
-        # single-shot stages leave it None (API default). Extended thinking
-        # forbids non-default temperature, so only forward it when thinking
-        # is NOT being enabled below.
-        if temperature is not None and not (
-            (thinking_budget_tokens or thinking_effort) and "opus" in model
-        ):
-            kwargs["temperature"] = temperature
         if thinking_budget_tokens and "opus" in model:
             kwargs["thinking"] = {
                 "type": "enabled",

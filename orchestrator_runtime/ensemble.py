@@ -88,22 +88,49 @@ class EnsembleResult:
     total_cost_usd: float = 0.0
     total_latency_ms: int = 0
     mode: str = "streaming"
-    # Wave 3.1 — track how many runs were requested vs returned a parseable
-    # result. degraded=True if fewer than half of attempted runs succeeded
-    # AFTER one retry per failure. The aggregate conviction is still emitted
-    # (the operator can decide whether to trust it) but operator_flags
-    # downstream can surface the degradation.
-    n_attempted: int = 0
-    degraded: bool = False
-    retries_used: int = 0
 
 
 SHRINKAGE_FACTOR_LAMBDA = 0.5
 
-# Wave 3.1 — fraction of attempted ensemble runs that must succeed for the
-# result to be considered non-degraded. At N=3 this means ≥2 successful;
-# at N=7 batch, ≥4. Below this, the result is still returned but flagged.
-ENSEMBLE_DEGRADED_THRESHOLD = 0.5
+# Anthropic's current Claude 4.5+ / 4.7 models reject explicit temperature
+# with "temperature is deprecated for this model". Keep temperature for older
+# models where it is still accepted, but omit it for the production family so
+# the provider default sampling behavior can still supply ensemble diversity.
+_MODELS_REJECTING_TEMPERATURE = (
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-opus-4-7",
+)
+
+
+def _model_accepts_temperature(model: str) -> bool:
+    normalized = model.lower()
+    return not any(marker in normalized for marker in _MODELS_REJECTING_TEMPERATURE)
+
+
+def _stage_1_request_params(
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    stage_1_system: Any,
+    stage_1_user_content: str,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": stage_1_system,
+        "messages": [{"role": "user", "content": stage_1_user_content}],
+    }
+    if _model_accepts_temperature(model):
+        params["temperature"] = temperature
+    else:
+        logger.info(
+            "Omitting deprecated temperature parameter for ensemble model %s",
+            model,
+        )
+    return params
 
 
 # ===========================================================================
@@ -125,76 +152,28 @@ def run_streaming_ensemble(
 ) -> EnsembleResult:
     """Run N synthesis+extract pairs sequentially. For Tier-1 rate limits we
     serialize to stay under the 30K input tokens/min cap; once Tier-2+ is
-    available, switch to asyncio.gather for true parallelism.
-
-    Wave 3.1 — each slot gets one retry on transient failure (anthropic.APIError
-    or Stage 9 JSON parse failure). Tracks attempted vs successful counts and
-    flags `degraded=True` on the result when success rate < threshold."""
+    available, switch to asyncio.gather for true parallelism."""
     runs: List[EnsembleRun] = []
-    retries_used = 0
-    last_exc: Optional[Exception] = None
     for idx in range(n):
-        attempt = 0
-        r: Optional[EnsembleRun] = None
-        while attempt <= 1:  # original + up to 1 retry per slot
-            attempt_label = f"{idx + 1}/{n}" + (f" (retry)" if attempt else "")
-            logger.info("Ensemble streaming run %s", attempt_label)
-            try:
-                r = _run_one_streaming(
-                    a_client, stage_1_system, stage_1_user_content,
-                    stage_9_system, model, extractor_model, idx,
-                    temperature, max_tokens_synth, max_tokens_extract,
-                )
-            except anthropic.APIError as exc:
-                logger.warning(
-                    "Ensemble run %s API error: %s", attempt_label, exc,
-                )
-                last_exc = exc
-                r = None
-            if r:
-                break
-            attempt += 1
-            if attempt <= 1:
-                retries_used += 1
-                logger.info(
-                    "Ensemble run %d/%d: scheduling one retry "
-                    "(parse failure or transient API error)",
-                    idx + 1, n,
-                )
+        logger.info("Ensemble streaming run %d/%d", idx + 1, n)
+        try:
+            r = _run_one_streaming(
+                a_client, stage_1_system, stage_1_user_content,
+                stage_9_system, model, extractor_model, idx,
+                temperature, max_tokens_synth, max_tokens_extract,
+            )
+        except anthropic.APIError as exc:
+            logger.warning("Ensemble run %d failed: %s; continuing", idx + 1, exc)
+            continue
         if r:
             runs.append(r)
             logger.info("Run %d/%d: direction=%s conviction=%.1f cost=$%.3f",
                         idx + 1, n, r.direction, r.conviction_pct, r.cost_usd)
-        else:
-            logger.warning(
-                "Ensemble run %d/%d: failed after retry; "
-                "dropping from aggregation",
-                idx + 1, n,
-            )
 
     if not runs:
-        cause = (
-            f" last error: {type(last_exc).__name__}: {last_exc}"
-            if last_exc is not None
-            else " no API exception captured (Stage 9 JSON parse failed every"
-            " slot)"
-        )
-        raise RuntimeError(
-            f"Ensemble produced 0 successful runs out of {n} attempted "
-            f"(retries={retries_used});{cause}"
-        )
+        raise RuntimeError("Ensemble produced 0 successful runs")
 
-    result = _aggregate(runs, mode="streaming")
-    result.n_attempted = n
-    result.retries_used = retries_used
-    result.degraded = (len(runs) / float(n)) < ENSEMBLE_DEGRADED_THRESHOLD
-    if result.degraded:
-        logger.warning(
-            "Ensemble DEGRADED: %d/%d successful (threshold %.0f%%). "
-            "Aggregate emitted but downstream gates should consider this.",
-            len(runs), n, ENSEMBLE_DEGRADED_THRESHOLD * 100,
-        )
-    return result
+    return _aggregate(runs, mode="streaming")
 
 
 def _run_one_streaming(
@@ -209,30 +188,38 @@ def _run_one_streaming(
     max_tokens_synth: int,
     max_tokens_extract: int,
 ) -> Optional[EnsembleRun]:
-    # Route through a_client.call() (not the raw SDK client) so the ensemble
-    # path inherits the same transient-retry/backoff + Opus interleaved-thinking
-    # beta header as the single-shot path. Calling _client.messages.create
-    # directly meant a single immediate APIError (rate-limit/400/auth) killed
-    # every slot in seconds with no retry and a swallowed root cause.
-    # Stage 1 with temperature for diversity.
-    s1 = a_client.call(
-        system=stage_1_system,
-        messages=[{"role": "user", "content": stage_1_user_content}],
-        model=model,
-        max_tokens=max_tokens_synth,
-        temperature=temperature,
+    # Stage 1 uses temperature where the selected model still accepts it.
+    s1 = a_client._client.messages.create(
+        **_stage_1_request_params(
+            model=model,
+            max_tokens=max_tokens_synth,
+            temperature=temperature,
+            stage_1_system=stage_1_system,
+            stage_1_user_content=stage_1_user_content,
+        )
     )
-    s1_text = s1.text
+    s1_text = "".join(b.text for b in s1.content if b.type == "text")
+    s1_in = s1.usage.input_tokens
+    s1_out = s1.usage.output_tokens
+    s1_thinking = sum(getattr(b, "tokens", 0) for b in s1.content if b.type == "thinking")
+    s1_cache_read = getattr(s1.usage, "cache_read_input_tokens", 0) or 0
+    s1_cache_create = getattr(s1.usage, "cache_creation_input_tokens", 0) or 0
+    s1_cost = estimate_cost(model, s1_in, s1_out)
 
-    # Stage 9 (deterministic — no temperature override)
-    s9 = a_client.call(
-        system=stage_9_system,
-        messages=[{"role": "user", "content": f"Cited prose to extract:\n\n{s1_text}"}],
+    # Stage 9 (deterministic — temperature 0)
+    t0 = time.time()
+    s9 = a_client._client.messages.create(
         model=extractor_model,
         max_tokens=max_tokens_extract,
+        system=stage_9_system,
+        messages=[{"role": "user", "content": f"Cited prose to extract:\n\n{s1_text}"}],
     )
-    s9_text = s9.text
+    s9_text = "".join(b.text for b in s9.content if b.type == "text")
+    s9_in = s9.usage.input_tokens
+    s9_out = s9.usage.output_tokens
+    s9_cost = estimate_cost(extractor_model, s9_in, s9_out)
     parsed = parse_json_or_none(s9_text)
+    s9_latency = int((time.time() - t0) * 1000)
 
     if not parsed:
         logger.warning("Run %d: Stage 9 JSON parse failed", run_idx)
@@ -261,16 +248,13 @@ def _run_one_streaming(
         conviction_pct=conviction,
         evidence_quality=evidence_quality,
         parsed_json=parsed,
-        input_tokens=s1.input_tokens + s9.input_tokens,
-        output_tokens=s1.output_tokens + s9.output_tokens,
-        thinking_tokens=s1.thinking_tokens,
-        # Roll Stage 1 + Stage 9 cache totals together — both stages reuse the
-        # cached shared system prefix when present, and persisting only s1
-        # silently understates the cache footprint by ~50%.
-        cache_read_tokens=s1.cache_read_tokens + s9.cache_read_tokens,
-        cache_creation_tokens=s1.cache_creation_tokens + s9.cache_creation_tokens,
-        cost_usd=s1.cost_usd + s9.cost_usd,
-        latency_ms=s1.latency_ms + s9.latency_ms,
+        input_tokens=s1_in + s9_in,
+        output_tokens=s1_out + s9_out,
+        thinking_tokens=s1_thinking,
+        cache_read_tokens=s1_cache_read,
+        cache_creation_tokens=s1_cache_create,
+        cost_usd=s1_cost + s9_cost,
+        latency_ms=s9_latency,
     )
 
 
@@ -301,13 +285,13 @@ def run_batch_ensemble(
     for idx in range(n):
         s1_requests.append({
             "custom_id": f"ensemble-s1-{idx}",
-            "params": {
-                "model": model,
-                "max_tokens": max_tokens_synth,
-                "temperature": temperature,
-                "system": stage_1_system,
-                "messages": [{"role": "user", "content": stage_1_user_content}],
-            },
+            "params": _stage_1_request_params(
+                model=model,
+                max_tokens=max_tokens_synth,
+                temperature=temperature,
+                stage_1_system=stage_1_system,
+                stage_1_user_content=stage_1_user_content,
+            ),
         })
 
     logger.info("Submitting Batch with %d Stage-1 requests", n)
@@ -355,14 +339,8 @@ def run_batch_ensemble(
         s1_thinking = sum(getattr(b, "tokens", 0) for b in msg.content if b.type == "thinking")
         s1_cache_read = getattr(msg.usage, "cache_read_input_tokens", 0) or 0
         s1_cache_create = getattr(msg.usage, "cache_creation_input_tokens", 0) or 0
-        # Batch discount: 50% off list price. Cache tokens must be priced in
-        # here too — Anthropic returns them outside of input_tokens, so dropping
-        # them silently understates batch cost the same as streaming.
-        s1_cost = estimate_cost(
-            model, s1_in, s1_out,
-            cache_read_tokens=s1_cache_read,
-            cache_creation_tokens=s1_cache_create,
-        ) * 0.5
+        # Batch discount: 50% off list price
+        s1_cost = estimate_cost(model, s1_in, s1_out) * 0.5
 
         try:
             t0 = time.time()
@@ -375,15 +353,7 @@ def run_batch_ensemble(
             s9_text = "".join(b.text for b in s9.content if b.type == "text")
             s9_in = s9.usage.input_tokens
             s9_out = s9.usage.output_tokens
-            s9_cache_read = getattr(s9.usage, "cache_read_input_tokens", 0) or 0
-            s9_cache_create = getattr(s9.usage, "cache_creation_input_tokens", 0) or 0
-            # Stage 9 in the batch path runs as a normal streaming call (no
-            # batch discount), so pass cache tokens at full list price.
-            s9_cost = estimate_cost(
-                extractor_model, s9_in, s9_out,
-                cache_read_tokens=s9_cache_read,
-                cache_creation_tokens=s9_cache_create,
-            )
+            s9_cost = estimate_cost(extractor_model, s9_in, s9_out)
             s9_latency = int((time.time() - t0) * 1000)
         except anthropic.APIError as exc:
             logger.warning("Batch result %s: Stage 9 failed: %s", cid, exc)
@@ -421,9 +391,8 @@ def run_batch_ensemble(
             input_tokens=s1_in + s9_in,
             output_tokens=s1_out + s9_out,
             thinking_tokens=s1_thinking,
-            # Sum s1+s9 cache tokens (see _run_one_streaming for the rationale).
-            cache_read_tokens=s1_cache_read + s9_cache_read,
-            cache_creation_tokens=s1_cache_create + s9_cache_create,
+            cache_read_tokens=s1_cache_read,
+            cache_creation_tokens=s1_cache_create,
             cost_usd=s1_cost + s9_cost,
             latency_ms=s9_latency,
         ))
@@ -431,20 +400,7 @@ def run_batch_ensemble(
     if not runs:
         raise RuntimeError(f"Batch {batch_id} ensemble: 0 runs survived Stage 9")
 
-    # Wave 3.1 — track attempted vs successful. Batch path does NOT retry
-    # (resubmission cost is the whole batch, not per-slot, so retrying isn't
-    # the right primitive); we just flag degraded when too few slots survived.
-    result = _aggregate(runs, mode="batch")
-    result.n_attempted = n
-    result.retries_used = 0
-    result.degraded = (len(runs) / float(n)) < ENSEMBLE_DEGRADED_THRESHOLD
-    if result.degraded:
-        logger.warning(
-            "Batch ensemble DEGRADED: %d/%d successful (threshold %.0f%%). "
-            "Aggregate emitted; consider re-running.",
-            len(runs), n, ENSEMBLE_DEGRADED_THRESHOLD * 100,
-        )
-    return result
+    return _aggregate(runs, mode="batch")
 
 
 # ===========================================================================

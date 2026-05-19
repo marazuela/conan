@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -60,8 +59,6 @@ def fetch(
     upserted = 0
     skipped = 0
     errors: List[Dict[str, Any]] = []
-    pages_attempted = 0
-    pages_failed = 0
 
     search = (
         f"submissions.submission_status_date:[{_d(start_date)}+TO+{_d(end_date)}]"
@@ -76,56 +73,16 @@ def fetch(
     for page in range(max_pages):
         skip = page * page_size
         url = f"{OPENFDA_URL}?search={search_enc}&limit={page_size}&skip={skip}"
-        pages_attempted += 1
-
-        body: Optional[Dict[str, Any]] = None
-        end_of_pagination = False
-        failed = False
-        last_error: Optional[BaseException] = None
-
-        for attempt in range(2):
-            try:
-                r = requests.get(url, timeout=30)
-                # openFDA returns 404 for "no more results" — treat as clean
-                # end-of-pagination, NOT an error. Must precede raise_for_status.
-                if r.status_code == 404:
-                    end_of_pagination = True
-                    break
-                r.raise_for_status()
-                body = r.json()
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code == 404:
                 break
-            except (requests.Timeout, requests.ConnectionError) as e:
-                last_error = e
-                if attempt == 0:
-                    time.sleep(1.5)
-                    continue
-                failed = True
-                break
-            except requests.HTTPError as e:
-                status = e.response.status_code if e.response is not None else None
-                last_error = e
-                if status is not None and 500 <= status < 600 and attempt == 0:
-                    time.sleep(1.5)
-                    continue
-                failed = True
-                break
-            except ValueError as e:  # JSON parse error
-                last_error = e
-                failed = True
-                break
-            except requests.RequestException as e:
-                last_error = e
-                failed = True
-                break
-
-        if end_of_pagination:
-            break
-        if failed:
-            pages_failed += 1
-            errors.append({"page": page, "error": str(last_error)[:400]})
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:  # noqa: BLE001
+            errors.append({"page": page, "error": str(e)[:400]})
             break
 
-        assert body is not None  # success path guarantees body is set
         results = body.get("results") or []
         if not results:
             break
@@ -169,18 +126,11 @@ def fetch(
         if total is not None and (skip + page_size) >= total:
             break
 
-    partial_reasons: List[str] = (
-        [f"pages_failed={pages_failed}"] if pages_failed > 0 else []
-    )
-
     return {
         "fetched": fetched,
         "upserted": upserted,
         "skipped": skipped,
         "errors": errors,
-        "pages_attempted": pages_attempted,
-        "pages_failed": pages_failed,
-        "partial_reasons": partial_reasons,
         "window": {"start": _d(start_date), "end": _d(end_date)},
     }
 
@@ -291,16 +241,12 @@ def main() -> int:
     client = SupabaseClient() if args.apply else _DryClient()
     result = fetch(client, start_date=start, end_date=end,
                    dry_run=not args.apply, max_pages=args.max_pages)
-    print(f"window:          {result['window']['start']} → {result['window']['end']}")
-    print(f"fetched:         {result['fetched']}")
-    print(f"upserted:        {result['upserted']} ({'dry-run' if not args.apply else 'applied'})")
-    print(f"skipped:         {result['skipped']}")
-    print(f"pages_attempted: {result['pages_attempted']}")
-    print(f"pages_failed:    {result['pages_failed']}")
-    if result["partial_reasons"]:
-        print(f"partial_reasons: {result['partial_reasons']}")
+    print(f"window:   {result['window']['start']} → {result['window']['end']}")
+    print(f"fetched:  {result['fetched']}")
+    print(f"upserted: {result['upserted']} ({'dry-run' if not args.apply else 'applied'})")
+    print(f"skipped:  {result['skipped']}")
     if result["errors"]:
-        print(f"errors:          {len(result['errors'])}")
+        print(f"errors:   {len(result['errors'])}")
         for err in result["errors"][:5]:
             print(f"  - {err}")
     return 0

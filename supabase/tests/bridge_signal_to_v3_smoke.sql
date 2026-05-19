@@ -1,8 +1,8 @@
 -- Smoke test for the v3 signal→fda_assets→asset_documents bridge.
 --
 -- Exercises the end-to-end flow proven by migrations
--- 20260530000000_v3_bridge_signal_to_fda_assets.sql and
--- 20260530000010_dedup_fda_assets_case_duplicates.sql.
+-- 20260522000000_v3_bridge_signal_to_fda_assets.sql and
+-- 20260522000010_dedup_fda_assets_case_duplicates.sql.
 --
 -- Cases:
 --   1. Existing-asset match: signal entity_id + drug_name resolves to the
@@ -16,6 +16,7 @@
 --   5. Garbage drug_name "EX-99": treated as missing drug_name → flagged.
 --   6. Idempotency: re-firing on the same signal_id is a no-op.
 --   7. Non-FDA scoring_profile: bridge no-ops.
+--   8. Resolver alias: BEFORE INSERT canonicalizes alias drug name before bridge.
 --
 -- Run with:
 --   supabase db execute --file supabase/tests/bridge_signal_to_v3_smoke.sql
@@ -37,17 +38,21 @@ DECLARE
   v_link_count int;
   v_flag_count int;
 BEGIN
-  -- Pick any pre-existing entity + rubric_version_id so we satisfy FK + NOT NULL
-  -- constraints without owning a fixture schema. The transaction rolls back so
-  -- the choice is inconsequential.
-  SELECT id INTO v_entity_id FROM public.entities LIMIT 1;
-  IF v_entity_id IS NULL THEN
-    RAISE EXCEPTION 'No entities row available — smoke test needs one to satisfy signals.entity_id FK';
-  END IF;
+  -- Self-contained fixtures so the smoke test works on a freshly reset local DB.
+  INSERT INTO public.entities (
+    name, primary_ticker, primary_mic, country
+  ) VALUES (
+    'Bridge Smoke Pharma', 'BSMK', 'XNAS', 'US'
+  ) RETURNING id INTO v_entity_id;
+
   SELECT rubric_version_id INTO v_rubric_id
   FROM public.signals WHERE scoring_profile='binary_catalyst' LIMIT 1;
   IF v_rubric_id IS NULL THEN
-    RAISE EXCEPTION 'No prior binary_catalyst rubric_version_id available';
+    INSERT INTO public.rubrics (
+      profile, rubric_version, dimension_weights, notes
+    ) VALUES (
+      'binary_catalyst', 1, '{}'::jsonb, 'bridge smoke fixture'
+    ) RETURNING id INTO v_rubric_id;
   END IF;
 
   -- ---- Fixture: pre-seeded fda_asset for cases 1 + 2 ----
@@ -205,7 +210,35 @@ BEGIN
     RAISE EXCEPTION 'CASE 7 failed: non-FDA profile should be a no-op, but got % conan_signal docs', v_doc_count;
   END IF;
 
-  RAISE NOTICE 'bridge_signal_to_v3 smoke test: all 7 cases passed';
+  -- ---------- CASE 8: resolver alias canonicalizes before bridge ----------
+  INSERT INTO public.fda_asset_resolution_aliases (
+    alias_type, alias_value, canonical_value, asset_id, ticker, drug_name,
+    source, notes
+  ) VALUES (
+    'drug_name', 'OLEZ-ALIAS', 'Olezarsen', v_pre_seeded_asset, 'BSMK', 'Olezarsen',
+    'operator', 'bridge smoke alias'
+  );
+
+  INSERT INTO public.signals (
+    signal_id, source_content_hash, source_date, scan_date,
+    signal_type, scoring_profile, rubric_version_id, score, dimensions,
+    raw_payload, entity_id
+  ) VALUES (
+    'smoke_case8_alias', 'sha256:smoke_case8', now(), now(),
+    'pdufa_watchlist', 'binary_catalyst', v_rubric_id, 55, '{}'::jsonb,
+    jsonb_build_object('ticker','BSMK','drug_name','OLEZ-ALIAS',
+                       'company_name','Bridge Smoke Pharma','pdufa_date','2026-12-31'),
+    v_entity_id
+  );
+
+  SELECT count(*) INTO v_link_count FROM public.asset_documents ad
+  JOIN public.documents d ON d.id=ad.document_id
+  WHERE d.extensions->>'signal_id'='smoke_case8_alias' AND ad.asset_id=v_pre_seeded_asset;
+  IF v_link_count <> 1 THEN
+    RAISE EXCEPTION 'CASE 8 failed: expected alias-canonicalized link to existing asset, got %', v_link_count;
+  END IF;
+
+  RAISE NOTICE 'bridge_signal_to_v3 smoke test: all 8 cases passed';
 END $$;
 
 ROLLBACK;

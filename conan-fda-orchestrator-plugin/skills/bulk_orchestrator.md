@@ -50,13 +50,22 @@ The Cowork routine pre-populates the workspace with one JSON blob per asset:
   "indication": "...",
   "reference_class_signature": "phase3_oncology_breakthrough_no_prior_crl",
   "memory_path": "memory_files/asset/<asset_id>.md",
+  "evidence_packet": {
+    "ok": true,
+    "errors": [],
+    "counts": {
+      "material_primary_documents": 1,
+      "extracted_facts": 8,
+      "asset_documents": 5
+    }
+  },
   "extracted_facts": [...],         // up to 200 most-recent extracted_facts rows
   "asset_documents": [...],         // up to 50 most-recent asset_documents rows
   "prior_assessment": {...} | null  // latest non-superseded convergence_assessments row, if any
 }
 ```
 
-The skill reads this blob, loads the memory file (if present) via the file system path, and proceeds.
+The harness only enqueues blobs whose Tier-2 `evidence_packet.ok=true`: ticker + drug identity and at least one material primary/safety document link. The skill reads this blob, loads the memory file (if present) via the file system path, and proceeds.
 
 ## Process
 
@@ -71,7 +80,14 @@ The skill reads this blob, loads the memory file (if present) via the file syste
 4. **Synthesize.** In one Sonnet pass produce:
    - `thesis_direction` ∈ `long | short | neutral | straddle`
    - `raw_conviction_pct` ∈ [0, 100], pre-calibration
-   - `hypotheses[]` — bull / base / bear, each with ≥2 `kill_conditions[]` (D-115 contract)
+   - `hypotheses` — a JSON **array** (never an object/map) of exactly 3
+     elements, one each for the bull, base, and bear case. Each element is an
+     object: `{"label": "bull"|"base"|"bear", "claim": "...",
+     "kill_conditions": ["...", "..."]}` with **≥2** `kill_conditions`
+     entries (D-115 contract). Emit `[ {...}, {...}, {...} ]`, NOT
+    `{"bull": {...}, "base": {...}, "bear": {...}}`. The server-side
+    harness canonicalizes the keyed object shape for compatibility, but the
+    preferred emitted schema is the array form above.
    - `cited_prose_blocks[]` — 4–8 short paragraphs, every claim cited via `[F:fact_id]` or `[D:doc_id]` notation
    - `uncertainties[]` — explicit gaps that would warrant a Tier-1 escalation
    - `evidence_quality` ∈ [0, 1] reflecting how much of the synthesis rests on cited primary sources vs inferred priors
@@ -85,6 +101,7 @@ The skill reads this blob, loads the memory file (if present) via the file syste
 After emitting, the harness checks the new row against the prior assessment for the same asset and enqueues a Tier-1 run within 1 hour if **any** of:
 
 - `conviction_pct >= 60` (high-conviction read deserves the depth pass)
+- `conviction_pct >= 45` AND `evidence_quality <= 0.45` (material but under-evidenced read needs a depth pass, not a quiet discard)
 - `thesis_direction != prior.thesis_direction` (direction change)
 - `document_ids` includes a doc not in `prior.document_ids` AND that doc's `doc_type IN ('label','adcomm_briefing','crl','complete_response_letter','press_release_pdufa')` (new primary doc)
 
@@ -103,19 +120,13 @@ The harness writes `extensions.escalated_to_tier1=true` on the row and inserts a
 
 - ✅ `schema_version`, `asset_id`, `tier=2`, `orchestrator_version`
 - ✅ `thesis_direction`, `raw_conviction_pct`, `conviction_pct`, `conviction_pct_calibrated`, `band`
-- ✅ `hypotheses` (bull / base / bear with kill_conditions)
+- ✅ `hypotheses` — JSON array of 3 objects (bull/base/bear), each with `label`, `claim`, and ≥2 `kill_conditions` (array). Never a keyed object.
 - ✅ `cited_prose_blocks`, `key_facts`, `uncertainties`, `citations`
 - ✅ `reference_class`, `reference_class_base_rate`, `similar_resolved_case_ids`
 - ✅ `evidence_quality`
-- ✅ `gate_status` — **must be `"tier2_skipped"`**. The Tier-2 path is
-  architecturally exempt from the Stage 7 constitutional check; this column
-  makes the exemption explicit so downstream filters can use
-  `gate_status='pass'` without conflating Tier-2 with Tier-1 mid-flight rows.
 - ❌ `ensemble_*` — null (Tier 2 is single-shot)
 - ❌ `pre_mortem`, `adversarial_challenges` — null (use Tier 1 for adversarial pass)
-- ❌ `constitutional_*` — null (the gate truth lives in `gate_status` above;
-     `constitutional_pass` stays NULL to preserve the
-     `TIER2_FORBIDDEN_NON_NULL` contract in `orchestrator_runtime/tier2.py`)
+- ❌ `constitutional_*` — null
 - ❌ `market_implied_move`, `options_iv` — null (no options sub-agent in Tier 2)
 
 The schema's existing `additionalProperties: false` means missing fields must be explicitly null in the emitted JSON.

@@ -1,27 +1,17 @@
-"""backfill_anthropic_files — drains documents that need a Files-API file_id.
+"""backfill_anthropic_files — Stream 3.2 one-shot.
 
-Walks documents where anthropic_file_id IS NULL AND raw_text bytes are large
-enough to justify a Files API upload (size gate matches document_writer's
-MIN_UPLOAD_BYTES — see L42), uploads each to Anthropic's Files API, and stores
-the returned file_id back on the row.
-
-Body MIME type is decided by the documents.is_pdf column. Native Citations
-works for both PDF and text/plain payloads, so the size gate is the operative
-selector, not is_pdf.
+Walks documents where is_pdf=true AND anthropic_file_id IS NULL, uploads each
+to Anthropic's Files API, and stores the returned file_id back on the row.
 
 Usage:
 
     python -m modal_workers.scripts.backfill_anthropic_files [--limit N] [--dry-run]
 
-Idempotent — never re-uploads rows that already have an id. Safe to schedule
-periodically (see modal_workers/scanners/anthropic_files_backfill_scheduler.py)
-to drain whatever the at-ingest upload path missed (e.g. ingesters predating
-this wiring, or transient API failures).
-
+Operator-triggered. Idempotent — never re-uploads rows that already have an id.
 Failures are logged per-row and the script continues; a final summary lists how
 many succeeded vs failed.
 
-Reads bytes from:
+Reads PDF bytes from:
   1. documents.storage_path → Supabase Storage (preferred for large files)
   2. documents.raw_text → inline bytes (encoded utf-8 — see document_writer.py
      L120-L122 for the encoding contract)
@@ -37,7 +27,6 @@ from typing import Any, Dict, List, Optional
 
 from modal_workers.shared.document_writer import (
     DOCUMENT_STORAGE_BUCKET,
-    MIN_UPLOAD_BYTES,
     DocumentWriter,
 )
 from modal_workers.shared.supabase_client import SupabaseClient
@@ -51,14 +40,11 @@ BATCH_SIZE = 50
 def _fetch_batch(
     client: SupabaseClient, *, batch_size: int, offset: int = 0
 ) -> List[Dict[str, Any]]:
-    # Filter is "no file_id yet". The size gate is applied per-row inside the
-    # body-fetch step (we can't easily express "byte length of raw_text OR size
-    # in storage" in PostgREST). The is_pdf column is read but no longer used
-    # as a selector — it's the MIME hint, not the eligibility predicate.
     return client._rest(
         "GET", "documents",
         params={
             "select": "id,storage_path,raw_text,title,source,source_doc_id,is_pdf,anthropic_file_id",
+            "is_pdf": "eq.true",
             "anthropic_file_id": "is.null",
             "limit": str(batch_size),
             "offset": str(offset),
@@ -67,10 +53,7 @@ def _fetch_batch(
     ) or []
 
 
-def _read_doc_bytes(client: SupabaseClient, row: Dict[str, Any]) -> Optional[bytes]:
-    """Returns the document body bytes. Used to both apply the size gate and
-    feed the Files API. PDFs come from storage; text payloads come from either
-    storage_path or the inline raw_text column (utf-8 encoded)."""
+def _read_pdf_bytes(client: SupabaseClient, row: Dict[str, Any]) -> Optional[bytes]:
     storage_path = row.get("storage_path")
     if storage_path:
         try:
@@ -96,8 +79,6 @@ def run(*, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, int]
     processed = 0
     uploaded = 0
     failed = 0
-    skipped_too_small = 0
-    skipped_no_body = 0
     offset = 0
 
     while True:
@@ -108,47 +89,21 @@ def run(*, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, int]
         if not batch:
             break
 
-        # Track how many rows in this batch we advanced past in the cursor —
-        # rows skipped by the size gate or missing-body check are NOT uploaded
-        # but still consume the offset, otherwise we loop forever on them.
         for row in batch:
             processed += 1
             doc_id = row["id"]
-            body = _read_doc_bytes(sb, row)
+            body = _read_pdf_bytes(sb, row)
             if not body:
-                skipped_no_body += 1
-                logger.info(
-                    "doc=%s no body found (storage_path/raw_text both empty); skipping",
-                    doc_id,
-                )
+                logger.info("doc=%s no body found (storage_path/raw_text both empty); skipping", doc_id)
                 continue
 
-            # Size gate — must match document_writer's MIN_UPLOAD_BYTES so the
-            # at-ingest path and the backfill path agree on eligibility.
-            if len(body) < MIN_UPLOAD_BYTES:
-                skipped_too_small += 1
-                logger.debug(
-                    "doc=%s below size gate (bytes=%d < %d); skipping",
-                    doc_id, len(body), MIN_UPLOAD_BYTES,
-                )
-                continue
-
-            is_pdf = bool(row.get("is_pdf"))
-            ext = "pdf" if is_pdf else "txt"
-            filename = (
-                row.get("title")
-                or f"{row.get('source')}_{row.get('source_doc_id')}.{ext}"
-            )
+            filename = row.get("title") or f"{row.get('source')}_{row.get('source_doc_id')}.pdf"
             if dry_run:
-                logger.info(
-                    "[dry-run] would upload doc=%s filename=%s mime=%s bytes=%d",
-                    doc_id, filename,
-                    "application/pdf" if is_pdf else "text/plain",
-                    len(body),
-                )
+                logger.info("[dry-run] would upload doc=%s filename=%s bytes=%d",
+                            doc_id, filename, len(body))
                 continue
 
-            file_id = writer._upload_to_anthropic(body, filename, is_pdf=is_pdf)
+            file_id = writer._upload_to_anthropic(body, filename)
             if not file_id:
                 failed += 1
                 continue
@@ -170,13 +125,7 @@ def run(*, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, int]
         if len(batch) < size:
             break
 
-    summary = {
-        "processed": processed,
-        "uploaded": uploaded,
-        "failed": failed,
-        "skipped_too_small": skipped_too_small,
-        "skipped_no_body": skipped_no_body,
-    }
+    summary = {"processed": processed, "uploaded": uploaded, "failed": failed}
     logger.info("backfill complete: %s", summary)
     return summary
 

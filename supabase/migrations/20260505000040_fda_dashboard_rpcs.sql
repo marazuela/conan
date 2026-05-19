@@ -259,7 +259,7 @@ BEGIN
   -- Each manual refresh request gets a unique snapshot_hash so the unique
   -- constraint (event_id, agent_kind, snapshot_hash) doesn't collide with a
   -- prior auto-snapshot.
-  v_snapshot_hash := 'manual:' || encode(gen_random_bytes(8), 'hex');
+  v_snapshot_hash := 'manual:' || encode(extensions.gen_random_bytes(8), 'hex');
 
   INSERT INTO public.fda_agent_reviews (
     event_id, agent_kind, version, snapshot_hash, status
@@ -325,7 +325,7 @@ BEGIN
     RAISE EXCEPTION 'fda_event_override_feature: event % not found', p_event_id;
   END IF;
 
-  v_hash := encode(digest(p_event_id::text || ':' || p_field || ':' || coalesce(p_value::text,'') || ':' || extract(epoch from now())::text, 'sha256'), 'hex');
+  v_hash := encode(extensions.digest(p_event_id::text || ':' || p_field || ':' || coalesce(p_value::text,'') || ':' || extract(epoch from now())::text, 'sha256'), 'hex');
 
   INSERT INTO public.fda_event_evidence (
     event_id, source, evidence_type, payload, hash

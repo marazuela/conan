@@ -1,42 +1,41 @@
 """
-Modal app definition for Conan v3 (FDA-only).
+Modal app definition for Conan v2.
 
-Surface:
+Surface (Phase 3 — full scanner fleet):
   - `rubric_apply_caps`  — web endpoint RPC'd by the reactor edge function on every
     signals.INSERT to apply auto-caps without porting rubric logic to TypeScript.
-    (Will be retired in Phase 4 alongside the signals table.)
   - `health`             — trivial GET for dashboard + smoke tests.
-  - Scanner functions    — each as `<name>_once` (on-demand callable). Only the
-    FDA-relevant scanners are still wired in (see the registry — non-FDA names
-    are status='deprecated' since 2026-05-13 per the v3-only adoption plan).
-  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`,
-    `dispatch_observability`. `dispatch_release_times` fires at
-    06/08/13/17/21 UTC and reads `scanners.scheduled_hour_utc` from the
-    registry to decide which daily scanners to spawn at each tick.
-    `dispatch_3h` keeps the FDA 3h-cadence scanners alive (e.g.
-    `fda_signal_bridge`). `dispatch_weekly` was removed 2026-05-13 — its only
-    bucket scanner (`takeover_candidate_scanner`) is now deprecated.
+  - 19 scanner functions — each as `<name>_once` (on-demand callable).
+  - 3 dispatcher crons   — `dispatch_3h`, `dispatch_release_times`, `dispatch_weekly`.
+    `dispatch_release_times` fires at 06/08/13/17/21 UTC and reads
+    `scanners.scheduled_hour_utc` from the registry to decide which daily
+    scanners to spawn at each tick. Per-scanner isolation preserved (each
+    scanner runs in its own container with its own timeout).
 
-NOT hosted here:
-  - v2 Cowork skills (`thesis_writer`, `signal_resolver`, `candidate_aging`,
-    `challenger_retro`) are being retired as part of the v3-only adoption.
+NOT hosted here (by design, spec.md §7.4 revised 2026-04-20):
+  - `thesis_writer`      — runs as a Claude skill under Pedro's account via a Cowork
+    scheduled task (see `.claude/skills/thesis_writer.md`). Modal doesn't draft theses.
+  - `candidate_aging`    — same pattern; a separate skill.
 
-Scheduled dispatch (post-2026-05-13 FDA-only state):
-  - 3h cadence — `fda_signal_bridge`.
+Scheduled dispatch (2026-04-22 release-time amendment, spec.md §7):
+  - 3h:      edgar_filing_monitor (SEC filings land throughout US day)
+  - weekly:  takeover_candidate_scanner (Mon 12:00 UTC)
   - daily release-time buckets — queried from registry per tick:
-      06 UTC  openfda_corpus_ingest
-      13 UTC  fda_adcomm_pdufa (fetcher), fed_register_adcom (fetcher),
-              fda_pdufa_pipeline, pre_phase3_readout_scanner
-      17 UTC  anthropic_files_backfill
-      21 UTC  fda_pdufa_pipeline (secondary slot for late-US CRLs)
+      06 UTC  EU pre-open           (lse_rns, esma_short, bse_nse)
+      08 UTC  APAC post-close       (asx, tdnet, hkex, kind)
+      13 UTC  US pre-open / Americas (fda_pdufa, cvm, sedar_plus, bmv) + fetchers
+      17 UTC  US midday              (congressional_trading)
+      21 UTC  US post-close          (sec_enforcement, courtlistener)
 
 Only rows with `status='operational'` fire; paused rows are skipped inside
 `_dispatch`. Adding a new scanner = INSERT row with a `scheduled_hour_utc`;
 no code redeploy needed for timing tweaks.
 
 Secret requirements (populate via `modal secret create scanner-secrets ...`):
-  - SEC_USER_AGENT          — required by fda_pdufa_pipeline.
-                              Must be a valid contact string.
+  - SEC_USER_AGENT          — required by edgar, fda_pdufa, takeover_candidate,
+                              sec_enforcement. Must be a valid contact string.
+  - COURTLISTENER_TOKEN     — optional; courtlistener emits auth_required without it.
+  - OPENDART_KEY            — optional; kind_scanner emits auth_required without it.
   - OPENFIGI_API_KEY        — optional; openfigi_resolver falls back to anonymous tier.
 
 Deploy:   modal deploy modal_workers/app.py
@@ -62,9 +61,10 @@ image = (
         "fastapi[standard]",
         "pydantic>=2",
         "requests>=2.31",
-        "yfinance>=0.2",          # market_snapshot, edgar_filing_monitor, price_tracker
+        "beautifulsoup4>=4.12",   # congressional_trading, esma_short_scanner
+        "openpyxl>=3.1",          # esma_short_scanner (FCA xlsx)
+        "yfinance>=0.2",          # sedar_plus_scanner, asx_scanner (ticker→mcap proxies)
         "reportlab>=4.0",         # reporting_weekly (PDF render)
-        "anthropic>=0.40",        # anthropic_files_backfill_once (Files API uploads)
     )
     .add_local_python_source("modal_workers")
 )
@@ -73,9 +73,7 @@ image = (
 scanner_secrets = modal.Secret.from_name("scanner-secrets")       # SEC_USER_AGENT, OPENFIGI_API_KEY, COURTLISTENER_TOKEN, OPENDART_KEY
 supabase_secrets = modal.Secret.from_name("supabase-secrets")     # SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 compute_auth_secrets = modal.Secret.from_name("compute-auth")     # CONAN_COMPUTE_SECRET — shared with Supabase internal_config.compute_secret
-anthropic_secrets = modal.Secret.from_name("anthropic-orchestrator")  # ANTHROPIC_API_KEY — needed by anthropic_files_backfill_once for Files API uploads
-# anthropic-secrets is referenced only by anthropic_files_backfill_once below.
-# thesis_writer + candidate_aging
+# anthropic-secrets intentionally NOT referenced here. thesis_writer + candidate_aging
 # run as Claude skills via Cowork scheduled tasks, not as Modal functions.
 
 
@@ -476,74 +474,17 @@ def _run(scanner_name: str) -> dict:
 def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
     """Runner for catalyst_universe fetchers (modal_workers/fetchers/universe/*).
 
-    Contract: `fetch(client, *, start_date, end_date) -> dict` returning at least
-    `fetched`, `upserted`, `errors`, and (post-F-214) `partial_reasons`.
-
-    If the fetcher is registered in `public.scanners`, opens/closes a
-    `scanner_runs` row so a non-empty `partial_reasons` surfaces via the same
-    dashboards + reaper as scanner partials. Falls back to a bare fetch when the
-    row isn't there yet so the code can land before the registration migration.
+    Fetchers don't use scanner_base/scanner_runs — they write directly to
+    catalyst_universe. Contract: `fetch(client, *, start_date, end_date) -> dict`.
     """
-    import os
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, timedelta
     from importlib import import_module
-    from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError
+    from modal_workers.shared.supabase_client import SupabaseClient
 
     mod = import_module(f"modal_workers.fetchers.universe.{fetcher_module}")
     end = date.today()
     start = end - timedelta(days=days_back)
-    client = SupabaseClient()
-
-    try:
-        cfg = client.load_scanner_config(fetcher_module)
-    except SupabaseError:
-        return mod.fetch(client, start_date=start, end_date=end)
-
-    modal_inv = os.environ.get("MODAL_TASK_ID")
-    run_id = client.open_scanner_run(cfg.scanner_id, modal_invocation_id=modal_inv)
-    try:
-        result = mod.fetch(client, start_date=start, end_date=end)
-    except Exception as e:
-        client.close_scanner_run(
-            run_id, status="error", signals_emitted=0,
-            errors=[{"type": type(e).__name__, "message": str(e)[:400]}],
-        )
-        try:
-            client.update_scanner_last_run(
-                cfg.scanner_id,
-                last_run_utc=datetime.now(timezone.utc).isoformat(),
-                last_run_status="error", last_run_signals=0,
-            )
-        except SupabaseError:
-            pass
-        raise
-
-    partial_reasons = result.get("partial_reasons") or []
-    final_status = "partial" if partial_reasons else "ok"
-    errors_payload = list(result.get("errors") or [])
-    if partial_reasons:
-        errors_payload.append({
-            "partial_reasons": partial_reasons,
-            "pages_attempted": result.get("pages_attempted"),
-            "pages_failed": result.get("pages_failed"),
-        })
-    client.close_scanner_run(
-        run_id,
-        status=final_status,
-        signals_emitted=result.get("upserted", 0),
-        fetched_records=result.get("fetched", 0),
-        errors=errors_payload,
-    )
-    try:
-        client.update_scanner_last_run(
-            cfg.scanner_id,
-            last_run_utc=datetime.now(timezone.utc).isoformat(),
-            last_run_status=final_status,
-            last_run_signals=result.get("upserted", 0),
-        )
-    except SupabaseError:
-        pass  # last_run_* is observability-only; don't fail the run
-    return result
+    return mod.fetch(SupabaseClient(), start_date=start, end_date=end)
 
 
 # ==========================================================================
@@ -579,11 +520,77 @@ def fda_pdufa_pipeline_once() -> dict:
 def fda_signal_bridge_once() -> dict:
     # Iterates pending fda_regulatory_events, calls process_event +
     # upsert_feature_snapshot per row. Mode (shadow / shadow_with_emit /
-    # operational) is derived from scanners.status at run time — see
-    # STATUS_TO_MODE in fda_signal_bridge.py. Polygon providers are
-    # best-effort: missing POLYGON_API_KEY leaves market+options None and
-    # degrades to fair_probability-only scoring with Immediate gated off.
+    # operational) is read from scanners.config.mode at run time. Polygon
+    # providers are best-effort: missing POLYGON_API_KEY leaves market+options
+    # None and degrades to fair_probability-only scoring with Immediate gated off.
     return _run("fda_signal_bridge")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def lse_rns_scanner_once() -> dict:
+    return _run("lse_rns_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def tdnet_scanner_once() -> dict:
+    return _run("tdnet_scanner")
+
+@app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
+def asx_scanner_once() -> dict:
+    # asx needs 240s (not 120): per-ticker Markit concurrent fetch across the
+    # rotation chunk routinely exceeds 90s on cold cache. Registry updated to match.
+    return _run("asx_scanner")
+
+
+# --- daily cadence ---
+
+@app.function(image=image, timeout=1200, secrets=[scanner_secrets, supabase_secrets])
+def esma_short_scanner_once() -> dict:
+    # 4 regulators × xlsx/csv fetch + ISIN dedup + OpenFIGI resolve + per-signal
+    # entity resolution. Budget history: 120→240→480→1200s.
+    # The 480s budget assumed ~80 emitted signals/run, but cold-start emits ~2000+
+    # (every holder+ISIN with pct ≥ 0.5). scanner_base's per-signal resolve_or_create_entity
+    # loop does 1-3 DB round trips × 2233 positions = ~400-500s in EU-West → eu-west-3.
+    # 1200s covers cold-start; warm runs (only |change_pct| ≥ 0.2 positions emit) finish
+    # in <120s. Registry timeout_soft_s/hard_s also bumped. Bulk-resolve refactor in
+    # scanner_base is the real long-term fix.
+    return _run("esma_short_scanner")
+
+@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
+def congressional_trading_once() -> dict:
+    # 20 pages × 1s polite delay + BS4 parse + OpenFIGI per ticker. 120s
+    # insufficient; bumped to 180s (registry also updated).
+    return _run("congressional_trading")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def sedar_plus_scanner_once() -> dict:
+    return _run("sedar_plus_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def hkex_scanner_once() -> dict:
+    return _run("hkex_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def kind_scanner_once() -> dict:
+    return _run("kind_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def bse_nse_scanner_once() -> dict:
+    return _run("bse_nse_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def cvm_scanner_once() -> dict:
+    return _run("cvm_scanner")
+
+@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
+def bmv_scanner_once() -> dict:
+    return _run("bmv_scanner")
+
+@app.function(image=image, timeout=120, secrets=[scanner_secrets, supabase_secrets])
+def courtlistener_scanner_once() -> dict:
+    return _run("courtlistener_scanner")
+
+@app.function(image=image, timeout=60, secrets=[scanner_secrets, supabase_secrets])
+def sec_enforcement_scanner_once() -> dict:
+    return _run("sec_enforcement_scanner")
 
 @app.function(image=image, timeout=240, secrets=[scanner_secrets, supabase_secrets])
 def insider_form4_scanner_once() -> dict:
@@ -593,13 +600,22 @@ def insider_form4_scanner_once() -> dict:
     # matches.
     return _run("insider_form4_scanner")
 
+@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
+def delaware_chancery_scanner_once() -> dict:
+    return _run("delaware_chancery_scanner")
+
+
+# --- weekly cadence ---
 
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def takeover_candidate_scanner_once() -> dict:
+    # Multi-pattern EDGAR merge across 45d PE-filer + 60d review/streamlined
+    # windows + post-edge disqualification lookups. 180s insufficient on cold
+    # caches; bumped to 300s (registry also updated).
+    return _run("takeover_candidate_scanner")
+
+@app.function(image=image, timeout=180, secrets=[scanner_secrets, supabase_secrets])
 def pre_phase3_readout_scanner_once() -> dict:
-    # Modal hard timeout 180→300s + soft budget 90→240s (registry). The 90s soft
-    # mark was being hit on the scoring loop ("wall-clock budget (85s) exceeded
-    # during scoring"), dropping ~110/115 emissions per run (115 → 3 on 2026-05-11).
-    # 243 trials × per-trial OpenFDA + sec_issuer_lookup needs the extra headroom.
     return _run("pre_phase3_readout_scanner")
 
 
@@ -625,24 +641,6 @@ def openfda_corpus_ingest_deep() -> dict:
     return _run("openfda_corpus_ingest")
 
 
-# --- Anthropic Files API backfill (signal-less; daily 04 UTC) -----------------
-
-@app.function(
-    image=image,
-    timeout=1200,
-    secrets=[scanner_secrets, supabase_secrets, anthropic_secrets],
-)
-def anthropic_files_backfill_once() -> dict:
-    # Registry-driven via dispatch_release_times: scanners.scheduled_hour_utc=17
-    # routes this to the 17 UTC bucket (lightest; shares with congressional_trading).
-    # The scanner drains documents with anthropic_file_id IS NULL into the
-    # Anthropic Files API (gated by MIN_UPLOAD_BYTES + per-day cap + 24h
-    # notional-cost hard halt). timeout=1200s sized for the 500-row daily cap
-    # × ~2s per upload. Requires the anthropic-orchestrator secret so
-    # DocumentWriter sees ANTHROPIC_API_KEY at runtime.
-    return _run("anthropic_files_backfill")
-
-
 # ==========================================================================
 # Catalyst-universe fetchers (Phase 1b of the accuracy feedback loop).
 # Populate catalyst_universe with independent-truth catalyst events, which
@@ -655,6 +653,13 @@ def fda_adcomm_pdufa_once() -> dict:
     """openFDA drugsfda AP submissions → catalyst_universe (fda_approval).
     Default 7-day look-back; scheduled via dispatch_release_times 13 UTC bucket."""
     return _run_fetcher("fda_adcomm_pdufa", days_back=7)
+
+
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def sec_8k_mna_once() -> dict:
+    """EDGAR 8-K items 1.01 / 2.01 → catalyst_universe (mna_announce / mna_close).
+    Requires SEC_USER_AGENT from scanner-secrets."""
+    return _run_fetcher("sec_8k_mna", days_back=7)
 
 
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
@@ -675,14 +680,6 @@ def edgar_8k_pdufa_once() -> dict:
     fallback. Requires SEC_USER_AGENT from scanner-secrets. event_date refinement
     is deferred to the medical specialist via fda_agent_reviews."""
     return _run_fetcher("edgar_8k_pdufa", days_back=14)
-
-
-# sec_8k_mna fetcher removed 2026-05-13 as part of v3-only adoption (FDA-only
-# strategic pivot). merger_arb was the last non-FDA scoring profile still
-# operational; deprecating its only producing scanner (sec_8k_mna) eliminates
-# all non-FDA emission. See plan: are-the-skills-working-streamed-widget.md
-# Phase 1. The companion DB-side deprecation lives in migration
-# 20260522000000_v3_only_phase1_deprecate_non_fda.sql.
 
 
 # ==========================================================================
@@ -711,41 +708,18 @@ def reporting_weekly_once() -> dict:
 
 
 # ==========================================================================
-# Dispatcher crons — scheduled functions in the app. Each spawns the `_once`
-# variants of its bucket in parallel so per-scanner isolation (container,
-# timeout) is preserved. Dispatcher returns as soon as all spawns are queued;
-# spawned functions run independently.
-#
-# 2026-05-13 (v3-only adoption):
-#   - `dispatch_weekly` removed. Its only bucket scanner (takeover_candidate)
-#     is deprecated; no operational weekly scanners remain.
-#   - Hardcoded fallback lists below are now empty. The lists were the source
-#     of the 5/11 audit's "deprecated scanners still emitting" bug — on
-#     Supabase reachability errors, `_load_cadence_names` fell back to the
-#     static list without re-checking status. Empty fallback ⇒ on registry
-#     failure the dispatcher spawns nothing rather than a stale set.
-#   - `dispatch_3h` retained because `fda_signal_bridge` (FDA, operational,
-#     cadence=3h) still needs it. The registry filter inside `_dispatch`
-#     already gates by status='operational', so only FDA scanners actually fire.
+# 3 dispatcher crons — the only scheduled functions in the app. Each spawns
+# the `_once` variants of its bucket in parallel so per-scanner isolation
+# (container, timeout) is preserved. Dispatcher returns as soon as all spawns
+# are queued; spawned functions run independently.
 # ==========================================================================
 
-# Hardcoded fallback lists for `_load_cadence_names`. Used only if the Supabase
-# registry GET fails — in that case the dispatcher spawns nothing for the bucket
-# (vs the pre-2026-05-13 behavior of falling back to a static set that might
-# include deprecated scanners). Kept as empty lists for API stability.
-_DEFAULT_SCANNERS_3H: List[str] = []
-_DEFAULT_SCANNERS_WEEKLY: List[str] = []
-
-# Statuses that authorize a scanner to be spawned by `_dispatch`. `shadow` and
-# `shadow_with_emit` are runnable lifecycle stages (see migration
-# 20260505000020) — the scanner itself decides whether the run emits signals,
-# the dispatcher's only job is to fire it. Remaining `scanners.status` values
-# (planned, deprecated, experimental, paused) all halt dispatch. Updated
-# alongside the scanners.status CHECK in supabase/migrations if new run-states
-# are added.
-_ALLOWED_DISPATCH_STATUSES = frozenset({
-    "operational", "active", "shadow", "shadow_with_emit",
-})
+_DEFAULT_SCANNERS_3H: List[str] = [
+    "edgar_filing_monitor",
+]
+_DEFAULT_SCANNERS_WEEKLY: List[str] = [
+    "takeover_candidate_scanner",
+]
 
 
 def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], Optional[str]]:
@@ -769,7 +743,7 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa", "fed_register_adcom", "edgar_8k_pdufa"],
+    13: ["fda_adcomm_pdufa", "sec_8k_mna", "fed_register_adcom", "edgar_8k_pdufa"],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top
@@ -804,8 +778,8 @@ def _dispatch(names: List[str]) -> dict:
 
     Pre-flight: sweeps orphaned `scanner_runs.status='running'` rows (Modal hard-
     timeouts leave these behind when a container is killed before the scanner can
-    call close_scanner_run). Threshold 1500s = 25 min, comfortably above the longest
-    hard_timeout (esma_short_scanner at 1200s) while still catching real orphans on
+    call close_scanner_run). Threshold 1200s = 20 min, comfortably above the longest
+    hard_timeout (takeover_candidate at 300s) while still catching real orphans on
     the same day. Sweep failures don't block spawning — just logged in `errors`.
     """
     import sys
@@ -815,7 +789,7 @@ def _dispatch(names: List[str]) -> dict:
     reaper_error: Optional[str] = None
     try:
         from modal_workers.shared.supabase_client import SupabaseClient
-        reaped = SupabaseClient().reap_orphan_runs(max_age_seconds=1500)
+        reaped = SupabaseClient().reap_orphan_runs(max_age_seconds=1200)
     except Exception as e:  # noqa: BLE001 — reaper is advisory; don't block dispatch
         reaper_error = f"{type(e).__name__}: {e}"
 
@@ -823,20 +797,13 @@ def _dispatch(names: List[str]) -> dict:
     spawned = []
     skipped = []
     errors = []
-    # Allowlist + fail-closed: a scanner spawns only when the registry confirms
-    # it is in an allowed dispatch state. Unknown status (lookup miss → None)
-    # also skips, so a stale hardcoded fallback list (e.g. when the registry
-    # GET errored) can't resurrect a deprecated scanner. Prior behavior was
-    # fail-open (`status is not None and status != "operational"`), which let
-    # edgar_filing_monitor keep emitting after v2-teardown set it to
-    # status='deprecated' (F-104).
     for name in names:
         status = statuses.get(name)
-        if status not in _ALLOWED_DISPATCH_STATUSES:
+        if status is not None and status != "operational":
             skipped.append({
                 "scanner": name,
                 "status": status,
-                "reason": f"registry status={status!r} not in {sorted(_ALLOWED_DISPATCH_STATUSES)}",
+                "reason": f"registry status={status}",
             })
             continue
         fn = getattr(me, f"{name}_once", None)
@@ -910,21 +877,33 @@ def dispatch_release_times() -> dict:
     return envelope
 
 
+@app.function(image=image, schedule=modal.Cron("0 12 * * 1"), timeout=60,
+              secrets=[scanner_secrets, supabase_secrets])
+def dispatch_weekly() -> dict:
+    names, registry_error = _load_cadence_names("weekly", _DEFAULT_SCANNERS_WEEKLY)
+    envelope = _dispatch(names)
+    if registry_error:
+        envelope["registry_error"] = registry_error
+    return envelope
+
+
 # ==========================================================================
 # Observability dispatcher (spec §7.6). One cron slot covers all sweeps
 # to stay under Modal's 5-cron plan limit.
 #
 #   Every 6h at :15 UTC (02,08,14,20):  scanner_probe  (§7.6.2)
 #   Every 6h at :15 UTC (02,08,14,20):  pre_edge_monitor (deterministic lifecycle guard)
+#   02:15 UTC window also runs:         translation_health (§7.6.1)
 #   02:15 UTC window also runs:         convergence_qa (§7.6.3)
-#   02:15 UTC window also runs:         biotech_enrichment_sweep
+#   02:15 UTC window also runs:         legal_enrichment / biotech_enrichment sweeps
+#   Sun 02:15 UTC window also:          litigation_baselines_refresh (§7.6.4)
 #
 # Each writes to `operator_flags`. No Claude calls — all mechanical.
 #
 # Cron history: shipped as "15 */6 * * *" which fires hours 0/6/12/18 UTC. The
 # `if now.hour == 2` branch below (the 02:15 window) then never triggered, so
-# convergence_qa was dead in production. 2026-04-21 fix: pin the hour list
-# explicitly so 02 is in it.
+# translation_health / convergence_qa / litigation_baselines_refresh were dead
+# in production. 2026-04-21 fix: pin the hour list explicitly so 02 is in it.
 # ==========================================================================
 
 @app.function(image=image, schedule=modal.Cron("15 2,8,14,20 * * *"), timeout=600,
@@ -933,10 +912,11 @@ def dispatch_observability() -> dict:
     from datetime import datetime, timezone
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     from modal_workers.observability import (
-        convergence_qa, edgar_runtime_health, orphan_convergence_sweeper,
-        precision_auditor, provisional_convergence_audit, scanner_liveness_sweep,
-        scanner_probe, thesis_jobs_sla_sweeper, timing_auditor,
+        convergence_qa, edgar_runtime_health, litigation_baselines_refresh, orphan_convergence_sweeper,
+        precision_auditor, provisional_convergence_audit, scanner_probe, thesis_jobs_sla_sweeper,
+        timing_auditor, translation_health,
     )
+    from modal_workers.legal_enricher import legal_enrichment_sweep
     from modal_workers.pre_edge_monitor import pre_edge_monitor
     now = datetime.now(timezone.utc)
     results: dict = {"utc": now.isoformat(), "ran": []}
@@ -955,16 +935,6 @@ def dispatch_observability() -> dict:
         results["ran"].append("edgar_runtime_health")
     except Exception as e:
         results["edgar_runtime_health_error"] = str(e)
-
-    # Always: silent-absence detector for operational+scheduled scanners
-    # (F-204). Flags any scanner whose last_run_utc exceeds 2× cadence period,
-    # catching the failure mode F-200 hit (two consecutive missed weekly fires
-    # with no other observability signal).
-    try:
-        results["scanner_liveness_sweep"] = scanner_liveness_sweep()
-        results["ran"].append("scanner_liveness_sweep")
-    except Exception as e:
-        results["scanner_liveness_sweep_error"] = str(e)
 
     # Always: heal signals dropped by webhook burst (idempotent reactor replay).
     try:
@@ -1013,17 +983,32 @@ def dispatch_observability() -> dict:
     # 02:00-02:59 UTC window (the :15 run): daily sweeps.
     if now.hour == 2:
         try:
+            results["translation_health"] = translation_health()
+            results["ran"].append("translation_health")
+        except Exception as e:
+            results["translation_health_error"] = str(e)
+        try:
             results["convergence_qa"] = convergence_qa()
             results["ran"].append("convergence_qa")
         except Exception as e:
             results["convergence_qa_error"] = str(e)
         try:
+            results["legal_enrichment_sweep"] = legal_enrichment_sweep()
+            results["ran"].append("legal_enrichment_sweep")
+        except Exception as e:
+            results["legal_enrichment_sweep_error"] = str(e)
+        try:
             results["biotech_enrichment_sweep"] = biotech_enrichment_sweep()
             results["ran"].append("biotech_enrichment_sweep")
         except Exception as e:
             results["biotech_enrichment_sweep_error"] = str(e)
-        # Sunday: Phase 1d precision/timing auditors.
+        # Sunday: litigation baselines + Phase 1d precision/timing auditors.
         if now.weekday() == 6:  # Sunday
+            try:
+                results["litigation_baselines_refresh"] = litigation_baselines_refresh()
+                results["ran"].append("litigation_baselines_refresh")
+            except Exception as e:
+                results["litigation_baselines_refresh_error"] = str(e)
             try:
                 results["precision_auditor"] = precision_auditor()
                 results["ran"].append("precision_auditor")
@@ -1041,6 +1026,12 @@ def dispatch_observability() -> dict:
 # ==========================================================================
 # On-demand observability entry points (for manual triggers via `modal run`).
 # ==========================================================================
+
+@app.function(image=image, timeout=180, secrets=[supabase_secrets])
+def translation_health_once() -> dict:
+    from modal_workers.observability import translation_health
+    return translation_health()
+
 
 @app.function(image=image, timeout=180, secrets=[supabase_secrets])
 def scanner_probe_once() -> dict:
@@ -1067,9 +1058,23 @@ def pre_edge_monitor_once() -> dict:
 
 
 @app.function(image=image, timeout=240, secrets=[supabase_secrets])
+def legal_enrichment_once() -> dict:
+    from modal_workers.legal_enricher import legal_enrichment_sweep
+    return legal_enrichment_sweep()
+
+
+@app.function(image=image, timeout=240, secrets=[supabase_secrets])
 def biotech_enrichment_once() -> dict:
     from modal_workers.biotech_enricher import biotech_enrichment_sweep
     return biotech_enrichment_sweep()
+
+
+@app.function(image=image, timeout=300, secrets=[supabase_secrets])
+def litigation_baselines_refresh_once() -> dict:
+    from modal_workers.observability import litigation_baselines_refresh
+    return litigation_baselines_refresh()
+
+
 
 
 @app.function(image=image, timeout=600, secrets=[supabase_secrets])

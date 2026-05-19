@@ -50,16 +50,6 @@ MAX_PAGES_HARD_CAP = 100
 # that the default 30d window slid past.
 DEEP_SWEEP_DAYS = 180
 
-# Soft wall-clock budget. The Modal function wrapping this ingest is configured
-# at 900s; we exit gracefully ~60s before so the run row can be marked
-# 'completed' (with partial metrics flushed) instead of getting SIGKILL'd at
-# the hard timeout. On 2026-05-11 the 900s SIGKILL left 3408 dailymed labels
-# half-written + status='error' + metrics=null, which then fed the asset_linker
-# rate-limit cascade. With a graceful exit, downstream sees a clean
-# completed-partial row and the asset_linker's per-component halt has accurate
-# 24h cost data.
-DEFAULT_WALL_CLOCK_BUDGET_S = 840.0
-
 
 class OpenFDAError(RuntimeError):
     def __init__(self, status: int, body: str):
@@ -76,10 +66,6 @@ class IngestRunResult:
     documents_skipped: int = 0
     errors: int = 0
     written_ids: List[str] = field(default_factory=list)
-    # Set True when the pagination loop bailed because wall-clock budget was
-    # exhausted. The scanner_runs row uses this to set status='partial' (vs
-    # 'error') and the run_metrics block surfaces it for operator visibility.
-    wall_clock_timeout_hit: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +120,6 @@ def ingest_drugsfda_approvals(
     page_limit: int = DEFAULT_PAGE_LIMIT,
     max_pages: Optional[int] = None,
     writer: Optional[DocumentWriter] = None,
-    wall_clock_deadline: Optional[float] = None,
 ) -> IngestRunResult:
     """Pull NDA/BLA approval records from openFDA drug/drugsfda.
 
@@ -166,18 +151,6 @@ def ingest_drugsfda_approvals(
 
     pages_fetched = 0
     for page_idx in range(page_cap):
-        # Wall-clock soft timeout: bail BEFORE the next HTTP fetch so the
-        # already-written rows from prior pages are preserved and the caller
-        # gets to flush metrics. Without this check the Modal hard timeout at
-        # 900s would SIGKILL the loop mid-write.
-        if (wall_clock_deadline is not None
-                and time.time() >= wall_clock_deadline):
-            result.wall_clock_timeout_hit = True
-            logger.warning(
-                "openfda drugsfda wall-clock budget exhausted at page %d — "
-                "exiting gracefully with %d docs written so far",
-                page_idx, result.documents_written)
-            break
         body = _openfda_get(
             "/drug/drugsfda.json",
             params={"search": search, "limit": page_limit, "skip": skip},
@@ -281,7 +254,6 @@ def _ingest_drugsfda_record(app: Dict[str, Any], writer: DocumentWriter) -> "_In
             url=f"{OPENFDA_BASE}/drug/drugsfda.json?search=application_number:{application_number}",
             title=f"{sponsor or 'Unknown sponsor'} — {', '.join(drug_names) or application_number}",
             is_pdf=False,
-            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001
@@ -347,7 +319,6 @@ def ingest_drug_label_recent(
     page_limit: int = DEFAULT_PAGE_LIMIT,
     max_pages: Optional[int] = None,
     writer: Optional[DocumentWriter] = None,
-    wall_clock_deadline: Optional[float] = None,
 ) -> IngestRunResult:
     """Pull recent drug-label changes (effective_time within window). Each
     setid (label revision) becomes one document.
@@ -370,15 +341,6 @@ def ingest_drug_label_recent(
 
     pages_fetched = 0
     for page_idx in range(page_cap):
-        # Wall-clock soft timeout (see ingest_drugsfda_approvals comment).
-        if (wall_clock_deadline is not None
-                and time.time() >= wall_clock_deadline):
-            result.wall_clock_timeout_hit = True
-            logger.warning(
-                "openfda label wall-clock budget exhausted at page %d — "
-                "exiting gracefully with %d docs written so far",
-                page_idx, result.documents_written)
-            break
         body = _openfda_get(
             "/drug/label.json",
             params={"search": search, "limit": page_limit, "skip": skip},
@@ -457,7 +419,6 @@ def _ingest_label_record(label: Dict[str, Any], writer: DocumentWriter) -> "_Ing
             url=f"https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid={set_id}",
             title=str(title),
             is_pdf=False,
-            upload_to_anthropic=True,  # size-gated in document_writer (MIN_UPLOAD_BYTES)
             extensions=extensions,
         )
     except Exception as exc:  # noqa: BLE001
@@ -532,7 +493,6 @@ def deep_sweep_openfda(
     *,
     days: int = DEEP_SWEEP_DAYS,
     writer: Optional[DocumentWriter] = None,
-    wall_clock_deadline: Optional[float] = None,
 ) -> Dict[str, IngestRunResult]:
     """Wider-window catch-up across drugsfda + dailymed labels.
 
@@ -544,30 +504,18 @@ def deep_sweep_openfda(
     where idempotent content_hash dedupe makes already-seen rows cheap no-ops.
 
     Returns a dict keyed by feed name so the caller can log per-feed counts.
-    Both feeds share the same `wall_clock_deadline` — drugsfda runs first and
-    may consume most of the budget, leaving the label feed to bail quickly.
-    That ordering is intentional: drugsfda has the smaller record count and
-    is the more cost-sensitive feed (each application_number is unique vs
-    dailymed's high dedup rate).
     """
     today = date.today()
     since = today - timedelta(days=days)
     dw = writer or DocumentWriter()
-    drugsfda = ingest_drugsfda_approvals(
-        since=since, until=today, writer=dw,
-        wall_clock_deadline=wall_clock_deadline,
-    )
-    label = ingest_drug_label_recent(
-        since=since, until=today, writer=dw,
-        wall_clock_deadline=wall_clock_deadline,
-    )
+    drugsfda = ingest_drugsfda_approvals(since=since, until=today, writer=dw)
+    label = ingest_drug_label_recent(since=since, until=today, writer=dw)
     logger.info(
         "openfda deep_sweep days=%d drugsfda(seen=%d wrote=%d dedup=%d) "
-        "label(seen=%d wrote=%d dedup=%d) wall_clock_partial=%s",
+        "label(seen=%d wrote=%d dedup=%d)",
         days,
         drugsfda.documents_seen, drugsfda.documents_written,
         drugsfda.documents_dedup_hit,
         label.documents_seen, label.documents_written,
-        label.documents_dedup_hit,
-        drugsfda.wall_clock_timeout_hit or label.wall_clock_timeout_hit)
+        label.documents_dedup_hit)
     return {"drugsfda": drugsfda, "label": label}

@@ -2,8 +2,53 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from modal_workers.scanners.courtlistener_scanner import _docket_to_signal
 from modal_workers.scanners.fda_pdufa_pipeline import _build_signal as build_pdufa_signal
 from modal_workers.scanners.pre_phase3_readout_scanner import _build_signal as build_prephase3_signal
+from modal_workers.scanners.sec_enforcement_scanner import _build_signal as build_sec_signal
+
+
+def test_courtlistener_signal_includes_structured_stage_hints():
+    sig = _docket_to_signal(
+        {
+            "caseName": "Acme Holdings v. BigCo",
+            "_nos_queried": "410",
+            "court_id": "nysd",
+            "dateFiled": "2026-04-20",
+            "id": 123,
+        },
+        scan_date=datetime(2026, 4, 21, tzinfo=timezone.utc),
+        issuer_index=None,
+        cfg_overrides={},
+    )
+
+    assert sig is not None
+    raw = sig.raw_payload
+    assert raw["case_family"] == "antitrust"
+    assert raw["procedural_stage"] == "complaint_filed"
+    assert raw["procedural_stage_confidence"] == "high"
+    assert raw["resolution_timeline_bucket"] == ">12m"
+
+
+def test_sec_enforcement_signal_includes_structured_stage_hints():
+    sig = build_sec_signal(
+        "admin",
+        {
+            "title": "SEC Announces Cease-and-Desist Against Acme Corp (ACME)",
+            "link": "https://example.com/sec",
+            "description": "desc",
+            "pub_date": "Tue, 22 Apr 2026 00:00:00 GMT",
+            "release_id": "34-12345",
+        },
+        datetime(2026, 4, 22, tzinfo=timezone.utc),
+    )
+
+    assert sig is not None
+    raw = sig.raw_payload
+    assert raw["case_family"] == "sec_admin"
+    assert raw["procedural_stage"] == "cease_and_desist"
+    assert raw["procedural_stage_confidence"] == "high"
+    assert raw["ticker_hint_present"] is True
 
 
 def test_pre_phase3_signal_includes_structured_trial_flags():

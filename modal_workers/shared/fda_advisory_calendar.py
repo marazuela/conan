@@ -156,15 +156,6 @@ def fetch_advisory_committee_meetings(
         "conditions[publication_date][gte]": lookback_date,
         "per_page": 100,
         "order": "newest",
-        # `dates` is NOT in the default response shape — the API only
-        # returns it when we ask for it. The actual meeting date lives in
-        # the DATES section of the document (e.g. "The meeting will be
-        # held on May 28, 2026..."); the abstract is usually generic
-        # boilerplate. Without `dates`, _parse_meeting_date matches
-        # nothing on most modern FDA AdComm notices.
-        "fields[]": ["title", "abstract", "dates",
-                     "publication_date", "html_url", "type",
-                     "document_number"],
     }
     try:
         resp = requests.get(FEDERAL_REGISTER_URL, params=params,
@@ -180,14 +171,7 @@ def fetch_advisory_committee_meetings(
     for doc in data.get("results", []) or []:
         title = doc.get("title") or ""
         abstract = doc.get("abstract") or ""
-        # `dates` carries the actual meeting date in structured form
-        # ("The meeting will be held on May 28, 2026, from 8:30 a.m.").
-        # _parse_meeting_date is regex-based and works on the prose, so
-        # we just concatenate the dates string into the parse target.
-        # The dates string is preferred over the boilerplate abstract
-        # because most FDA AdComm notice abstracts don't mention the date.
-        dates_field = doc.get("dates") or ""
-        text_blob = f"{title} {dates_field} {abstract}"
+        text_blob = f"{title} {abstract}"
         meeting_date = _parse_meeting_date(text_blob)
         committee = _detect_committee(text_blob)
         meetings.append(Meeting(

@@ -96,11 +96,11 @@ def weighted_total(dims: Dict[str, int], profile: str) -> float:
 
 
 def classify_band(score: float) -> str:
-    if score >= 30:
+    if score >= 35:
         return "immediate"
-    if score >= 20:
+    if score >= 25:
         return "watchlist"
-    if score >= 10:
+    if score >= 15:
         return "archive"
     return "discard"
 
@@ -436,7 +436,11 @@ def apply_auto_caps(
         raw = signal.get("raw_data", {}) or {}
         universe_resolved = bool(raw.get("universe_resolved"))
         nos = str(raw.get("nos") or raw.get("nature_of_suit") or "")
-        high_priority = nos in ("850", "410")
+        signal_category = str(raw.get("signal_category") or "")
+        high_priority = (
+            nos in ("850", "410")
+            or signal_category == "delaware_chancery"
+        )
         if (not universe_resolved) and (not high_priority):
             if band in ("immediate", "watchlist"):
                 band = "archive"

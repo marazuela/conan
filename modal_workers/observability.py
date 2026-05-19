@@ -1,15 +1,14 @@
 """
-Observability functions for Conan v3 — spec §7.6.
+Observability functions for Conan v2 — spec §7.6.
 
-Scheduled Modal functions that replace v1's `maintenance` skill's mechanical
+Four scheduled Modal functions that replace v1's `maintenance` skill's mechanical
 sweeps. All write to the `operator_flags` table (spec §3.4) as a common structured
 surface. No Claude routine calls; these are deterministic sanity sweeps.
 
+  7.6.1 translation_health          — daily 02:00 UTC
   7.6.2 scanner_probe               — every 6h at :15
-  7.6.3 convergence_qa              — daily 02:15 UTC
-
-(translation_health and litigation_baselines_refresh were removed 2026-05-13
-along with the deprecated non-English and litigation scanners they monitored.)
+  7.6.3 convergence_qa              — daily 03:00 UTC
+  7.6.4 litigation_baselines_refresh — weekly Sun 04:00 UTC
 
 Scheduled via Modal decorators in `app.py`; the implementations live here to keep
 app.py a thin declaration file.
@@ -176,6 +175,121 @@ def record_snapshot_fetch_failure(
 
 
 # ===========================================================================
+# 7.6.1 translation_health
+# ===========================================================================
+
+# Scanners that emit translation_confidence in signals.raw_payload.
+_NON_ENGLISH_SCANNERS = (
+    "tdnet_scanner", "kind_scanner", "cvm_scanner",
+    "bmv_scanner", "sedar_plus_scanner", "hkex_scanner", "bse_nse_scanner",
+)
+
+_TRANSLATION_MEDIAN_WARN = 0.75
+_TRANSLATION_MEDIAN_CRITICAL_DAY = 0.70
+_TRANSLATION_CRITICAL_STREAK_DAYS = 7
+
+
+def translation_health(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Daily: compute rolling 30d median translation_confidence per non-English
+    scanner; flag warn <0.75; critical if 7-day streak of day-median <0.70."""
+    client = client or SupabaseClient()
+    summary: Dict[str, Any] = {"function": "translation_health", "per_scanner": {}}
+
+    # One query per scanner to avoid huge join; small enough table.
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+    scanners = client._rest(
+        "GET", "scanners",
+        params={"select": "id,name", "name": f"in.({','.join(_NON_ENGLISH_SCANNERS)})"},
+    ) or []
+
+    for sc in scanners:
+        sc_id, sc_name = sc["id"], sc["name"]
+        # 30-day sample
+        rows30 = client._rest(
+            "GET", "signals",
+            params={
+                "select": "raw_payload,scan_date",
+                "scanner_id": f"eq.{sc_id}",
+                "scan_date": f"gte.{thirty_days_ago}",
+            },
+        ) or []
+        confs = [
+            float(r["raw_payload"].get("translation_confidence"))
+            for r in rows30
+            if isinstance(r.get("raw_payload"), dict)
+            and r["raw_payload"].get("translation_confidence") is not None
+        ]
+        if not confs:
+            summary["per_scanner"][sc_name] = {"n": 0, "note": "no translation_confidence in 30d"}
+            continue
+
+        median30 = statistics.median(confs)
+        p25 = statistics.quantiles(confs, n=4)[0] if len(confs) >= 4 else min(confs)
+
+        # 7-day streak: day-by-day median < 0.70?
+        streak_breaking = False
+        streak_day_count = 0
+        for days_back in range(_TRANSLATION_CRITICAL_STREAK_DAYS):
+            day_start = datetime.now(timezone.utc) - timedelta(days=days_back + 1)
+            day_end = datetime.now(timezone.utc) - timedelta(days=days_back)
+            day_vals = [
+                float(r["raw_payload"].get("translation_confidence"))
+                for r in rows30
+                if isinstance(r.get("raw_payload"), dict)
+                and r["raw_payload"].get("translation_confidence") is not None
+                and day_start.isoformat() <= r["scan_date"] < day_end.isoformat()
+            ]
+            if day_vals:
+                day_median = statistics.median(day_vals)
+                if day_median < _TRANSLATION_MEDIAN_CRITICAL_DAY:
+                    streak_day_count += 1
+                else:
+                    streak_breaking = True
+                    break
+            # empty days don't break the streak; they just don't count toward it
+        critical_streak = (
+            streak_day_count >= _TRANSLATION_CRITICAL_STREAK_DAYS and not streak_breaking
+        )
+
+        per = {"n": len(confs), "median_30d": round(median30, 3), "p25_30d": round(p25, 3)}
+        summary["per_scanner"][sc_name] = per
+
+        if critical_streak:
+            _upsert_flag(
+                client,
+                severity="critical",
+                source="translation_health",
+                kind="translation_confidence_trend",
+                scanner_id=sc_id,
+                title=f"{sc_name}: translation day-median <0.70 for {streak_day_count} consecutive days",
+                evidence={**per, "streak_days": streak_day_count, "threshold": _TRANSLATION_MEDIAN_CRITICAL_DAY},
+            )
+        elif median30 < _TRANSLATION_MEDIAN_WARN:
+            _upsert_flag(
+                client,
+                severity="warn",
+                source="translation_health",
+                kind="translation_confidence_trend",
+                scanner_id=sc_id,
+                title=f"{sc_name}: translation median {median30:.3f} over 30d (threshold {_TRANSLATION_MEDIAN_WARN})",
+                evidence=per,
+            )
+        elif median30 >= 0.80:
+            # Auto-resolve if the flag was open.
+            _resolve_flag(
+                client,
+                source="translation_health",
+                kind="translation_confidence_trend",
+                scanner_id=sc_id,
+                note=f"auto-resolved: median_30d={median30:.3f} recovered",
+            )
+
+    return summary
+
+
+# ===========================================================================
 # 7.6.2 scanner_probe
 # ===========================================================================
 
@@ -223,22 +337,15 @@ def _should_skip_probe(scanner: Dict[str, Any]) -> Optional[str]:
 
 
 def scanner_probe(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
-    """Every 6h at :15: probe each runnable scanner's primary endpoint.
+    """Every 6h at :15: probe each operational scanner's primary endpoint.
     Updates scanners.last_probe_* columns; flags drift via operator_flags.
-    Does NOT auto-repair (v1 behavior explicitly dropped in v2 spec).
-
-    Runnable scope mirrors the dispatcher (_ALLOWED_DISPATCH_STATUSES) —
-    shadow and shadow_with_emit scanners are part of the live fleet and must
-    get probe coverage even though they don't emit signals."""
+    Does NOT auto-repair (v1 behavior explicitly dropped in v2 spec)."""
     client = client or SupabaseClient()
     summary: Dict[str, Any] = {"function": "scanner_probe", "results": [], "skipped": []}
 
     scanners = client._rest(
         "GET", "scanners",
-        params={
-            "select": "id,name,endpoints,config,last_run_status",
-            "status": 'in.("operational","shadow","shadow_with_emit")',
-        },
+        params={"select": "id,name,endpoints,config,last_run_status", "status": "eq.operational"},
     ) or []
 
     for sc in scanners:
@@ -274,29 +381,6 @@ def scanner_probe(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
         primary = endpoints.get("primary") or endpoints.get("endpoint_primary")
         fallbacks = endpoints.get("fallbacks") or []
         if not primary:
-            # Endpoints jsonb exists but neither `primary` nor `endpoint_primary`
-            # is set (e.g. the FDA signal bridge stores provider URLs under
-            # named keys). Treat as a skip rather than silently dropping the
-            # row — record the evaluation and surface the gap so an operator
-            # can either add a `primary` key or document a probe_skip_reason.
-            reason = "no_primary_endpoint"
-            summary["skipped"].append({"scanner": sc_name, "reason": reason})
-            client._rest(
-                "PATCH", "scanners",
-                params={"id": f"eq.{sc_id}"},
-                json_body={
-                    "last_probe_at": datetime.now(timezone.utc).isoformat(),
-                    "last_probe_status": None,
-                    "last_probe_latency_ms": None,
-                },
-            )
-            _resolve_flag(
-                client,
-                source="scanner_probe",
-                kind="endpoint_drift",
-                scanner_id=sc_id,
-                note=f"skipped: {reason}",
-            )
             continue
 
         primary = _substitute_url_template(primary)
@@ -532,6 +616,134 @@ def convergence_qa(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
             evidence={"count_24h": orphan_count},
         )
     summary["orphan_alerts"] = orphan_count
+
+    return summary
+
+
+# ===========================================================================
+# 7.6.4 litigation_baselines_refresh
+# ===========================================================================
+
+_PARTY_RESOLUTION_TTL_DAYS = 180
+_PARTY_REVERIFY_BUDGET_PER_PASS = 50
+_DEF14A_TTL_DAYS = 90
+_EXHIBIT21_TTL_DAYS = 90
+
+_LITIGATION_SCANNERS = ("courtlistener_scanner", "sec_enforcement_scanner")
+
+
+def litigation_baselines_refresh(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
+    """Weekly Sun 04:00 UTC. Short-circuits if both litigation scanners are
+    auth_required/deprecated. Otherwise:
+      1. Re-verify up to 50 party-resolution cache entries older than 180d.
+      2. Flag staleness on DEF 14A + Exhibit 21 baselines (no auto-refresh — v1
+         policy preserved; those refreshes are too expensive to run autonomously).
+    """
+    client = client or SupabaseClient()
+    summary: Dict[str, Any] = {"function": "litigation_baselines_refresh"}
+
+    # Short-circuit if litigation is dormant.
+    scs = client._rest(
+        "GET", "scanners",
+        params={"select": "name,status", "name": f"in.({','.join(_LITIGATION_SCANNERS)})"},
+    ) or []
+    active = [s for s in scs if s["status"] == "operational"]
+    if not active:
+        summary["skipped"] = "all litigation scanners auth_required/deprecated"
+        return summary
+
+    # (1) Party-resolution cache re-verification.
+    cache_blob = client.read_cache("litigation", "party_resolution_cache.json")
+    if cache_blob:
+        try:
+            cache = json.loads(cache_blob.decode("utf-8"))
+        except Exception:
+            cache = {}
+        stale: List[str] = []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_PARTY_RESOLUTION_TTL_DAYS)).isoformat()
+        for party, rec in list(cache.items()):
+            if not isinstance(rec, dict):
+                continue
+            last_verified = rec.get("last_verified", "1970-01-01")
+            if last_verified < cutoff:
+                stale.append(party)
+            if len(stale) >= _PARTY_REVERIFY_BUDGET_PER_PASS:
+                break
+        summary["party_reverify_queued"] = len(stale)
+        summary["party_cache_total"] = len(cache)
+        # The actual re-verification is out-of-scope for v2 scanners-only Modal
+        # scope; emit a flag listing the stale entries so an operator or future
+        # specialist job can drain them.
+        if stale:
+            _upsert_flag(
+                client,
+                severity="info",
+                source="litigation_baselines",
+                kind="party_cache_reverify_due",
+                title=f"{len(stale)} party-resolution entries past 180d",
+                evidence={"sample": stale[:10], "total_due": len(stale)},
+            )
+    else:
+        summary["party_cache_total"] = 0
+        _upsert_flag(
+            client,
+            severity="info",
+            source="litigation_baselines",
+            kind="party_cache_missing",
+            title="party_resolution_cache.json not present in scanner-caches/litigation/",
+            evidence={},
+        )
+
+    # (2) DEF 14A + Exhibit 21 staleness.
+    for baseline_key, ttl_days, flag_kind in (
+        ("executive_lookup.json", _DEF14A_TTL_DAYS, "baseline_stale_def14a"),
+        ("exhibit21_subsidiary_table.json", _EXHIBIT21_TTL_DAYS, "baseline_stale_exhibit21"),
+    ):
+        baseline_blob = client.read_cache("litigation", baseline_key)
+        stale_flag = False
+        detail: Dict[str, Any] = {"key": baseline_key}
+        if baseline_blob is None:
+            stale_flag = True
+            detail["reason"] = "not present"
+        else:
+            try:
+                payload = json.loads(baseline_blob.decode("utf-8"))
+                last_refreshed = (payload.get("_meta") or {}).get("last_refreshed")
+                if last_refreshed:
+                    detail["last_refreshed"] = last_refreshed
+                    if last_refreshed < (
+                        datetime.now(timezone.utc) - timedelta(days=ttl_days)
+                    ).isoformat():
+                        stale_flag = True
+                        detail["reason"] = f"last_refreshed > {ttl_days}d ago"
+                else:
+                    detail["reason"] = "no _meta.last_refreshed in payload"
+                    stale_flag = True
+            except Exception as e:
+                detail["reason"] = f"parse_error: {e}"
+                stale_flag = True
+
+        if stale_flag:
+            _upsert_flag(
+                client,
+                severity="warn",
+                source="litigation_baselines",
+                kind=flag_kind,
+                title=f"{baseline_key} refresh due",
+                body=(
+                    "No auto-refresh — v1 policy preserved (too expensive for autonomous "
+                    "run). Operator should schedule a manual refresh pass."
+                ),
+                evidence=detail,
+            )
+        else:
+            _resolve_flag(
+                client,
+                source="litigation_baselines",
+                kind=flag_kind,
+                note=f"auto-resolved: {baseline_key} fresh ({detail.get('last_refreshed')})",
+            )
+        summary[flag_kind] = detail
 
     return summary
 
@@ -1131,145 +1343,6 @@ def edgar_runtime_health(client: Optional[SupabaseClient] = None) -> Dict[str, A
             scanner_id=scanner_id,
             note="auto-resolved: recent EDGAR runs are no longer repeatedly degraded",
         )
-
-    return summary
-
-
-# ===========================================================================
-# scanner_liveness_sweep — silent-absence detector for operational scanners
-# ===========================================================================
-#
-# Companion to scanner_failure_streak (consecutive failures) and
-# edgar_runtime_health (EDGAR-specific degradation). This sweep detects what
-# those two miss: scanners with status='operational' that have stopped firing
-# entirely (no scanner_runs rows produced).
-#
-# F-200 motivated this: pre_phase3_readout_scanner missed two consecutive
-# Monday-12-UTC weekly fires (2026-04-27 → 2026-05-11) while
-# takeover_candidate_scanner ran the same weeks, so dispatch_weekly fired but
-# pre_phase3 was excluded for an unidentified reason. Modal log retention
-# (<7d) prevented post-hoc root cause; the only signal would have been
-# scanners.last_run_utc staleness.
-#
-# Threshold: now() - last_run_utc > 2× expected_max_age_s, where
-#   3h     → 10800s
-#   daily  → 86400s
-#   weekly → 604800s
-# 2× gives one full cadence window of slack so a single missed cron tick
-# doesn't page; two consecutive misses do.
-
-_LIVENESS_CADENCE_MAX_AGE_S: Dict[str, int] = {
-    "3h": 10_800,
-    "daily": 86_400,
-    "weekly": 604_800,
-}
-_LIVENESS_STALENESS_MULTIPLIER = 2
-
-
-def _parse_iso_utc(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-
-
-def scanner_liveness_sweep(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
-    """Flag operational+scheduled scanners whose last_run_utc is stale relative
-    to their cadence. Resolves any prior flag once the scanner runs again."""
-    client = client or SupabaseClient()
-    now = datetime.now(timezone.utc)
-    summary: Dict[str, Any] = {
-        "function": "scanner_liveness_sweep",
-        "scanned": 0,
-        "flagged_stale": 0,
-        "flagged_never_ran": 0,
-        "resolved": 0,
-        "skipped_unknown_cadence": 0,
-        "stale_samples": [],
-    }
-
-    rows = client._rest(
-        "GET", "scanners",
-        params={
-            "status": "eq.operational",
-            "cadence": "neq.on_demand",
-            "select": "id,name,cadence,last_run_utc",
-            "order": "name.asc",
-        },
-    ) or []
-    summary["scanned"] = len(rows)
-
-    for row in rows:
-        scanner_id = row["id"]
-        name = row["name"]
-        cadence = row["cadence"]
-        last_run = row.get("last_run_utc")
-
-        max_age_s = _LIVENESS_CADENCE_MAX_AGE_S.get(cadence)
-        if max_age_s is None:
-            summary["skipped_unknown_cadence"] += 1
-            continue
-        threshold_s = _LIVENESS_STALENESS_MULTIPLIER * max_age_s
-
-        if last_run is None:
-            summary["flagged_never_ran"] += 1
-            _upsert_flag(
-                client,
-                severity="warn",
-                source="scanner_liveness",
-                kind="never_ran",
-                scanner_id=scanner_id,
-                title=f"{name} status=operational but has never run",
-                evidence={
-                    "scanner": name,
-                    "cadence": cadence,
-                    "expected_max_age_s": max_age_s,
-                },
-            )
-            continue
-
-        last_run_dt = _parse_iso_utc(last_run)
-        if last_run_dt is None:
-            continue
-        age_s = int((now - last_run_dt).total_seconds())
-
-        if age_s > threshold_s:
-            summary["flagged_stale"] += 1
-            if len(summary["stale_samples"]) < 5:
-                summary["stale_samples"].append({
-                    "scanner": name,
-                    "cadence": cadence,
-                    "last_run_utc": last_run,
-                    "age_s": age_s,
-                    "threshold_s": threshold_s,
-                })
-            _upsert_flag(
-                client,
-                severity="warn",
-                source="scanner_liveness",
-                kind="stale_run",
-                scanner_id=scanner_id,
-                title=f"{name} hasn't run in {age_s // 3600}h (cadence={cadence})",
-                evidence={
-                    "scanner": name,
-                    "cadence": cadence,
-                    "last_run_utc": last_run,
-                    "expected_max_age_s": max_age_s,
-                    "threshold_s": threshold_s,
-                    "age_s": age_s,
-                },
-            )
-        else:
-            for kind in ("stale_run", "never_ran"):
-                summary["resolved"] += _resolve_flag(
-                    client,
-                    source="scanner_liveness",
-                    kind=kind,
-                    scanner_id=scanner_id,
-                    note=f"auto-resolved: {name} ran {age_s // 3600}h ago",
-                )
 
     return summary
 
