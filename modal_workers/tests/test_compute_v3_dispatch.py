@@ -255,6 +255,7 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "asset_linker_run",
         "asset_linker_pass2_run",
         "fact_extractor_run",
+        "aging_bulk_enqueue",
     })
 
 
