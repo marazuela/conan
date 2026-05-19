@@ -91,6 +91,9 @@ from orchestrator_runtime.premortem import (
     PreMortemResult,
     run_premortem,
 )
+from orchestrator_runtime.directional_convergence import (
+    compute_directional_convergence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1118,6 +1121,24 @@ def stage_10_persist(
                 "(%.2f -> %.2f)", pre_cap_calibrated, calibrated,
             )
 
+    # F1b — temporal directional convergence (v2 capability preservation).
+    # Reuse rubric_engine.convergence_reference (unchanged) on this asset's
+    # prior non-superseded runs (already loaded in Stage 0) vs. this run:
+    # repeated agreement corroborates (small +), a direction flip
+    # contradicts (penalize + flag). Never hard-caps. Applied to the
+    # calibrated conviction BEFORE band assignment; persisted as the audit
+    # trail / dashboard + IC-memo contradiction source. Pure + safe on
+    # zero-prior assets (regression-guarded).
+    directional_convergence = compute_directional_convergence(
+        ctx.get("prior_assessments"),
+        direction,
+        calibrated,
+        "binary_catalyst",
+    )
+    if directional_convergence["modifier_pp"]:
+        calibrated = max(
+            0.0, min(100.0, calibrated + directional_convergence["modifier_pp"]))
+
     band = derive_band(calibrated)
 
     # Stage 4 anchor (populated upstream; safe-degrade to Nones if absent)
@@ -1240,6 +1261,7 @@ def stage_10_persist(
         "conviction_pct": round(calibrated, 2),
         "evidence_quality": evidence_quality,
         "band": band,
+        "directional_convergence": directional_convergence,  # F1b
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,
         "total_thinking_tokens": total_thinking,

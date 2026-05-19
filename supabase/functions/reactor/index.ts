@@ -330,6 +330,24 @@ async function processSignal(sig: SignalRow) {
     };
   }
 
+  // --- v2-teardown non-FDA hard gate.
+  // Per the FDA-depth pivot, non-FDA profiles are sunset. Any signal that is
+  // not an FDA profile is acknowledged but does NOT run convergence, emit
+  // alerts, or enqueue thesis_jobs / needs_scoring. Defense-in-depth: producers
+  // are already halted (scanners deprecated), this blocks every remaining
+  // entrypoint (signals INSERT/UPDATE) at one point before the legacy pipeline.
+  if (
+    !sig.scoring_profile ||
+    !FDA_PROFILES_ROUTED_TO_ORCHESTRATOR.has(sig.scoring_profile)
+  ) {
+    return {
+      processed: true,
+      skipped: "non_fda_blocked_by_v2_teardown",
+      signal_id: sig.signal_id,
+      scoring_profile: sig.scoring_profile,
+    };
+  }
+
   // --- Unscored signal short-circuit.
   // Signals from dim_estimator-unsupported profiles arrive with score=NULL.
   // They can't run convergence (no score to weigh) so we enqueue them onto the
