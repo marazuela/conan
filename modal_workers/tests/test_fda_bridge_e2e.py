@@ -23,6 +23,7 @@ from modal_workers.scanners.fda_signal_bridge import (
     MODE_OPERATIONAL,
     MODE_SHADOW,
     MODE_SHADOW_WITH_EMIT,
+    canonical_signal_type,
     feature_payload,
     gate_immediate_when_market_p_missing,
     process_event,
@@ -251,3 +252,38 @@ def test_upsert_feature_snapshot_uses_event_id_conflict_target():
     assert body["event_id"] == "evt-xyz"
     assert body["shadow_score"] == snap.score
     assert "score" not in body
+
+
+# Canonical signal_type contract. The v3 supply line
+# (bridge_signal_to_v3_row, migration 20260522000000) only ingests these
+# long tokens; emitting a raw fda_regulatory_events.event_type silently
+# orphans the signal (P0-C). This test pins the producer to the whitelist so
+# the regression cannot recur unnoticed.
+V3_BRIDGE_WHITELIST = {
+    "pre_phase3_readout", "pdufa_watchlist", "eop2_meeting", "fda_decision",
+    "pdufa_imminent", "pdufa_approaching", "pdufa_date_advanced",
+    "pdufa_date_delayed",
+}
+
+
+@pytest.mark.parametrize(
+    "event_type,expected",
+    [
+        ("pdufa", "pdufa_watchlist"),
+        ("eop2", "eop2_meeting"),
+        ("phase3_readout", "pre_phase3_readout"),
+        ("date_change", "pdufa_date_advanced"),
+        ("PDUFA", "pdufa_watchlist"),  # case-insensitive
+    ],
+)
+def test_canonical_signal_type_maps_into_v3_whitelist(event_type, expected):
+    mapped = canonical_signal_type(event_type)
+    assert mapped == expected
+    assert mapped in V3_BRIDGE_WHITELIST
+
+
+def test_canonical_signal_type_unmapped_passes_through():
+    # Unknown tokens are preserved (provenance) rather than mislabeled; the
+    # bridge's unsupported-type operator_flag is the loud safety net.
+    assert canonical_signal_type("some_future_type") == "some_future_type"
+    assert canonical_signal_type(None) == "fda_event"

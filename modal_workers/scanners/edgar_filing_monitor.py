@@ -6,8 +6,8 @@ Core goals:
   - Legacy-grade quality controls: issuer/SPAC filtering + market-cap triage.
   - Honest runtime telemetry: retries, budget exhaustion, filter counts, degraded
     reasons, and explicit after-insert persistence for dedup / rotation state.
-  - Modal is the canonical EDGAR implementation; the unified_system tool remains
-    a donor for logic and offline comparisons, not a competing runtime path.
+  - Modal is the canonical EDGAR implementation; the retired unified_system tool
+    is historical context only, not a competing runtime path.
 
 IO contract:
   scan(cfg: ScannerConfig) -> ScannerResult

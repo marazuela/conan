@@ -477,6 +477,8 @@ def _refit_reference_class(sb: SupabaseClient, reference_class: str) -> None:
     if n == 0:
         return
 
+    rate = successes / n
+    lo, hi = wilson_interval(successes, n)
     median_move = median(realized_moves)
 
     # Inspect existing prior to decide between blend and takeover.

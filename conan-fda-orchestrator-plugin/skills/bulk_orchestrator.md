@@ -130,9 +130,7 @@ The harness writes `extensions.escalated_to_tier1=true` on the row and inserts a
   `gate_status='pass'` without conflating Tier-2 with Tier-1 mid-flight rows.
 - ❌ `ensemble_*` — null (Tier 2 is single-shot)
 - ❌ `pre_mortem`, `adversarial_challenges` — null (use Tier 1 for adversarial pass)
-- ❌ `constitutional_*` — null (the gate truth lives in `gate_status` above;
-     `constitutional_pass` stays NULL to preserve the
-     `TIER2_FORBIDDEN_NON_NULL` contract in `orchestrator_runtime/tier2.py`)
+- ❌ `constitutional_*` — null
 - ❌ `market_implied_move`, `options_iv` — null (no options sub-agent in Tier 2)
 
 The schema's existing `additionalProperties: false` means missing fields must be explicitly null in the emitted JSON.

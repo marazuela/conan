@@ -368,8 +368,6 @@ def renormalize_priors(
     hypotheses: List[Hypothesis],
     anchor: Optional[Stage4Anchor],
     evidence_quality: Optional[float],
-    *,
-    dry_run: bool = False,
 ) -> tuple[List[Hypothesis], Dict[str, Any]]:
     """Blend per-hypothesis `prior_estimate_pct` toward the empirical base
     rate from Stage 4. Bull priors anchor to base_rate * 100; bear priors
@@ -387,8 +385,7 @@ def renormalize_priors(
     `renormalize_priors_dry_run` internal_config flag.
 
     Mutates `prior_estimate_pct` in place (preserving each
-    `prior_estimate_pct_pre_anchor` already set during parsing) unless
-    `dry_run=True`.
+    `prior_estimate_pct_pre_anchor` already set during parsing).
     """
     if not hypotheses or anchor is None or anchor.base_rate is None:
         return hypotheses, {"applied": False, "reason": "no_anchor_or_no_base_rate"}
@@ -425,20 +422,15 @@ def renormalize_priors(
     for h, new_val in zip(hypotheses, rescaled):
         pre_priors.append(int(round(h.prior_estimate_pct)))
         new_int = int(round(max(0.0, min(100.0, new_val))))
-        if not dry_run:
-            h.prior_estimate_pct = new_int
+        h.prior_estimate_pct = new_int
         post_priors.append(new_int)
 
-    shift_magnitude = sum(abs(a - b) for a, b in zip(pre_priors, post_priors))
-
     return hypotheses, {
-        "applied": not dry_run,
-        "dry_run": dry_run,
+        "applied": True,
         "base_rate": base_rate,
         "evidence_quality": eq,
         "blend_weight": round(w, 3),
         "pre_priors": pre_priors,
         "post_priors": post_priors,
-        "shift_magnitude": shift_magnitude,
         "labels": [h.label for h in hypotheses],
     }

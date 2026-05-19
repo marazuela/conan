@@ -54,7 +54,6 @@ import {
 } from "./convergence-window.ts";
 import {
   buildOrchestratorRunInsert,
-  CONTENT_DEDUP_BYPASS_TRIGGERS,
   type EnqueueArgs,
 } from "./orchestrator-enqueue.ts";
 import { fetchWithRetry } from "./fetch-retry.ts";
@@ -553,7 +552,6 @@ async function processAssetDocument(link: AssetDocumentRow) {
     asset_id: link.asset_id,
     trigger_type: triggerType,
     trigger_doc_id: link.document_id,
-    document_set_hash: docSetHash,
   });
   return {
     processed: true,

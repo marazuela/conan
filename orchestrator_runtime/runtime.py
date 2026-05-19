@@ -52,10 +52,8 @@ from modal_workers.shared.compute import (
     Stage4Anchor,
     apply_isotonic_calibration,
     build_stage_4_anchor,
-    compute_document_set_hash,
     format_anchor_for_prompt,
     get_active_calibration_curve,
-    is_renormalize_priors_dry_run,
 )
 from modal_workers.shared.supabase_client import SupabaseClient
 from orchestrator_runtime.client import (
@@ -1596,10 +1594,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             eq_for_anchor = float(eq_for_anchor) if eq_for_anchor is not None else None
         except (TypeError, ValueError):
             eq_for_anchor = None
-        renorm_dry_run = is_renormalize_priors_dry_run(sb)
         _, renorm_debug = renormalize_priors(
             hypothesis_result.hypotheses, anchor, eq_for_anchor,
-            dry_run=renorm_dry_run,
         )
         run.stage_metrics.append(StageMetric(
             stage_name="stage_2_hypothesis_enumeration",
@@ -1792,8 +1788,7 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--trigger-type", default="manual",
                    choices=["new_doc", "cross_source", "scheduled",
                             "operator_refresh", "market_move", "tier2_escalation",
-                            "backtest", "manual", "aging_recheck",
-                            "catalyst_proximity"])
+                            "backtest", "manual"])
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL)
     p.add_argument("--ensemble-n", type=int, default=1,

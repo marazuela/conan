@@ -1,12 +1,12 @@
-"""Seed the v2 Supabase registry tables from v1 configs + WEIGHTS.
+"""Seed the v2 Supabase registry tables from legacy configs + WEIGHTS.
 
 Per spec.md §9.1. Populates (in order):
   1. sources           (one per unique scanner source kind)
-  2. scanners          (17 rows from config/scanner_registry.json; market_cap_floor_usd_mm=215)
+  2. scanners          (rows from data/legacy/scanner_registry.json; market_cap_floor_usd_mm=215)
   3. rubrics           (6 rows from run_post_scan.WEIGHTS at rubric_version=1)
-  4. pe_filer_allowlist (39 rows from config/pe_filer_allowlist.json)
-  5. phase3_base_rates (39 rows from config/phase3_approval_base_rates.json)
-  6. candidate_rationales (N rows from candidates/_curated_rationales.json, schema v2)
+  4. pe_filer_allowlist (39 rows from data/legacy/pe_filer_allowlist.json)
+  5. phase3_base_rates (39 rows from data/legacy/phase3_approval_base_rates.json)
+  6. candidate_rationales (N rows from data/legacy/_curated_rationales.json, schema v2)
 
 Idempotent: every INSERT uses PostgREST's Prefer: resolution=merge-duplicates header (PostgreSQL
 ON CONFLICT semantics), keyed on each table's natural unique constraint. Re-running the script is
@@ -42,14 +42,12 @@ import requests
 # --------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-V1_ROOT = REPO_ROOT / "unified_system" / "unified_system"
-CONFIG_DIR = V1_ROOT / "config"
-CANDIDATES_DIR = V1_ROOT / "candidates"
+LEGACY_DATA_DIR = REPO_ROOT / "data" / "legacy"
 
-SCANNER_REGISTRY = CONFIG_DIR / "scanner_registry.json"
-PE_FILER_ALLOWLIST = CONFIG_DIR / "pe_filer_allowlist.json"
-PHASE3_BASE_RATES = CONFIG_DIR / "phase3_approval_base_rates.json"
-CURATED_RATIONALES = CANDIDATES_DIR / "_curated_rationales.json"
+SCANNER_REGISTRY = LEGACY_DATA_DIR / "scanner_registry.json"
+PE_FILER_ALLOWLIST = LEGACY_DATA_DIR / "pe_filer_allowlist.json"
+PHASE3_BASE_RATES = LEGACY_DATA_DIR / "phase3_approval_base_rates.json"
+CURATED_RATIONALES = LEGACY_DATA_DIR / "_curated_rationales.json"
 
 # Import WEIGHTS from the ported module — single source of truth.
 sys.path.insert(0, str(REPO_ROOT))
@@ -159,7 +157,7 @@ class Seeder:
 # --------------------------------------------------------------------
 
 def build_sources() -> List[Dict[str, Any]]:
-    """One row per unique source kind across the 19 scanners."""
+    """One row per unique source kind across the legacy scanner registry."""
     kinds_seen = set(SCANNER_TO_SOURCE_KIND.values())
     rows = []
     for kind in sorted(kinds_seen):
@@ -202,7 +200,7 @@ def _build_endpoints(scanner: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_scanners(sources_by_kind: Dict[str, str]) -> List[Dict[str, Any]]:
-    """17 rows from config/scanner_registry.json. Maps:
+    """Rows from data/legacy/scanner_registry.json. Maps:
       - endpoint_* → endpoints JSONB
       - absorbs tool_path, signal_type_profile_map, cadence, timeouts as-is
       - sets config.market_cap_floor_usd_mm = 215 per spec §12
