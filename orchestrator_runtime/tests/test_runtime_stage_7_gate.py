@@ -378,28 +378,44 @@ def test_stage_7_fail_raises_constitutional_failure_and_blocks_persist():
 
 
 # ---------------------------------------------------------------------------
-# B2: Ensemble passes cache tokens to estimate_cost (streaming + batch paths)
+# B2: Streaming ensemble routes through a_client.call() (not the raw SDK
+# client) so it inherits the wrapper's transient-retry/backoff + Opus
+# interleaved-thinking beta header. The wrapper already prices cache tokens
+# (covered by test_pricing / test_client_headers); the ensemble-level
+# guarantee verified here is: it calls the wrapper, forwards temperature for
+# Stage-1 diversity only, and faithfully aggregates s1+s9 tokens/cost.
 # ---------------------------------------------------------------------------
 
 
-def _mock_anthropic_response(text: str, input_tokens: int, output_tokens: int,
-                              cache_read: int = 0, cache_create: int = 0):
-    """Build a MagicMock that quacks like an Anthropic SDK Message."""
-    msg = MagicMock()
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    msg.content = [block]
-    msg.usage.input_tokens = input_tokens
-    msg.usage.output_tokens = output_tokens
-    msg.usage.cache_read_input_tokens = cache_read
-    msg.usage.cache_creation_input_tokens = cache_create
-    return msg
+def _call_result(text: str, *, input_tokens: int, output_tokens: int,
+                  cache_read: int = 0, cache_create: int = 0,
+                  cost_usd: float = 0.0, latency_ms: int = 0,
+                  thinking_tokens: int = 0) -> CallResult:
+    return CallResult(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_create,
+        cost_usd=cost_usd,
+        latency_ms=latency_ms,
+        model="claude-sonnet-4-5-20250929",
+        raw_message=None,
+    )
 
 
-def test_streaming_ensemble_passes_cache_tokens_to_estimate_cost():
-    """B2: estimate_cost(...) MUST receive cache_read_tokens / cache_creation_tokens
-    so Anthropic's cache hits are priced (10% of input rate) instead of $0."""
+def _client_returning(s1: CallResult, s9: CallResult) -> MagicMock:
+    a_client = MagicMock()
+    a_client.call.side_effect = [s1, s9]
+    return a_client
+
+
+def test_streaming_ensemble_routes_through_call_wrapper():
+    """B2: _run_one_streaming MUST go through a_client.call() (the retry/header
+    wrapper) and NOT the raw a_client._client.messages.create — calling the raw
+    client is exactly the regression that made one immediate APIError kill every
+    ensemble slot in seconds with no retry."""
     from orchestrator_runtime import ensemble
 
     extract_valid = (
@@ -407,48 +423,47 @@ def test_streaming_ensemble_passes_cache_tokens_to_estimate_cost():
         '"evidence_quality": 0.7, "cited_prose_blocks": [], '
         '"key_facts": [], "uncertainties": []}'
     )
-    s1_msg = _mock_anthropic_response("## Conclusion\nthesis_direction: long",
-                                      input_tokens=1000, output_tokens=500,
-                                      cache_read=2000, cache_create=400)
-    s9_msg = _mock_anthropic_response(extract_valid,
-                                      input_tokens=200, output_tokens=300,
-                                      cache_read=800, cache_create=0)
+    s1 = _call_result("## Conclusion\nthesis_direction: long",
+                       input_tokens=1000, output_tokens=500,
+                       cache_read=2000, cache_create=400, cost_usd=0.10)
+    s9 = _call_result(extract_valid,
+                       input_tokens=200, output_tokens=300,
+                       cache_read=800, cache_create=0, cost_usd=0.02)
+    a_client = _client_returning(s1, s9)
 
-    a_client = MagicMock()
-    a_client._client.messages.create.side_effect = [s1_msg, s9_msg]
-
-    with patch.object(ensemble, "estimate_cost",
-                      wraps=ensemble.estimate_cost) as ec_spy:
-        result = ensemble._run_one_streaming(
-            a_client,
-            stage_1_system="STAGE_1_SYSTEM",
-            stage_1_user_content="user content",
-            stage_9_system="STAGE_9_SYSTEM",
-            model="claude-sonnet-4-5-20250929",
-            extractor_model="claude-sonnet-4-5-20250929",
-            run_idx=0, temperature=0.8,
-            max_tokens_synth=4096, max_tokens_extract=8192,
-        )
+    result = ensemble._run_one_streaming(
+        a_client,
+        stage_1_system="STAGE_1_SYSTEM",
+        stage_1_user_content="user content",
+        stage_9_system="STAGE_9_SYSTEM",
+        model="claude-sonnet-4-5-20250929",
+        extractor_model="claude-sonnet-4-5-20250929",
+        run_idx=0, temperature=0.8,
+        max_tokens_synth=4096, max_tokens_extract=8192,
+    )
 
     assert result is not None
-    # Two estimate_cost calls: one for S1, one for S9. Both MUST receive
-    # cache tokens — verifying the kwargs is the regression guard.
-    assert ec_spy.call_count == 2
-    s1_call_kwargs = ec_spy.call_args_list[0].kwargs
-    s9_call_kwargs = ec_spy.call_args_list[1].kwargs
-    assert s1_call_kwargs.get("cache_read_tokens") == 2000
-    assert s1_call_kwargs.get("cache_creation_tokens") == 400
-    assert s9_call_kwargs.get("cache_read_tokens") == 800
-    assert s9_call_kwargs.get("cache_creation_tokens") == 0
+    # Went through the wrapper, exactly twice (Stage 1 + Stage 9)...
+    assert a_client.call.call_count == 2
+    # ...and never touched the raw SDK client.
+    a_client._client.messages.create.assert_not_called()
 
-    # And the EnsembleRun should aggregate s1 + s9 cache tokens (not just s1).
+    s1_kwargs = a_client.call.call_args_list[0].kwargs
+    s9_kwargs = a_client.call.call_args_list[1].kwargs
+    # Stage 1 carries the diversity temperature; Stage 9 is deterministic.
+    assert s1_kwargs.get("temperature") == 0.8
+    assert "temperature" not in s9_kwargs or s9_kwargs.get("temperature") is None
+
+    # EnsembleRun aggregates s1 + s9 cache tokens / cost (not just s1).
     assert result.cache_read_tokens == 2000 + 800
     assert result.cache_creation_tokens == 400 + 0
+    assert result.cost_usd == pytest.approx(0.10 + 0.02, abs=1e-9)
 
 
-def test_streaming_ensemble_cost_includes_cache_read_charge():
-    """B2 numeric: a run with cache_read tokens MUST cost more than the
-    same run without — confirms the price actually lands in the cost number."""
+def test_streaming_ensemble_sums_callresult_cost_without_loss():
+    """B2 numeric: the EnsembleRun cost is exactly s1.cost_usd + s9.cost_usd —
+    no double-count, no dropped stage. (Cache-token pricing itself is the
+    wrapper's job, asserted in test_pricing / test_client_headers.)"""
     from orchestrator_runtime import ensemble
 
     extract_valid = (
@@ -456,22 +471,14 @@ def test_streaming_ensemble_cost_includes_cache_read_charge():
         '"evidence_quality": 0.7, "cited_prose_blocks": [], '
         '"key_facts": [], "uncertainties": []}'
     )
+    s1 = _call_result("## Conclusion\nthesis_direction: long",
+                       input_tokens=1000, output_tokens=500, cost_usd=0.4242)
+    s9 = _call_result(extract_valid,
+                       input_tokens=200, output_tokens=300, cost_usd=0.0137)
+    a_client = _client_returning(s1, s9)
 
-    def build_client(cache_read: int) -> MagicMock:
-        s1_msg = _mock_anthropic_response(
-            "## Conclusion\nthesis_direction: long",
-            input_tokens=1000, output_tokens=500,
-            cache_read=cache_read, cache_create=0,
-        )
-        s9_msg = _mock_anthropic_response(
-            extract_valid, input_tokens=200, output_tokens=300,
-            cache_read=0, cache_create=0,
-        )
-        a_client = MagicMock()
-        a_client._client.messages.create.side_effect = [s1_msg, s9_msg]
-        return a_client
-
-    common_kwargs = dict(
+    run = ensemble._run_one_streaming(
+        a_client,
         stage_1_system="S1", stage_1_user_content="user",
         stage_9_system="S9",
         model="claude-sonnet-4-5-20250929",
@@ -479,13 +486,8 @@ def test_streaming_ensemble_cost_includes_cache_read_charge():
         run_idx=0, temperature=0.8,
         max_tokens_synth=4096, max_tokens_extract=8192,
     )
-    cold = ensemble._run_one_streaming(build_client(0), **common_kwargs)
-    hot = ensemble._run_one_streaming(build_client(1_000_000), **common_kwargs)
 
-    # 1M cache_read tokens at Sonnet's 10% rate ($0.30/M) = $0.30 additional.
-    # cold and hot have identical input/output token counts; the delta is
-    # PURELY from cache_read. Allow tiny float epsilon.
-    assert hot.cost_usd - cold.cost_usd == pytest.approx(0.30, abs=1e-9)
+    assert run.cost_usd == pytest.approx(0.4242 + 0.0137, abs=1e-9)
 
 
 def test_stage_9_parse_failure_raises_stage_9_parse_error():

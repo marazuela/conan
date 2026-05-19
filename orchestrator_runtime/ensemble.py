@@ -132,6 +132,7 @@ def run_streaming_ensemble(
     flags `degraded=True` on the result when success rate < threshold."""
     runs: List[EnsembleRun] = []
     retries_used = 0
+    last_exc: Optional[Exception] = None
     for idx in range(n):
         attempt = 0
         r: Optional[EnsembleRun] = None
@@ -148,6 +149,7 @@ def run_streaming_ensemble(
                 logger.warning(
                     "Ensemble run %s API error: %s", attempt_label, exc,
                 )
+                last_exc = exc
                 r = None
             if r:
                 break
@@ -171,9 +173,15 @@ def run_streaming_ensemble(
             )
 
     if not runs:
+        cause = (
+            f" last error: {type(last_exc).__name__}: {last_exc}"
+            if last_exc is not None
+            else " no API exception captured (Stage 9 JSON parse failed every"
+            " slot)"
+        )
         raise RuntimeError(
             f"Ensemble produced 0 successful runs out of {n} attempted "
-            f"(retries={retries_used})"
+            f"(retries={retries_used});{cause}"
         )
 
     result = _aggregate(runs, mode="streaming")
@@ -201,49 +209,30 @@ def _run_one_streaming(
     max_tokens_synth: int,
     max_tokens_extract: int,
 ) -> Optional[EnsembleRun]:
-    # Stage 1 with temperature for diversity
-    s1 = a_client._client.messages.create(
+    # Route through a_client.call() (not the raw SDK client) so the ensemble
+    # path inherits the same transient-retry/backoff + Opus interleaved-thinking
+    # beta header as the single-shot path. Calling _client.messages.create
+    # directly meant a single immediate APIError (rate-limit/400/auth) killed
+    # every slot in seconds with no retry and a swallowed root cause.
+    # Stage 1 with temperature for diversity.
+    s1 = a_client.call(
+        system=stage_1_system,
+        messages=[{"role": "user", "content": stage_1_user_content}],
         model=model,
         max_tokens=max_tokens_synth,
         temperature=temperature,
-        system=stage_1_system,
-        messages=[{"role": "user", "content": stage_1_user_content}],
     )
-    s1_text = "".join(b.text for b in s1.content if b.type == "text")
-    s1_in = s1.usage.input_tokens
-    s1_out = s1.usage.output_tokens
-    s1_thinking = sum(getattr(b, "tokens", 0) for b in s1.content if b.type == "thinking")
-    s1_cache_read = getattr(s1.usage, "cache_read_input_tokens", 0) or 0
-    s1_cache_create = getattr(s1.usage, "cache_creation_input_tokens", 0) or 0
-    # estimate_cost MUST receive cache tokens — Anthropic returns input_tokens
-    # exclusive of cache_read/cache_creation, so dropping them here understates
-    # cost (cache_read at 10% input rate, cache_creation at 125%).
-    s1_cost = estimate_cost(
-        model, s1_in, s1_out,
-        cache_read_tokens=s1_cache_read,
-        cache_creation_tokens=s1_cache_create,
-    )
+    s1_text = s1.text
 
-    # Stage 9 (deterministic — temperature 0)
-    t0 = time.time()
-    s9 = a_client._client.messages.create(
-        model=extractor_model,
-        max_tokens=max_tokens_extract,
+    # Stage 9 (deterministic — no temperature override)
+    s9 = a_client.call(
         system=stage_9_system,
         messages=[{"role": "user", "content": f"Cited prose to extract:\n\n{s1_text}"}],
+        model=extractor_model,
+        max_tokens=max_tokens_extract,
     )
-    s9_text = "".join(b.text for b in s9.content if b.type == "text")
-    s9_in = s9.usage.input_tokens
-    s9_out = s9.usage.output_tokens
-    s9_cache_read = getattr(s9.usage, "cache_read_input_tokens", 0) or 0
-    s9_cache_create = getattr(s9.usage, "cache_creation_input_tokens", 0) or 0
-    s9_cost = estimate_cost(
-        extractor_model, s9_in, s9_out,
-        cache_read_tokens=s9_cache_read,
-        cache_creation_tokens=s9_cache_create,
-    )
+    s9_text = s9.text
     parsed = parse_json_or_none(s9_text)
-    s9_latency = int((time.time() - t0) * 1000)
 
     if not parsed:
         logger.warning("Run %d: Stage 9 JSON parse failed", run_idx)
@@ -272,16 +261,16 @@ def _run_one_streaming(
         conviction_pct=conviction,
         evidence_quality=evidence_quality,
         parsed_json=parsed,
-        input_tokens=s1_in + s9_in,
-        output_tokens=s1_out + s9_out,
-        thinking_tokens=s1_thinking,
+        input_tokens=s1.input_tokens + s9.input_tokens,
+        output_tokens=s1.output_tokens + s9.output_tokens,
+        thinking_tokens=s1.thinking_tokens,
         # Roll Stage 1 + Stage 9 cache totals together — both stages reuse the
         # cached shared system prefix when present, and persisting only s1
         # silently understates the cache footprint by ~50%.
-        cache_read_tokens=s1_cache_read + s9_cache_read,
-        cache_creation_tokens=s1_cache_create + s9_cache_create,
-        cost_usd=s1_cost + s9_cost,
-        latency_ms=s9_latency,
+        cache_read_tokens=s1.cache_read_tokens + s9.cache_read_tokens,
+        cache_creation_tokens=s1.cache_creation_tokens + s9.cache_creation_tokens,
+        cost_usd=s1.cost_usd + s9.cost_usd,
+        latency_ms=s1.latency_ms + s9.latency_ms,
     )
 
 
