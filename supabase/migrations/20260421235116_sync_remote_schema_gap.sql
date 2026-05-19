@@ -226,7 +226,7 @@ create or replace view "public"."emissions_ledger" as  SELECT s.signal_id,
             WHEN (COALESCE(s.band_with_bonus, s.band) = 'immediate'::public.signal_band) THEN 'immediate_no_thesis_job'::text
             ELSE 'unknown'::text
         END AS gate_decision,
-    jsonb_build_object('auto_caps_triggered', s.auto_caps_triggered, 'thesis_job_status', tj.status, 'thesis_gate_reasons', tj.gate_reasons, 'thesis_attempt_count', tj.attempt_count, 'thesis_challenge_count', tj.challenge_count) AS gate_reason,
+    jsonb_build_object('auto_caps_triggered', s.auto_caps_triggered, 'thesis_job_status', tj.status, 'thesis_gate_reasons', tj.gate_reasons, 'thesis_attempt_count', tj.attempt_count) AS gate_reason,
     tj.id AS thesis_job_id,
     tj.status AS thesis_job_status,
     tj.candidate_id,
@@ -236,12 +236,7 @@ create or replace view "public"."emissions_ledger" as  SELECT s.signal_id,
     o.id AS outcome_id,
     o.outcome_type AS resolution_type,
     o.created_at AS resolution_date,
-    o.catalyst_hit_date,
-    o.realized_move_1d,
-    o.realized_move_7d,
-    o.realized_move_30d,
-    o.realized_return,
-    o.outcome_label
+    o.realized_return
    FROM (((((public.signals s
      LEFT JOIN public.scanners sc ON ((sc.id = s.scanner_id)))
      LEFT JOIN public.entities e ON ((e.id = s.entity_id)))
@@ -252,14 +247,7 @@ create or replace view "public"."emissions_ledger" as  SELECT s.signal_id,
             outcomes.outcome_type,
             outcomes.realized_return,
             outcomes.notes,
-            outcomes.created_at,
-            outcomes.outcome_label,
-            outcomes.catalyst_hit_date,
-            outcomes.realized_move_1d,
-            outcomes.realized_move_7d,
-            outcomes.realized_move_30d,
-            outcomes.labeled_at,
-            outcomes.labeled_by
+            outcomes.created_at
            FROM public.outcomes
           WHERE (outcomes.candidate_id = c.id)
           ORDER BY outcomes.created_at DESC

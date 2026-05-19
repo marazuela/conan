@@ -92,6 +92,46 @@ class EnsembleResult:
 
 SHRINKAGE_FACTOR_LAMBDA = 0.5
 
+# Anthropic's current Claude 4.5+ / 4.7 models reject explicit temperature
+# with "temperature is deprecated for this model". Keep temperature for older
+# models where it is still accepted, but omit it for the production family so
+# the provider default sampling behavior can still supply ensemble diversity.
+_MODELS_REJECTING_TEMPERATURE = (
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-opus-4-7",
+)
+
+
+def _model_accepts_temperature(model: str) -> bool:
+    normalized = model.lower()
+    return not any(marker in normalized for marker in _MODELS_REJECTING_TEMPERATURE)
+
+
+def _stage_1_request_params(
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    stage_1_system: Any,
+    stage_1_user_content: str,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": stage_1_system,
+        "messages": [{"role": "user", "content": stage_1_user_content}],
+    }
+    if _model_accepts_temperature(model):
+        params["temperature"] = temperature
+    else:
+        logger.info(
+            "Omitting deprecated temperature parameter for ensemble model %s",
+            model,
+        )
+    return params
+
 
 # ===========================================================================
 # Streaming mode (N concurrent live calls)
@@ -148,13 +188,15 @@ def _run_one_streaming(
     max_tokens_synth: int,
     max_tokens_extract: int,
 ) -> Optional[EnsembleRun]:
-    # Stage 1 with temperature for diversity
+    # Stage 1 uses temperature where the selected model still accepts it.
     s1 = a_client._client.messages.create(
-        model=model,
-        max_tokens=max_tokens_synth,
-        temperature=temperature,
-        system=stage_1_system,
-        messages=[{"role": "user", "content": stage_1_user_content}],
+        **_stage_1_request_params(
+            model=model,
+            max_tokens=max_tokens_synth,
+            temperature=temperature,
+            stage_1_system=stage_1_system,
+            stage_1_user_content=stage_1_user_content,
+        )
     )
     s1_text = "".join(b.text for b in s1.content if b.type == "text")
     s1_in = s1.usage.input_tokens
@@ -243,13 +285,13 @@ def run_batch_ensemble(
     for idx in range(n):
         s1_requests.append({
             "custom_id": f"ensemble-s1-{idx}",
-            "params": {
-                "model": model,
-                "max_tokens": max_tokens_synth,
-                "temperature": temperature,
-                "system": stage_1_system,
-                "messages": [{"role": "user", "content": stage_1_user_content}],
-            },
+            "params": _stage_1_request_params(
+                model=model,
+                max_tokens=max_tokens_synth,
+                temperature=temperature,
+                stage_1_system=stage_1_system,
+                stage_1_user_content=stage_1_user_content,
+            ),
         })
 
     logger.info("Submitting Batch with %d Stage-1 requests", n)

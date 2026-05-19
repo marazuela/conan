@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from modal_workers.shared.supabase_client import SupabaseClient
@@ -46,9 +47,12 @@ TIER2_MAX_DOCS = 50
 # the value persisted to convergence_assessments.orchestrator_version.
 TIER2_ORCHESTRATOR_VERSION = "bulk_v0"
 TIER2_MODEL_ID = "claude-sonnet-4-6"
+TIER2_DEFAULT_WINDOW_DAYS = 180
 
 # Escalation rule per bulk_orchestrator.md §Escalation rule.
 TIER2_ESCALATION_CONVICTION_THRESHOLD = 60.0
+TIER2_ESCALATION_UNCERTAINTY_CONVICTION_FLOOR = 45.0
+TIER2_ESCALATION_EVIDENCE_QUALITY_FLOOR = 0.45
 TIER2_PRIMARY_DOC_TYPES: frozenset[str] = frozenset({
     "label",
     "adcomm_briefing",
@@ -97,6 +101,75 @@ TIER2_FORBIDDEN_NON_NULL: frozenset[str] = frozenset({
     "options_iv",
 })
 
+TIER2_LIST_FIELDS: frozenset[str] = frozenset({
+    "cited_prose_blocks",
+    "key_facts",
+    "uncertainties",
+    "citations",
+    "similar_resolved_case_ids",
+    "document_ids",
+    "citations_document_ids",
+    "fact_ids",
+    "citations_fact_ids",
+})
+
+
+def _as_list(value: Any) -> List[Any]:
+    """Normalize optional JSON/array fields before PostgREST persistence."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _normalize_hypotheses(value: Any) -> Any:
+    """Accept the common Cowork drift of {bull,base,bear} as a list.
+
+    The intended contract is still an array. This only canonicalizes the exact
+    keyed shape the skill has emitted in production, then lets normal validation
+    enforce each hypothesis object and its kill_conditions.
+    """
+    if not isinstance(value, dict):
+        return value
+
+    ordered: List[Dict[str, Any]] = []
+    for label in ("bull", "base", "bear"):
+        item = value.get(label)
+        if not isinstance(item, dict):
+            return value
+        normalized = dict(item)
+        normalized.setdefault("label", label)
+        ordered.append(normalized)
+    return ordered
+
+
+def normalize_tier2_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a canonical Tier-2 payload without mutating the caller's dict."""
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    if "hypotheses" in normalized:
+        normalized["hypotheses"] = _normalize_hypotheses(
+            normalized.get("hypotheses"),
+        )
+    return normalized
+
+
+def _default_document_window() -> tuple[str, str]:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=TIER2_DEFAULT_WINDOW_DAYS)
+    return start.isoformat(), end.isoformat()
+
+
+def _coalesce_timestamp(value: Any, fallback: str) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and value.strip():
+        return value
+    return fallback
+
 
 @dataclass
 class Tier2InputBlob:
@@ -106,6 +179,7 @@ class Tier2InputBlob:
     drug_name: Optional[str]
     indication: Optional[str]
     reference_class_signature: Optional[str]
+    evidence_packet: Dict[str, Any]
     extracted_facts: List[Dict[str, Any]]
     asset_documents: List[Dict[str, Any]]
     prior_assessment: Optional[Dict[str, Any]]
@@ -116,12 +190,59 @@ class Tier2InputBlob:
         return json.dumps(asdict(self), default=str, ensure_ascii=False)
 
 
+def validate_evidence_packet(
+    *,
+    asset: Dict[str, Any],
+    extracted_facts: List[Dict[str, Any]],
+    asset_documents: List[Dict[str, Any]],
+    tier: int,
+) -> Dict[str, Any]:
+    """Validate the minimum evidence packet before bulk/deep review.
+
+    Tier 2 is allowed to run on a primary linked source document before facts
+    have been extracted. Tier 1 requires facts too, because the deep runtime is
+    expected to ground claims in extracted evidence.
+    """
+    material_docs = [
+        d for d in asset_documents
+        if d.get("is_material") is not False
+        and d.get("link_type") in ("primary", "safety_signal")
+    ]
+    errors: List[str] = []
+    if not asset.get("ticker"):
+        errors.append("missing_ticker")
+    if not asset.get("drug_name"):
+        errors.append("missing_drug_name")
+    if not material_docs:
+        errors.append("missing_material_primary_document")
+    if tier == 1 and not extracted_facts:
+        errors.append("missing_extracted_facts")
+
+    return {
+        "tier": tier,
+        "ok": not errors,
+        "errors": errors,
+        "identity": {
+            "ticker": asset.get("ticker"),
+            "drug_name": asset.get("drug_name"),
+            "sponsor_name": asset.get("sponsor_name"),
+            "application_number": asset.get("application_number"),
+        },
+        "counts": {
+            "material_primary_documents": len(material_docs),
+            "extracted_facts": len(extracted_facts),
+            "asset_documents": len(asset_documents),
+        },
+    }
+
+
 def build_tier2_input_blob(
     sb: SupabaseClient,
     asset_id: str,
     *,
     max_facts: int = TIER2_MAX_FACTS,
     max_docs: int = TIER2_MAX_DOCS,
+    require_evidence_packet: bool = False,
 ) -> Tier2InputBlob:
     """Assemble the input the bulk_orchestrator skill will consume.
 
@@ -187,6 +308,18 @@ def build_tier2_input_blob(
     ) or []
     prior = prior_rows[0] if prior_rows else None
 
+    evidence_packet = validate_evidence_packet(
+        asset=asset,
+        extracted_facts=facts,
+        asset_documents=asset_docs,
+        tier=2,
+    )
+    if require_evidence_packet and not evidence_packet["ok"]:
+        raise ValueError(
+            "Tier-2: evidence packet incomplete for "
+            f"{asset_id}: {', '.join(evidence_packet['errors'])}"
+        )
+
     return Tier2InputBlob(
         asset_id=asset_id,
         ticker=asset.get("ticker"),
@@ -195,6 +328,7 @@ def build_tier2_input_blob(
             asset.get("indication_normalized") or asset.get("indication")
         ),
         reference_class_signature=asset.get("reference_class_signature"),
+        evidence_packet=evidence_packet,
         extracted_facts=facts,
         asset_documents=asset_docs,
         prior_assessment=prior,
@@ -217,6 +351,7 @@ def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not isinstance(payload, dict):
         return [f"payload must be dict, got {type(payload).__name__}"]
+    payload = normalize_tier2_payload(payload)
 
     for key in TIER2_REQUIRED_FIELDS:
         if key not in payload:
@@ -252,6 +387,11 @@ def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
     if eq is not None:
         if not isinstance(eq, (int, float)) or not (0 <= eq <= 1):
             errors.append(f"evidence_quality must be in [0, 1], got {eq!r}")
+
+    for list_field in TIER2_LIST_FIELDS:
+        v = payload.get(list_field)
+        if v is not None and not isinstance(v, list):
+            errors.append(f"{list_field} must be a list")
 
     hyps = payload.get("hypotheses")
     if hyps is not None:
@@ -300,6 +440,7 @@ def persist_tier2_assessment(
     options_iv) are left at table defaults (null/0). Caller is responsible
     for having validated `payload` via `validate_tier2_output` first.
     """
+    payload = normalize_tier2_payload(payload)
     errors = validate_tier2_output(payload)
     if errors:
         raise ValueError(
@@ -313,6 +454,7 @@ def persist_tier2_assessment(
     fact_ids = payload.get("citations_fact_ids") or payload.get(
         "fact_ids"
     ) or []
+    default_window_start, default_window_end = _default_document_window()
 
     row: Dict[str, Any] = {
         "asset_id": asset_id,
@@ -320,20 +462,31 @@ def persist_tier2_assessment(
         "orchestrator_version": TIER2_ORCHESTRATOR_VERSION,
         "model_id": TIER2_MODEL_ID,
         "trigger_type": trigger_type,
-        "trigger_doc_id": trigger_doc_id,
-        "document_window_start": document_window_start,
-        "document_window_end": document_window_end,
-        "document_ids": document_ids,
-        "fact_ids": fact_ids,
+        "trigger_doc_id": trigger_doc_id or None,
+        "document_window_start": _coalesce_timestamp(
+            payload.get("document_window_start") or document_window_start,
+            default_window_start,
+        ),
+        "document_window_end": _coalesce_timestamp(
+            payload.get("document_window_end") or document_window_end,
+            default_window_end,
+        ),
+        "document_ids": _as_list(document_ids),
+        "fact_ids": _as_list(fact_ids),
+        "evidence_ledger": payload.get("evidence_ledger") or {},
+        "reasoning_trace": payload.get("reasoning_trace"),
         "cited_prose_blocks": payload.get("cited_prose_blocks") or [],
         "key_facts": payload.get("key_facts") or [],
         "uncertainties": payload.get("uncertainties") or [],
-        "hypotheses": payload.get("hypotheses"),
+        "hypotheses": payload.get("hypotheses") or [],
         "reference_class": payload.get("reference_class"),
         "reference_class_base_rate": payload.get("reference_class_base_rate"),
-        "similar_resolved_case_ids": payload.get("similar_resolved_case_ids"),
+        "similar_resolved_case_ids": (
+            payload.get("similar_resolved_case_ids") or []
+        ),
         "raw_conviction_pct": payload.get("raw_conviction_pct"),
         "thesis_direction": payload.get("thesis_direction"),
+        "thesis_summary": payload.get("thesis_summary"),
         "conviction_pct_calibrated": payload.get("conviction_pct_calibrated"),
         "conviction_pct": payload.get("conviction_pct"),
         "evidence_quality": payload.get("evidence_quality"),
@@ -398,6 +551,7 @@ def check_tier1_escalation(
 
     Triggers escalation when ANY of:
       - conviction_pct >= TIER2_ESCALATION_CONVICTION_THRESHOLD
+      - conviction_pct is material and evidence_quality is weak
       - thesis_direction differs from prior (and prior was non-null)
       - new_primary_doc_types intersects TIER2_PRIMARY_DOC_TYPES
     """
@@ -411,6 +565,21 @@ def check_tier1_escalation(
         reasons.append(
             f"high_conviction (conviction_pct={conviction} ≥ "
             f"{TIER2_ESCALATION_CONVICTION_THRESHOLD})"
+        )
+
+    evidence_quality = current.get("evidence_quality")
+    if (
+        isinstance(conviction, (int, float))
+        and conviction >= TIER2_ESCALATION_UNCERTAINTY_CONVICTION_FLOOR
+        and isinstance(evidence_quality, (int, float))
+        and evidence_quality <= TIER2_ESCALATION_EVIDENCE_QUALITY_FLOOR
+    ):
+        reasons.append(
+            "high_uncertainty_material_asset "
+            f"(conviction_pct={conviction} ≥ "
+            f"{TIER2_ESCALATION_UNCERTAINTY_CONVICTION_FLOOR}, "
+            f"evidence_quality={evidence_quality} ≤ "
+            f"{TIER2_ESCALATION_EVIDENCE_QUALITY_FLOOR})"
         )
 
     if prior is not None:
@@ -456,6 +625,7 @@ def enqueue_tier1_escalation(
             "trigger_type": "tier2_escalation",
             "tier": 1,
             "status": "pending",
+            "scheduled_at": datetime.now(timezone.utc).isoformat(),
             "notes": {
                 "triggering_assessment_id": triggering_assessment_id,
                 "escalation_reasons": reasons,
@@ -505,7 +675,10 @@ def enqueue_tier2_bulk(
             if not rows:
                 raise RuntimeError("orchestrator_runs insert returned no row")
             run_id = rows[0]["id"]
-            blob = build_tier2_input_blob(sb, asset_id)
+            blob = build_tier2_input_blob(
+                sb, asset_id,
+                require_evidence_packet=True,
+            )
             out["enqueued"].append({
                 "asset_id": asset_id,
                 "run_id": run_id,
@@ -561,12 +734,10 @@ def complete_tier2_run(
     On validation failure, marks run='failed' with the validator errors and
     returns {status: 'failed_validation', errors: [...]}.
     """
-    from datetime import datetime, timezone
-
     run_rows = sb._rest(
         "GET", "orchestrator_runs",
         params={
-            "select": "id,asset_id,status,tier",
+            "select": "id,asset_id,status,tier,trigger_type,trigger_doc_id",
             "id": f"eq.{run_id}",
         },
     ) or []
@@ -579,6 +750,7 @@ def complete_tier2_run(
             f"not 2; refusing to complete as Tier-2"
         )
     asset_id = run_row["asset_id"]
+    payload = normalize_tier2_payload(payload)
 
     errors = validate_tier2_output(payload)
     if errors:
@@ -625,7 +797,8 @@ def complete_tier2_run(
 
     assessment_id = persist_tier2_assessment(
         sb, asset_id, payload,
-        trigger_type="scheduled",
+        trigger_type=run_row.get("trigger_type") or "scheduled",
+        trigger_doc_id=run_row.get("trigger_doc_id"),
         cost_usd=cost_usd,
         latency_ms=latency_ms,
     )
@@ -692,8 +865,6 @@ def fail_tier2_run(
     """Mark a Tier-2 orchestrator_runs row failed. Idempotent — repeated
     calls overwrite error_message; tier filter prevents accidentally failing
     a Tier-1 row."""
-    from datetime import datetime, timezone
-
     sb._rest(
         "PATCH", "orchestrator_runs",
         params={"id": f"eq.{run_id}", "tier": "eq.2"},

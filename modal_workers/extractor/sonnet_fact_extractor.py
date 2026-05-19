@@ -37,6 +37,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import anthropic
@@ -108,6 +109,38 @@ class ExtractStats:
     output_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
+
+
+def record_fact_extractor_run_summary(
+    client: SupabaseClient,
+    stats: ExtractStats,
+    started_at: datetime,
+    *,
+    status: str,
+    notes: Optional[str] = None,
+) -> None:
+    """Persist the operational rollup row consumed by dashboard/audit queries."""
+    row = {
+        "model": MODEL,
+        "started_at": started_at.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "docs_seen": stats.docs_seen,
+        "docs_extracted": stats.docs_extracted,
+        "facts_inserted": stats.facts_inserted,
+        "api_calls": stats.api_calls,
+        "errors": stats.errors,
+        "input_tokens": stats.input_tokens,
+        "output_tokens": stats.output_tokens,
+        "cost_usd": round(stats.cost_usd, 4),
+        "notes": notes,
+    }
+    client._rest_with_retry(
+        "POST",
+        "fact_extractor_runs",
+        json_body=row,
+        prefer="return=minimal",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +500,7 @@ def main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = ExtractStats()
+    started_at = datetime.now(timezone.utc)
 
     links = load_unextracted_links(sb, asset_id=args.asset_id, max_links=args.max)
     logger.info("Loaded %d unextracted asset_documents link(s)", len(links))
@@ -539,6 +573,12 @@ def main(argv: List[str] | None = None) -> int:
                 stats.facts_inserted, stats.api_calls)
     logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
                 stats.input_tokens, stats.output_tokens, stats.cost_usd)
+    status = "budget_exceeded" if stats.cost_usd > args.budget_usd else "completed"
+    notes = "dry_run=true" if args.dry_run else None
+    try:
+        record_fact_extractor_run_summary(sb, stats, started_at, status=status, notes=notes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fact_extractor_runs summary insert failed: %s", exc)
     return 0
 
 

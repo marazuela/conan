@@ -36,6 +36,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import anthropic
@@ -81,6 +82,41 @@ class LinkerStats:
     output_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
+
+
+def record_linker_run_summary(
+    client: SupabaseClient,
+    stats: LinkerStats,
+    started_at: datetime,
+    *,
+    status: str,
+    notes: Optional[str] = None,
+) -> None:
+    """Persist the operational rollup row consumed by dashboard/audit queries."""
+    row = {
+        "pass": "pass1",
+        "model": MODEL,
+        "started_at": started_at.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "docs_seen": stats.docs_seen,
+        "prefilter_passed": stats.docs_prefilter_passed,
+        "prefilter_skipped": stats.docs_prefilter_skipped,
+        "api_calls": stats.api_calls,
+        "errors": stats.errors,
+        "links_inserted": stats.links_inserted,
+        "links_dedup_skipped": stats.links_dedup_skipped,
+        "input_tokens": stats.input_tokens,
+        "output_tokens": stats.output_tokens,
+        "cost_usd": round(stats.cost_usd, 4),
+        "notes": notes,
+    }
+    client._rest_with_retry(
+        "POST",
+        "asset_linker_runs",
+        json_body=row,
+        prefer="return=minimal",
+    )
 
 
 # Sonnet 4.5 pricing (USD per 1M tokens, as of plan-time):
@@ -467,6 +503,7 @@ def main(argv: List[str] | None = None) -> int:
     sb = SupabaseClient()
     a_client = anthropic.Anthropic()
     stats = LinkerStats()
+    started_at = datetime.now(timezone.utc)
 
     assets = load_active_assets(sb, only_asset_id=args.asset_id)
     if not assets:
@@ -556,6 +593,12 @@ def main(argv: List[str] | None = None) -> int:
                 stats.links_inserted, stats.links_dedup_skipped)
     logger.info("  tokens: in=%d  out=%d  cost_usd=$%.3f",
                 stats.input_tokens, stats.output_tokens, stats.cost_usd)
+    status = "budget_exceeded" if stats.cost_usd > args.budget_usd else "completed"
+    notes = "dry_run=true" if args.dry_run else None
+    try:
+        record_linker_run_summary(sb, stats, started_at, status=status, notes=notes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("asset_linker_runs summary insert failed: %s", exc)
     return 0
 
 

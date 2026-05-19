@@ -1359,6 +1359,8 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
 
     raw_payload: Dict[str, Any] = {
         "ticker": ticker,
+        "discovery_lane": "regulatory_calendar",
+        "review_priority": 1 if subtype in (SIGNAL_TYPE_IMMINENT, SIGNAL_TYPE_DECISION) else 2,
         "company_name": entry.get("company_name", ""),
         "drug_name": drug,
         "indication": entry.get("indication", ""),

@@ -19,7 +19,7 @@
 -- indexes per provider keep query plans clean. Re-embedding on a provider
 -- switch walks chunks missing the new provider's row.
 --
--- pgvector extension already installed (initial_schema.sql).
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 
 -- ============================================================================
 -- 1. document_chunks
@@ -68,20 +68,20 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_literature (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(1024) NOT NULL,
+  embedding extensions.vector(1024) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_literature_voyage_hnsw
   ON public.chunk_embeddings_literature
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'voyage';
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_literature_openai_hnsw
   ON public.chunk_embeddings_literature
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'openai';
 
@@ -95,20 +95,20 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_filings (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2000) NOT NULL,
+  embedding extensions.vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_filings_voyage_hnsw
   ON public.chunk_embeddings_filings
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'voyage';
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_filings_openai_hnsw
   ON public.chunk_embeddings_filings
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'openai';
 
@@ -122,20 +122,20 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_labels_aes (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2000) NOT NULL,
+  embedding extensions.vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_labels_aes_voyage_hnsw
   ON public.chunk_embeddings_labels_aes
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'voyage';
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_labels_aes_openai_hnsw
   ON public.chunk_embeddings_labels_aes
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'openai';
 
@@ -149,20 +149,20 @@ CREATE TABLE IF NOT EXISTS public.chunk_embeddings_news (
   provider text NOT NULL CHECK (provider IN ('voyage','openai')),
   model text NOT NULL,
   dim int NOT NULL,
-  embedding vector(2000) NOT NULL,
+  embedding extensions.vector(2000) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chunk_id, provider, model)
 );
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_news_voyage_hnsw
   ON public.chunk_embeddings_news
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'voyage';
 
 CREATE INDEX IF NOT EXISTS chunk_embeddings_news_openai_hnsw
   ON public.chunk_embeddings_news
-  USING hnsw (embedding vector_cosine_ops)
+  USING hnsw (embedding extensions.vector_cosine_ops)
   WITH (m = 16, ef_construction = 200)
   WHERE provider = 'openai';
 

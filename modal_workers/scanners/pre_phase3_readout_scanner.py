@@ -574,6 +574,8 @@ def _build_signal(
 
     raw_payload: Dict[str, Any] = {
         "nct_id": nct,
+        "discovery_lane": "pre_readout",
+        "review_priority": 2,
         "trial_title": scored["brief_title"],
         "sponsor_name": sponsor,
         "sponsor_class": scored["sponsor_class"],
@@ -683,6 +685,27 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     base_rates = _load_base_rates(client)
 
+    # Tradeable-universe gate (2026-05-18). Historically this scanner emitted a
+    # binary_catalyst signal for EVERY INDUSTRY Phase-3 sponsor, including ones
+    # that never resolve to a US SEC issuer — large diversified pharma listed
+    # abroad, Chinese/Japanese/Korean firms, and academic/private sponsors.
+    # Those are not company-defining tradeable binary catalysts; they only
+    # generated bridge `operator_flags` that were later bulk-excluded as
+    # non-target (141-flag dead-end, 2026-05-18). Gating emission on a
+    # successful SEC issuer resolution removes that noise at the source and
+    # aligns with the FDA-depth / anti-breadth strategy.
+    #
+    # Precision-over-recall by design: a genuine US small-cap whose CT.gov
+    # sponsor string fails IssuerIndex fuzzy-match is suppressed (still listed
+    # in the unresolved_sponsors warning so an alias can be added). Reversible
+    # via config `require_resolved_issuer: false` to restore emit-anyway.
+    # NOTE: this gate does NOT exclude resolved-but-mega-cap (e.g. AbbVie→ABBV
+    # still passes). A market-cap ceiling for resolved issuers is a follow-up
+    # that needs the Polygon market-cap wiring used by edgar_filing_monitor
+    # (`_load_market_cap_usd_mm`); intentionally out of scope here.
+    _scan_cfg = getattr(cfg, "config", {}) or {}
+    require_resolved_issuer = bool(_scan_cfg.get("require_resolved_issuer", True))
+
     scan_date = datetime.now(timezone.utc)
     budget = max(10, cfg.timeout_soft_s - 5)  # leave headroom for final ops
     scan_start = time.time()
@@ -698,7 +721,9 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
 
     below_gate = 0
     skipped_already_approved = 0
+    universe_filtered = 0
     unresolved_sponsors: List[str] = []
+    suppressed_candidates: List[Dict[str, Any]] = []
     for t in trials:
         if time.time() - scan_start > budget:
             warnings.append(f"wall-clock budget ({budget}s) exceeded during scoring")
@@ -751,13 +776,36 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         # decide whether to add an alias map.
         if issuer_index is not None and not sig.raw_payload.get("universe_resolved"):
             unresolved_sponsors.append(scored["sponsor_name"] or "?")
+            if require_resolved_issuer:
+                # Tradeable-universe gate: no US SEC issuer match → not a
+                # company-defining tradeable binary catalyst for this strategy.
+                # Suppress emission (audited via unresolved_sponsors warning +
+                # universe_filtered metric). Reversible via config.
+                universe_filtered += 1
+                if len(suppressed_candidates) < 25:
+                    suppressed_candidates.append({
+                        "nct_id": nct,
+                        "sponsor_name": scored["sponsor_name"],
+                        "trial_title": scored["brief_title"],
+                        "primary_completion_date": scored["primary_completion_date"],
+                        "days_until_readout": scored["days_until_readout"],
+                        "base_rate_key": scored["base_rate_key"],
+                        "patterns_hit": scored["patterns_hit"],
+                        "pattern_names": scored["pattern_names"],
+                    })
+                continue
         signals.append(sig)
 
     if unresolved_sponsors:
         sample = ", ".join(sorted(set(unresolved_sponsors))[:5])
+        action = (
+            f"filtered {universe_filtered} (require_resolved_issuer=on)"
+            if require_resolved_issuer
+            else "emitted without ticker (gate off)"
+        )
         warnings.append(
             f"sec_issuer_lookup unresolved for {len(unresolved_sponsors)} INDUSTRY "
-            f"sponsor(s): {sample}"
+            f"sponsor(s) [{action}]: {sample}"
         )
 
     status = "partial" if warnings else "ok"
@@ -773,5 +821,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
         run_metrics={
             "below_gate": below_gate,
             "skipped_already_approved": skipped_already_approved,
+            "universe_filtered": universe_filtered,
+            "suppressed_candidate_sample": suppressed_candidates,
+            "require_resolved_issuer": require_resolved_issuer,
         },
     )
