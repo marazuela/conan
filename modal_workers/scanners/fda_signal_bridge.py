@@ -93,6 +93,21 @@ def is_resolution_event(event_type: Optional[str]) -> bool:
     return (event_type or "").lower() in RESOLUTION_EVENT_TYPES
 
 
+def canonical_signal_type(event_type: Optional[str]) -> str:
+    """Map FDA event tokens into the v3 signal_type contract.
+
+    Unknown event types pass through so downstream unsupported-type flags can
+    surface them with provenance instead of hiding them behind a generic label.
+    """
+    token = (event_type or "fda_event").lower()
+    return {
+        "pdufa": "pdufa_watchlist",
+        "eop2": "eop2_meeting",
+        "phase3_readout": "pre_phase3_readout",
+        "date_change": "pdufa_date_advanced",
+    }.get(token, token)
+
+
 def gate_immediate_when_market_p_missing(
     snapshot: FeatureSnapshot,
 ) -> tuple[FeatureSnapshot, bool]:
@@ -441,6 +456,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         ticker = asset.get("ticker") or ""
         drug = asset.get("drug_name") or asset.get("generic_name") or ""
         event_type = event.get("event_type") or "fda_event"
+        signal_type = canonical_signal_type(event_type)
         event_date = event.get("event_date") or ""
         try:
             source_date = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -476,7 +492,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             source_content_hash=source_content_hash,
             source_date=source_date,
             scan_date=snapshot_at,
-            signal_type=event_type,
+            signal_type=signal_type,
             raw_payload=raw_payload,
             entity_hints=EntityHints(
                 ticker=ticker or None,
