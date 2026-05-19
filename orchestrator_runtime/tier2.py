@@ -494,6 +494,12 @@ def persist_tier2_assessment(
         "calibration_curve_version": payload.get("calibration_curve_version"),
         "cost_usd": round(cost_usd, 4),
         "latency_ms": latency_ms,
+        # PR-5: Tier-2 is architecturally exempt from the Stage 7 constitutional
+        # gate (TIER2_FORBIDDEN_NON_NULL above). gate_status='tier2_skipped'
+        # makes the skip explicit so downstream callers can filter on
+        # gate_status='pass' without conflating Tier-2 emits with Tier-1
+        # "not evaluated yet" rows.
+        "gate_status": "tier2_skipped",
     }
 
     rows = sb._rest(
