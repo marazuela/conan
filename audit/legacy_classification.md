@@ -5,7 +5,8 @@
 
 | Path | Classification | Notes |
 |---|---|---|
-| `unified_system/unified_system/config/scanner_registry.json` | **migration-only** | Read only by `modal_workers/migrations/seed_registry.py`. Live source of truth is `scanners` table (migration 20260420200000). Update docstring + JSON header. |
+| `data/legacy/*.json` | **preserved migration/reference data** | Small legacy inputs retained after deleting `unified_system/`: scanner registry, PE filer allowlist, phase-3 base rates, curated rationales, and PDUFA watchlist export. |
+| `unified_system/unified_system/config/scanner_registry.json` | **migrated** | Replaced by `data/legacy/scanner_registry.json` for `migrations/seed_registry.py`. Live source of truth is still the `scanners` table (migration 20260420200000). |
 | `unified_system/unified_system/strategies/*.md` | **reference-only** | ~20 files. Most don't map 1:1 to v2's six profiles (`merger_arb`, `activist_governance`, `binary_catalyst`, `short_positioning`, `litigation`, `takeover_candidate`). Keep for operator reference; add README clarifying historical status. |
 | `unified_system/unified_system/tools/` | **likely DEAD** | ~59 files. Imported only by `migrations/import_candidates.py` and `migrations/seed_registry.py`. Equivalents in v2 (`modal_workers/shared/candidate_gate.py`, `observability.py`, etc.). Move to `_archived_tools/` after final grep-confirm. |
 | `unified_system/unified_system/candidates/` | **migration-only / reference** | Curated rationale snapshots. Read by `import_candidates.py` (one-time migration). Subdirs `_archived_post_edge/`, `rejected_pending_thesis/` are historical. |
@@ -17,7 +18,7 @@
 ## Action items
 
 - F-313: spawn-task — add idempotency marker to `import_candidates.py`.
-- F-314: defer — clarify in `seed_registry.py` docstring + JSON header.
+- F-314: done — `seed_registry.py` now reads the preserved `data/legacy/` JSONs.
 - F-315: defer — add README to `strategies/` clarifying status.
 - F-316: defer — final grep across full repo, then move tools/ to `_archived_tools/`.
 

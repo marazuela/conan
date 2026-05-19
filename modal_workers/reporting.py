@@ -23,7 +23,7 @@ Deferred for a later pass (not blocking first weekly run):
 - Weekly strategic PDF with scanner health trends + coverage maps
 - Rendering from full dossier markdown rather than just rationales
 
-v1 reference: `unified_system/unified_system/tools/report_generator.py::generate_weekly_strategic`.
+Historical v1 reference: `unified_system/unified_system/tools/report_generator.py::generate_weekly_strategic`.
 """
 
 from __future__ import annotations

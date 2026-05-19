@@ -2,8 +2,8 @@
 Phase 1 acceptance tests — every watchlist row maps to exactly one asset and
 the right number of events per status. Pure-Python transform, no DB.
 
-Source watchlist fixture is the live v1 file at
-unified_system/unified_system/signals/legacy_t1/pdufa_watchlist.json.
+Source watchlist fixture is the preserved legacy export at
+data/legacy/pdufa_watchlist.json.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from modal_workers.scanners.fda_event_state import (
 
 WATCHLIST_PATH = (
     Path(__file__).resolve().parents[2]
-    / "unified_system/unified_system/signals/legacy_t1/pdufa_watchlist.json"
+    / "data/legacy/pdufa_watchlist.json"
 )
 
 

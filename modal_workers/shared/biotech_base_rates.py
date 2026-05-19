@@ -7,9 +7,8 @@ of truth for indication regex patterns and the Supabase `phase3_base_rates`
 table reader.
 
 The table is seeded by `migrations/seed_registry.py` from
-`unified_system/unified_system/config/phase3_approval_base_rates.json` and
-includes a `default` row at 0.58 (used as fallback when no indication regex
-matches).
+`data/legacy/phase3_approval_base_rates.json` and includes a `default` row at
+0.58 (used as fallback when no indication regex matches).
 """
 
 from __future__ import annotations

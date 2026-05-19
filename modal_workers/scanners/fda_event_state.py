@@ -2,9 +2,9 @@
 FDA event-state helpers — transforms the legacy pdufa_watchlist.json payload into
 the canonical fda_assets / fda_regulatory_events / fda_event_evidence shape.
 
-The watchlist JSON is the v1 source of truth (see
-unified_system/unified_system/signals/legacy_t1/pdufa_watchlist.json). v2 makes
-Postgres authoritative and keeps the JSON as a rollback-only export.
+The watchlist JSON is a preserved v1 export (see
+data/legacy/pdufa_watchlist.json). v2 makes Postgres authoritative and keeps the
+JSON as a rollback-only export.
 
 This module is pure: transform_watchlist_payload takes a list of dicts and
 returns the shape that the backfill script will INSERT. No DB I/O. The
