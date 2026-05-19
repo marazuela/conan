@@ -127,6 +127,15 @@ def _resolve_profile(sig: Signal, cfg: ScannerConfig) -> str:
     return mapped or cfg.default_scoring_profile
 
 
+# Profiles intentionally NOT scored by the legacy v1 rubric. Per DECISIONS.md
+# C1, fda_event signals are routed to the v3 orchestrator (ingestion →
+# documents → asset_documents → orchestrator_runs); their score/band live on
+# fda_event_features + the orchestrator, not WEIGHTS (a frozen preservation
+# covenant — adding fda_event there would violate the rubric_engine covenant).
+# Emit the signals row unscored rather than raising UnknownProfile.
+UNSCORED_PROFILES = {"fda_event"}
+
+
 _VALID_DIRECTIONS = {"long", "short", "neutral"}
 
 
@@ -214,12 +223,26 @@ def _signal_to_row(
         if estimate is not None:
             scoring_payload["dimensions"] = estimate.dimensions
 
-    scoring_input: Dict[str, Any] = {
-        "scoring_profile": profile,
-        "raw_data": scoring_payload,
-    }
-    scoring_provenance = "heuristic" if estimate is not None else "scanner"
-    scored = score_signal(scoring_input, provenance=scoring_provenance)
+    if profile in UNSCORED_PROFILES:
+        # Bypass the legacy rubric (DECISIONS.md C1). Emit unscored; the v3
+        # orchestrator + fda_event_features carry the real score/band.
+        estimate = None
+        raw_dims = None
+        scored = {
+            "dimensions": {},
+            "score": None,
+            "band": None,
+            "auto_caps_triggered": [],
+            "demotion_reason": None,
+            "missing_dimensions": [],
+        }
+    else:
+        scoring_input: Dict[str, Any] = {
+            "scoring_profile": profile,
+            "raw_data": scoring_payload,
+        }
+        scoring_provenance = "heuristic" if estimate is not None else "scanner"
+        scored = score_signal(scoring_input, provenance=scoring_provenance)
 
     persisted_dimensions: Dict[str, Any]
     extensions: Dict[str, Any] = dict(sig.extensions or {})
@@ -254,6 +277,16 @@ def _signal_to_row(
                 missing_dimensions=list(scored["missing_dimensions"]),
                 data_freshness=data_freshness,
             )
+
+    if profile in UNSCORED_PROFILES and "scoring_meta" not in extensions:
+        extensions["scoring_meta"] = build_scoring_meta(
+            provenance="unscored",
+            supported_dims=[],
+            defaulted_dims=[],
+            requires_resolution=True,
+            missing_dimensions=None,
+            data_freshness=data_freshness,
+        )
 
     if "scoring_meta" in extensions:
         meta_errors = validate_scoring_meta(extensions["scoring_meta"])
