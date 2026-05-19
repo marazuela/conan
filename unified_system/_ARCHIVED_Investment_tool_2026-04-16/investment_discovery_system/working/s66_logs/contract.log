@@ -1,7 +1,0 @@
-07:16:57 [run_scanner] INFO: Running contract: USAspending.gov contract awards
-07:16:58 [contract_monitor] INFO: Page 1: 10 raw, 10 kept (total available: 0)
-07:16:58 [contract_monitor] INFO: Total awards fetched: 10 (after stale filtering)
-07:16:58 [contract_monitor] INFO: UNMATCHED HIGH-VALUE: CALIFORNIA DAIRIES INC | $71M | Department of Agriculture — consider adding to CONTRACTOR_TICKER_MAP
-07:16:58 [contract_monitor] INFO: UNMATCHED HIGH-VALUE: MISSOURI HIGHER EDUCATION LOAN AUTHORITY | $128M | Department of Education — consider adding to CONTRACTOR_TICKER_MAP
-07:16:58 [run_scanner] INFO:   contract: 0 signals in 1.4s
-OK: contract — 0 signals in 1.4s
