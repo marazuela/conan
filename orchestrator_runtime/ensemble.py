@@ -154,6 +154,7 @@ def run_streaming_ensemble(
     serialize to stay under the 30K input tokens/min cap; once Tier-2+ is
     available, switch to asyncio.gather for true parallelism."""
     runs: List[EnsembleRun] = []
+    last_exc: Optional[Exception] = None
     for idx in range(n):
         logger.info("Ensemble streaming run %d/%d", idx + 1, n)
         try:
@@ -164,6 +165,7 @@ def run_streaming_ensemble(
             )
         except anthropic.APIError as exc:
             logger.warning("Ensemble run %d failed: %s; continuing", idx + 1, exc)
+            last_exc = exc
             continue
         if r:
             runs.append(r)
@@ -171,7 +173,12 @@ def run_streaming_ensemble(
                         idx + 1, n, r.direction, r.conviction_pct, r.cost_usd)
 
     if not runs:
-        raise RuntimeError("Ensemble produced 0 successful runs")
+        cause = (
+            f"; last error: {type(last_exc).__name__}: {last_exc}"
+            if last_exc is not None
+            else "; no API exception captured (Stage 9 JSON parse failed every slot)"
+        )
+        raise RuntimeError(f"Ensemble produced 0 successful runs out of {n} attempted{cause}")
 
     return _aggregate(runs, mode="streaming")
 
@@ -188,38 +195,31 @@ def _run_one_streaming(
     max_tokens_synth: int,
     max_tokens_extract: int,
 ) -> Optional[EnsembleRun]:
-    # Stage 1 uses temperature where the selected model still accepts it.
-    s1 = a_client._client.messages.create(
-        **_stage_1_request_params(
-            model=model,
-            max_tokens=max_tokens_synth,
-            temperature=temperature,
-            stage_1_system=stage_1_system,
-            stage_1_user_content=stage_1_user_content,
-        )
+    stage_1_kwargs = _stage_1_request_params(
+        model=model,
+        max_tokens=max_tokens_synth,
+        temperature=temperature,
+        stage_1_system=stage_1_system,
+        stage_1_user_content=stage_1_user_content,
     )
-    s1_text = "".join(b.text for b in s1.content if b.type == "text")
-    s1_in = s1.usage.input_tokens
-    s1_out = s1.usage.output_tokens
-    s1_thinking = sum(getattr(b, "tokens", 0) for b in s1.content if b.type == "thinking")
-    s1_cache_read = getattr(s1.usage, "cache_read_input_tokens", 0) or 0
-    s1_cache_create = getattr(s1.usage, "cache_creation_input_tokens", 0) or 0
-    s1_cost = estimate_cost(model, s1_in, s1_out)
+    s1 = a_client.call(
+        system=stage_1_kwargs["system"],
+        messages=stage_1_kwargs["messages"],
+        model=stage_1_kwargs["model"],
+        max_tokens=stage_1_kwargs["max_tokens"],
+        temperature=stage_1_kwargs.get("temperature"),
+    )
+    s1_text = s1.text
 
-    # Stage 9 (deterministic — temperature 0)
-    t0 = time.time()
-    s9 = a_client._client.messages.create(
-        model=extractor_model,
-        max_tokens=max_tokens_extract,
+    # Stage 9 is deterministic, so do not pass a temperature override.
+    s9 = a_client.call(
         system=stage_9_system,
         messages=[{"role": "user", "content": f"Cited prose to extract:\n\n{s1_text}"}],
+        model=extractor_model,
+        max_tokens=max_tokens_extract,
     )
-    s9_text = "".join(b.text for b in s9.content if b.type == "text")
-    s9_in = s9.usage.input_tokens
-    s9_out = s9.usage.output_tokens
-    s9_cost = estimate_cost(extractor_model, s9_in, s9_out)
+    s9_text = s9.text
     parsed = parse_json_or_none(s9_text)
-    s9_latency = int((time.time() - t0) * 1000)
 
     if not parsed:
         logger.warning("Run %d: Stage 9 JSON parse failed", run_idx)
@@ -248,13 +248,13 @@ def _run_one_streaming(
         conviction_pct=conviction,
         evidence_quality=evidence_quality,
         parsed_json=parsed,
-        input_tokens=s1_in + s9_in,
-        output_tokens=s1_out + s9_out,
-        thinking_tokens=s1_thinking,
-        cache_read_tokens=s1_cache_read,
-        cache_creation_tokens=s1_cache_create,
-        cost_usd=s1_cost + s9_cost,
-        latency_ms=s9_latency,
+        input_tokens=s1.input_tokens + s9.input_tokens,
+        output_tokens=s1.output_tokens + s9.output_tokens,
+        thinking_tokens=s1.thinking_tokens + s9.thinking_tokens,
+        cache_read_tokens=s1.cache_read_tokens + s9.cache_read_tokens,
+        cache_creation_tokens=s1.cache_creation_tokens + s9.cache_creation_tokens,
+        cost_usd=s1.cost_usd + s9.cost_usd,
+        latency_ms=s1.latency_ms + s9.latency_ms,
     )
 
 
