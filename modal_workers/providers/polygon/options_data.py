@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol
 
 from modal_workers.providers.polygon.base import PolygonClient
 
@@ -83,21 +83,12 @@ class PolygonOptionsData:
         self.client = client
         self.event_window_days = event_window_days
         self.min_liquid_contracts = min_liquid_contracts
-        # Per-instance chain cache. Each scanner run builds a fresh provider
-        # via _build_polygon_providers(), so the cache lifetime == one run.
-        # Bridge runs call get_chain twice per event (straddle + liquidity)
-        # for the same (ticker, expiry); memoizing halves the option-chain
-        # API calls and is the largest perf win in the bridge.
-        self._chain_cache: Dict[Tuple[str, Optional[date]], Optional[List[Dict[str, Any]]]] = {}
 
     # --------------------------------------------------------------
     # Chain snapshot
     # --------------------------------------------------------------
 
     def get_chain(self, ticker: str, expiry: Optional[date] = None) -> Optional[List[Dict[str, Any]]]:
-        key = (ticker, expiry)
-        if key in self._chain_cache:
-            return self._chain_cache[key]
         params: Dict[str, Any] = {"limit": 250}
         if expiry is not None:
             params["expiration_date"] = expiry.isoformat()
@@ -107,9 +98,9 @@ class PolygonOptionsData:
                 break
             results = page.get("results") or []
             contracts.extend(results)
-        result = contracts if contracts else None
-        self._chain_cache[key] = result
-        return result
+        if not contracts:
+            return None
+        return contracts
 
     # --------------------------------------------------------------
     # IV for a specific (strike, expiry) — returns the call IV by default
