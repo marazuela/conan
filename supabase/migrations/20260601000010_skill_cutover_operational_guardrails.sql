@@ -6,7 +6,8 @@
 --      work exists;
 --   2. replacing legacy asset-linker/fact-extractor watchdog checks with
 --      local edge-queue and fda_assets data-quality checks;
---   3. excluding far-future edges from the default local asset-linker queue;
+--   3. prioritizing high-signal/current local asset-linker edges ahead of
+--      sponsor-only or far-future backlog rows;
 --   4. allowing skill_watchdog to write operator_flags under its canonical
 --      source; and
 --   5. demoting placeholder fda_assets rows when exactly one clean same-ticker
@@ -78,10 +79,6 @@ JOIN public.v_asset_linker_skill_assets a ON a.id = e.asset_id
 CROSS JOIN current_hash h
 WHERE e.analyzed_at IS NULL
   AND e.alias_set_hash = h.alias_set_hash
-  AND (
-    d.published_at IS NULL
-    OR d.published_at <= now() + interval '30 days'
-  )
   AND NOT EXISTS (
     SELECT 1
       FROM public.document_asset_linker_attempts att
@@ -91,7 +88,18 @@ WHERE e.analyzed_at IS NULL
        AND att.status = 'error'
        AND att.created_at > now() - interval '24 hours'
   )
-ORDER BY e.match_strength DESC, d.published_at DESC NULLS LAST, e.matched_at;
+ORDER BY
+  e.match_strength DESC,
+  CASE WHEN EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(e.matched_aliases) AS hit
+    WHERE hit->>'kind' IN (
+      'drug_name', 'generic', 'brand', 'nct_id', 'code', 'ticker', 'abbreviation'
+    )
+  ) THEN 0 ELSE 1 END,
+  CASE WHEN d.published_at > now() + interval '30 days' THEN 1 ELSE 0 END,
+  d.published_at DESC NULLS LAST,
+  e.matched_at;
 
 
 CREATE OR REPLACE FUNCTION public._v3_pipeline_watchdog()
@@ -245,6 +253,67 @@ BEGIN
        AND resolved_at IS NULL;
   END IF;
   v_results := v_results || jsonb_build_object('asset_linker_skill_queue_future_dated', v_n);
+
+  SELECT count(*) INTO v_n
+    FROM public.fda_asset_aliases
+   WHERE active = true;
+
+  IF v_n = 0 THEN
+    INSERT INTO public.operator_flags (severity, source, kind, title, body, evidence)
+    VALUES (
+      'warn',
+      'v3_pipeline_watchdog',
+      'fda_asset_aliases_empty',
+      'Supplemental FDA asset alias table is empty',
+      'fda_asset_aliases has zero active rows. Layer-1 asset fields still keep the deterministic prefilter functional, but brand/NCT/code recall is missing until seed_fda_asset_aliases runs.',
+      jsonb_build_object(
+        'active_aliases', 0,
+        'next_step', 'run modal_workers.scripts.seed_fda_asset_aliases initial seed'
+      )
+    )
+    ON CONFLICT DO NOTHING;
+  ELSE
+    UPDATE public.operator_flags
+       SET resolved_at = now(),
+           resolved_note = 'auto-resolved by _v3_pipeline_watchdog: active supplemental aliases exist',
+           updated_at = now()
+     WHERE source = 'v3_pipeline_watchdog'
+       AND kind = 'fda_asset_aliases_empty'
+       AND resolved_at IS NULL;
+  END IF;
+  v_results := v_results || jsonb_build_object('fda_asset_aliases_active', v_n);
+
+  SELECT count(*)
+    INTO v_n
+  FROM public.v_asset_linker_skill_queue q
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(q.matched_aliases) AS hit
+    WHERE hit->>'kind' <> 'ticker'
+  );
+
+  IF v_n > 0
+     AND v_n = (SELECT count(*) FROM public.v_asset_linker_skill_queue) THEN
+    INSERT INTO public.operator_flags (severity, source, kind, title, body, evidence)
+    VALUES (
+      'warn',
+      'v3_pipeline_watchdog',
+      'asset_linker_skill_queue_ticker_only',
+      'Local asset-linker queue is ticker-only',
+      'Every pending asset-linker edge is ticker-only. This usually means Layer-1 alias lookup or supplemental alias seeding is not active, so the queue is missing drug/name/code/NCT recall.',
+      jsonb_build_object('ticker_only_edges', v_n)
+    )
+    ON CONFLICT DO NOTHING;
+  ELSE
+    UPDATE public.operator_flags
+       SET resolved_at = now(),
+           resolved_note = 'auto-resolved by _v3_pipeline_watchdog: queue contains non-ticker alias kinds or is empty',
+           updated_at = now()
+     WHERE source = 'v3_pipeline_watchdog'
+       AND kind = 'asset_linker_skill_queue_ticker_only'
+       AND resolved_at IS NULL;
+  END IF;
+  v_results := v_results || jsonb_build_object('asset_linker_skill_queue_ticker_only', v_n);
 
   SELECT count(*),
          COALESCE(jsonb_agg(jsonb_build_object(

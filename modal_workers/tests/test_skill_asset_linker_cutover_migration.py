@@ -18,10 +18,20 @@ MIGRATION = (
     / "migrations"
     / "20260601000000_skill_asset_linker_cutover.sql"
 )
+GUARDRAILS_MIGRATION = (
+    REPO_ROOT
+    / "supabase"
+    / "migrations"
+    / "20260601000010_skill_cutover_operational_guardrails.sql"
+)
 
 
 def _sql() -> str:
     return MIGRATION.read_text()
+
+
+def _guardrails_sql() -> str:
+    return GUARDRAILS_MIGRATION.read_text()
 
 
 # ----------------------------------------------------------------------
@@ -81,6 +91,54 @@ def test_skill_queue_is_edge_shaped() -> None:
     assert "att.status = 'error'" in sql
     assert "att.created_at > now() - interval '24 hours'" in sql
     assert "att.asset_id = e.asset_id" in sql
+
+
+def test_skill_queue_prioritizes_high_signal_current_edges() -> None:
+    sql = _sql()
+
+    queue_sql = sql.split(
+        "CREATE OR REPLACE VIEW public.v_asset_linker_skill_queue AS", 1
+    )[1].split("COMMENT ON VIEW public.v_asset_linker_skill_queue", 1)[0]
+
+    assert "jsonb_array_elements(e.matched_aliases)" in queue_sql
+    for high_signal_kind in (
+        "'drug_name'",
+        "'generic'",
+        "'brand'",
+        "'nct_id'",
+        "'code'",
+        "'ticker'",
+        "'abbreviation'",
+    ):
+        assert high_signal_kind in queue_sql
+    assert "THEN 0 ELSE 1 END" in queue_sql
+    assert "d.published_at > now() + interval '30 days'" in queue_sql
+    assert "d.published_at DESC NULLS LAST" in queue_sql
+
+
+def test_guardrails_queue_preserves_high_signal_priority() -> None:
+    sql = _guardrails_sql()
+    queue_sql = sql.split(
+        "CREATE OR REPLACE VIEW public.v_asset_linker_skill_queue AS", 1
+    )[1].split("CREATE OR REPLACE FUNCTION public._v3_pipeline_watchdog()", 1)[0]
+
+    assert "jsonb_array_elements(e.matched_aliases)" in queue_sql
+    assert "hit->>'kind' IN (" in queue_sql
+    assert "'drug_name'" in queue_sql
+    assert "'ticker'" in queue_sql
+    assert "d.published_at > now() + interval '30 days'" in queue_sql
+    # Guardrails should demote, not filter out, far-future backlog edges.
+    assert "d.published_at <= now() + interval '30 days'" not in queue_sql
+
+
+def test_guardrails_watchdog_flags_empty_alias_and_ticker_only_queue() -> None:
+    sql = _guardrails_sql()
+
+    assert "fda_asset_aliases_empty" in sql
+    assert "FROM public.fda_asset_aliases" in sql
+    assert "WHERE active = true" in sql
+    assert "asset_linker_skill_queue_ticker_only" in sql
+    assert "Layer-1 alias lookup or supplemental alias seeding is not active" in sql
 
 
 def test_skill_assets_filter_noisy_placeholder_assets() -> None:
@@ -255,10 +313,28 @@ def test_alias_set_hash_function_replaces_old_hash() -> None:
     # New hash function
     assert "CREATE OR REPLACE FUNCTION public.asset_linker_alias_set_hash()" in sql
     assert "FROM public.fda_asset_aliases a WHERE a.active = true" in sql
-    # Ticker set included so asset add/remove invalidates hash too
+    # Layer-1 asset fields included so asset add/update/remove invalidates hash too
     assert "FROM public.v_asset_linker_skill_assets fa" in sql
+    assert "coalesce(fa.ticker, '')" in sql
+    assert "coalesce(fa.drug_name, '')" in sql
+    assert "coalesce(fa.generic_name, '')" in sql
+    assert "coalesce(fa.sponsor_name, '')" in sql
     # Old hash function name is gone (renamed)
     assert "asset_linker_skill_asset_set_hash" not in sql
+
+
+def test_asset_alias_lookup_includes_layer1_asset_fields() -> None:
+    sql = _sql()
+
+    assert "CREATE OR REPLACE VIEW public.v_asset_alias_lookup" in sql
+    assert "fa.drug_name AS alias" in sql
+    assert "'drug_name'::text AS alias_kind" in sql
+    assert "fa.generic_name AS alias" in sql
+    assert "'generic'::text AS alias_kind" in sql
+    assert "fa.sponsor_name AS alias" in sql
+    assert "'sponsor_alias'::text AS alias_kind" in sql
+    assert "FROM public.fda_asset_aliases a" in sql
+    assert "WHERE a.active = true" in sql
 
 
 def test_sweeper_function_has_three_match_paths() -> None:
@@ -273,7 +349,9 @@ def test_sweeper_function_has_three_match_paths() -> None:
     assert "exact_hits AS (" in sql
     assert "ticker_hits AS (" in sql
 
-    # tsv path uses tsvector @@ tsquery, excludes nct_id/code kinds
+    # tsv path uses tsvector @@ tsquery against Layer 1 + Layer 2 aliases,
+    # excludes nct_id/code kinds
+    assert "JOIN public.v_asset_alias_lookup a" in sql
     assert "td.raw_text_tsv @@ a.alias_tsquery" in sql
     assert "a.alias_kind NOT IN ('nct_id', 'code')" in sql
 
@@ -288,6 +366,8 @@ def test_sweeper_function_has_three_match_paths() -> None:
 
     # Always marks scanned docs (including zero-match) to prevent rescan
     assert "INSERT INTO public.doc_asset_prefilter_runs (" in sql
+    # Cron sweeps current docs before far-future backlog rows.
+    assert "d.published_at > now() + interval '30 days'" in sql
 
     # Returns docs_scanned, edges_emitted, alias_set_hash
     assert "'docs_scanned'" in sql

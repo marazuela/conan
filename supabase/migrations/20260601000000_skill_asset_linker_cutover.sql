@@ -325,13 +325,74 @@ COMMENT ON TABLE public.doc_asset_prefilter_runs IS
   'zero-candidate docs are not rescanned needlessly.';
 
 
+-- v_asset_alias_lookup — one read surface for Layer 1 asset fields plus Layer 2
+-- supplemental aliases. Tickers stay out because they require case-sensitive
+-- regex matching in the dedicated ticker path below.
+CREATE OR REPLACE VIEW public.v_asset_alias_lookup AS
+SELECT
+  fa.id AS asset_id,
+  fa.drug_name AS alias,
+  lower(trim(fa.drug_name)) AS alias_normalized,
+  'drug_name'::text AS alias_kind,
+  phraseto_tsquery('simple', lower(trim(fa.drug_name))) AS alias_tsquery
+FROM public.v_asset_linker_skill_assets fa
+WHERE NULLIF(trim(coalesce(fa.drug_name, '')), '') IS NOT NULL
+  AND lower(trim(fa.drug_name)) NOT IN (
+    'peptide', 'concept', 'default', 'ex-99', '(auto-discovered)',
+    'nucleotide', 'drug', 'tablet', 'capsule', 'injection'
+  )
+
+UNION
+SELECT
+  fa.id AS asset_id,
+  fa.generic_name AS alias,
+  lower(trim(fa.generic_name)) AS alias_normalized,
+  'generic'::text AS alias_kind,
+  phraseto_tsquery('simple', lower(trim(fa.generic_name))) AS alias_tsquery
+FROM public.v_asset_linker_skill_assets fa
+WHERE NULLIF(trim(coalesce(fa.generic_name, '')), '') IS NOT NULL
+  AND lower(trim(fa.generic_name)) NOT IN (
+    'peptide', 'concept', 'default', 'ex-99', '(auto-discovered)',
+    'nucleotide', 'drug', 'tablet', 'capsule', 'injection'
+  )
+
+UNION
+SELECT
+  fa.id AS asset_id,
+  fa.sponsor_name AS alias,
+  lower(trim(fa.sponsor_name)) AS alias_normalized,
+  'sponsor_alias'::text AS alias_kind,
+  phraseto_tsquery('simple', lower(trim(fa.sponsor_name))) AS alias_tsquery
+FROM public.v_asset_linker_skill_assets fa
+WHERE NULLIF(trim(coalesce(fa.sponsor_name, '')), '') IS NOT NULL
+  AND lower(trim(fa.sponsor_name)) NOT IN (
+    'peptide', 'concept', 'default', 'ex-99', '(auto-discovered)',
+    'nucleotide', 'drug', 'tablet', 'capsule', 'injection'
+  )
+
+UNION
+SELECT
+  a.asset_id,
+  a.alias,
+  a.alias_normalized,
+  a.alias_kind,
+  a.alias_tsquery
+FROM public.fda_asset_aliases a
+WHERE a.active = true;
+
+COMMENT ON VIEW public.v_asset_alias_lookup IS
+  'Layer 1 fda_assets aliases (drug/generic/sponsor) plus active supplemental '
+  'fda_asset_aliases. Excludes ticker aliases, which are matched case-sensitively '
+  'from fda_assets.ticker in fn_generate_doc_asset_candidates.';
+
+
 -- ============================================================
 -- Deterministic edge prefilter — hash function
 -- ============================================================
 
--- alias_set_hash includes the full active alias inventory (Layer 2) plus the
--- ticker + asset_id set (Layer 1). Any alias add/remove/deactivate OR asset
--- add/remove invalidates the hash, which in turn invalidates
+-- alias_set_hash includes the full active alias inventory plus Layer 1 asset
+-- fields. Any alias add/remove/deactivate OR asset field update invalidates the
+-- hash, which in turn invalidates
 -- doc_asset_prefilter_runs entries and triggers a sweeper rescan.
 CREATE OR REPLACE FUNCTION public.asset_linker_alias_set_hash()
 RETURNS text
@@ -348,7 +409,14 @@ AS $$
       ''
     ) || '#' ||
     COALESCE(
-      (SELECT string_agg(fa.id::text || '|' || fa.ticker, ',' ORDER BY fa.id)
+      (SELECT string_agg(
+        fa.id::text || '|' ||
+        coalesce(fa.ticker, '') || '|' ||
+        coalesce(fa.drug_name, '') || '|' ||
+        coalesce(fa.generic_name, '') || '|' ||
+        coalesce(fa.sponsor_name, ''),
+        ',' ORDER BY fa.id
+      )
        FROM public.v_asset_linker_skill_assets fa),
       ''
     )
@@ -399,14 +467,30 @@ WHERE e.analyzed_at IS NULL
       AND att.status = 'error'
       AND att.created_at > now() - interval '24 hours'
   )
-ORDER BY e.match_strength DESC, d.published_at DESC NULLS LAST, e.matched_at;
+ORDER BY
+  e.match_strength DESC,
+  -- Drug/generic/brand/code/NCT/ticker edges are higher-signal than sponsor-only
+  -- mentions. Keep sponsor-only in the queue, but drain it later.
+  CASE WHEN EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(e.matched_aliases) AS hit
+    WHERE hit->>'kind' IN (
+      'drug_name', 'generic', 'brand', 'nct_id', 'code', 'ticker', 'abbreviation'
+    )
+  ) THEN 0 ELSE 1 END,
+  -- Future-dated clinical-trial rows are useful backlog, not the first rows a
+  -- skill run should spend time on when current FDA docs exist.
+  CASE WHEN d.published_at > now() + interval '30 days' THEN 1 ELSE 0 END,
+  d.published_at DESC NULLS LAST,
+  e.matched_at;
 
 COMMENT ON VIEW public.v_asset_linker_skill_queue IS
   'Edge-shaped queue: (document, asset) candidate pairs the local Cursor '
   'asset-linker skill should analyze. Pre-filtered by the deterministic '
   'fn_generate_doc_asset_candidates sweeper; the skill spends LLM tokens '
   'only on these pairs. Filtered to current alias_set_hash; rows with a '
-  'recent error attempt are held off for 24h.';
+  'recent error attempt are held off for 24h. Prioritizes high-signal aliases '
+  'and current documents ahead of sponsor-only or far-future backlog edges.';
 
 
 ALTER TABLE public.asset_linker_runs
@@ -453,11 +537,15 @@ BEGIN
       WHERE r.document_id = d.id
         AND r.alias_set_hash = v_hash
     )
-    ORDER BY d.published_at DESC NULLS LAST, d.id
+    ORDER BY
+      CASE WHEN d.published_at > now() + interval '30 days' THEN 1 ELSE 0 END,
+      d.published_at DESC NULLS LAST,
+      d.id
     LIMIT p_limit
   ),
-  -- tsvector path: brand, generic, drug_name, sponsor_alias, sponsor_stem,
-  -- abbreviation. GIN-indexed; bulk of the matching work runs here.
+  -- tsvector path: Layer 1 drug/generic/sponsor names plus Layer 2 brand,
+  -- generic, drug_name, sponsor_alias, sponsor_stem, abbreviation.
+  -- GIN-indexed; bulk of the matching work runs here.
   tsv_hits AS (
     SELECT
       td.id AS document_id,
@@ -469,9 +557,8 @@ BEGIN
         'path',             'tsvector'
       ) AS hit
     FROM target_docs td
-    JOIN public.fda_asset_aliases a
-      ON a.active = true
-     AND a.alias_kind NOT IN ('nct_id', 'code')
+    JOIN public.v_asset_alias_lookup a
+      ON a.alias_kind NOT IN ('nct_id', 'code')
      AND td.raw_text_tsv @@ a.alias_tsquery
   ),
   -- exact + word-boundary path: NCT IDs and drug codes — fuzz unacceptable.

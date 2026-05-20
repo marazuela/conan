@@ -38,6 +38,10 @@ for the full design.
   `alias_kind='ticker'` (tickers live on `fda_assets.ticker`), reject
   blocklisted normalized aliases (`peptide`, `concept`, `default`, etc.),
   and require NCT IDs match `^nct[0-9]{8}$`.
+- `public.v_asset_alias_lookup` exists and returns Layer 1 aliases from
+  `fda_assets` (`drug_name`, `generic_name`, `sponsor_name`) even when
+  `fda_asset_aliases` is still empty. Tickers are intentionally absent from
+  this view and matched by the dedicated case-sensitive ticker path.
 - `public.doc_asset_candidates` table exists with a UNIQUE constraint on
   `(document_id, asset_id, alias_set_hash)` and a partial index on
   `WHERE analyzed_at IS NULL`.
@@ -48,6 +52,8 @@ for the full design.
   string. The old function `asset_linker_skill_asset_set_hash` is gone.
 - Inserting a row into `fda_asset_aliases` changes the hash. Deleting it
   changes the hash back.
+- Updating an active `fda_assets.drug_name`, `generic_name`, `sponsor_name`, or
+  `ticker` changes the hash. Revert the update immediately after the check.
 
 ### Sweeper
 - `SELECT public.fn_generate_doc_asset_candidates(50);` returns a jsonb
@@ -59,9 +65,9 @@ for the full design.
 
 ### Backfill
 - Initial seed: kick `fn_generate_doc_asset_candidates(50000)` once over
-  the 3142-doc backlog. Wall time should be <60s; CPU on Supabase side
-  near-zero. The sweeper is set-based SQL with GIN-indexed tsvector
-  matching — no PL/pgSQL row loop.
+  the current document backlog. Wall time should be low for the live corpus;
+  CPU on Supabase side should stay modest. The sweeper is set-based SQL with
+  GIN-indexed tsvector matching — no PL/pgSQL row loop.
 
 ## Alias Seed Pass
 
@@ -84,6 +90,9 @@ for the full design.
   (<200 unless seed was just run).
 - Operator-flag should be raised if daily-aliases-added exceeds the
   threshold in `internal_config`.
+- Until the initial seed has run, `_v3_pipeline_watchdog()` should raise
+  `kind='fda_asset_aliases_empty'`. It should auto-resolve after active
+  aliases exist.
 
 ## Skill Output
 
@@ -93,10 +102,19 @@ for the full design.
    alias_set_hash, ...` — i.e. ONE row per `(doc, asset)` edge, NOT one
   row per doc.
 - `SELECT count(*) FROM public.v_asset_linker_skill_queue` returns a
-  bounded high-signal batch (in the thousands at most for the 3142-doc
+  bounded high-signal batch (in the thousands at most for the current live
   backlog post-seed).
-- Rows are ordered by `match_strength DESC` so the skill processes
-  multi-alias-kind matches first.
+- Rows are ordered by `match_strength DESC`, then high-signal alias kinds
+  (`drug_name`, `generic`, `brand`, `nct_id`, `code`, `ticker`,
+  `abbreviation`), then current documents before far-future backlog rows.
+- Queue composition is not ticker-only:
+  `jsonb_array_elements(matched_aliases)->>'kind'` should include drug/name
+  or supplemental alias kinds after the Layer 1 fix and seed/backfill.
+- If the queue is non-empty and every edge is ticker-only,
+  `_v3_pipeline_watchdog()` raises
+  `kind='asset_linker_skill_queue_ticker_only'`. This should auto-resolve
+  once Layer 1 alias lookup and/or supplemental seed aliases are producing
+  non-ticker edges.
 
 ### Skill writes
 - A small dry run of the local `asset-linker` skill produces decisions
