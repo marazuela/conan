@@ -340,3 +340,68 @@ def test_news_empty_results_returns_empty_list(client_factory):
     client, _, _ = client_factory([_FakeResponse(200, payload={"results": []})])
     nd = PolygonNewsData(client)
     assert nd.get_news("AXSM") == []
+
+
+# ---------------------------------------------------------------------------
+# Per-instance caching — bridge perf regression guards
+# ---------------------------------------------------------------------------
+
+
+def test_market_cap_cached_per_instance(client_factory):
+    client, session, _ = client_factory([
+        _FakeResponse(200, payload={"results": {"market_cap": 100.0}}),
+    ])
+    md = PolygonMarketData(client)
+    assert md.get_market_cap("AXSM") == 100.0
+    assert md.get_market_cap("AXSM") == 100.0  # cache hit, no second response queued
+    assert session.request.call_count == 1
+
+
+def test_market_cap_caches_none_result(client_factory):
+    client, session, _ = client_factory([_FakeResponse(404)])
+    md = PolygonMarketData(client)
+    assert md.get_market_cap("ZZZZ") is None
+    assert md.get_market_cap("ZZZZ") is None
+    assert session.request.call_count == 1
+
+
+def test_adv_cached_per_ticker_days_pair(client_factory):
+    client, session, _ = client_factory([
+        _FakeResponse(200, payload={"results": [
+            {"c": 50.0, "v": 1_000_000},
+            {"c": 52.0, "v": 2_000_000},
+        ]}),
+    ])
+    md = PolygonMarketData(client)
+    first = md.get_adv("AXSM", days=30)
+    second = md.get_adv("AXSM", days=30)
+    assert first is not None and first == second
+    assert session.request.call_count == 1
+
+
+def test_options_get_chain_cached_per_ticker_expiry():
+    client = MagicMock()
+    contracts = [_contract(50, "call", "2026-09-19"), _contract(50, "put", "2026-09-19")]
+    client.paginate.return_value = iter([{"results": contracts}])
+    od = PolygonOptionsData(client)
+    first = od.get_chain("AXSM")
+    second = od.get_chain("AXSM")
+    assert first == second
+    # paginate is consumed once on the first call; the second hits the cache.
+    assert client.paginate.call_count == 1
+
+
+def test_options_straddle_and_liquidity_share_chain_cache():
+    # Straddle and liquidity both call get_chain(ticker) — verify one fetch suffices.
+    client = MagicMock()
+    deep_chain = []
+    for strike in (40, 45, 50, 55, 60, 65, 70, 75, 80, 85):
+        deep_chain.append(_contract(strike, "call", "2026-09-19", oi=1500))
+        deep_chain.append(_contract(strike, "put", "2026-09-19", oi=1500))
+    client.paginate.return_value = iter([{"results": deep_chain}])
+    od = PolygonOptionsData(client)
+    straddle = od.get_straddle_implied_move("AXSM", date(2026, 9, 15))
+    liquidity = od.get_event_window_liquidity("AXSM", date(2026, 9, 15))
+    assert straddle is not None
+    assert liquidity is not None
+    assert client.paginate.call_count == 1
