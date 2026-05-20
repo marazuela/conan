@@ -10,16 +10,23 @@ See [skill_asset_linker_edge_prefilter_plan.md](skill_asset_linker_edge_prefilte
 for the full design.
 
 ## Cron And Dispatch
-- `cron.job` has no rows named `v3-asset-linker-pass1` or `v3-asset-linker-pass2`.
-- `cron.job` has active rows named `v3-fact-extractor`, `v3-doc-asset-prefilter`
-  (every 2 min), and `v3-asset-alias-weekly-refresh` (Mon 03:00 UTC).
+- `cron.job` has no rows named `v3-asset-linker-pass1`,
+  `v3-asset-linker-pass2`, or `v3-fact-extractor` — the cutover unscheduled
+  all three LLM-ingestion crons.
+- `cron.job` has active rows named `v3-doc-asset-prefilter` (every 2 min)
+  and `v3-asset-alias-weekly-refresh` (Mon 03:00 UTC). These are the only
+  two crons the watchdog protects post-cutover.
 - `SELECT public.v3_ingestion_scheduler_watchdog();` returns
   `asset_linker_mode = 'cursor_skill_edge_queue'` and `protected_jobs`
-  containing all three protected crons.
-- `compute_v3` rejects `asset_linker_run` and `asset_linker_pass2_run` as
-  unknown actions.
+  containing exactly the two zero-LLM-cost protected crons (no
+  fact-extractor, no asset-linker).
+- `compute_v3` rejects `asset_linker_run`, `asset_linker_pass2_run`, AND
+  `fact_extractor_run` as unknown actions.
 - `compute_v3` accepts `seed_fda_asset_aliases_refresh`.
-- `v3-fact-extractor` remains present and active.
+- `modal.Function.from_name("conan-v3-orchestrator", "fact_extractor_run")
+  (...)` returns the disabled stub
+  `{"return_code": 0, "disabled": True, "reason": "..."}` rather than
+  spending Anthropic budget.
 
 ## Deterministic Edge Prefilter
 
