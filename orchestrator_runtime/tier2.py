@@ -335,6 +335,58 @@ def build_tier2_input_blob(
     )
 
 
+# Structured (jsonb array/object) fields that can arrive double-encoded as a
+# JSON *string* at the Postgres `net.http_post` → Modal/FastAPI boundary.
+# Only these known container fields are repaired — scalar/text fields are
+# left untouched so genuine bad input still fails validation loudly.
+_TIER2_JSON_CONTAINER_FIELDS: tuple[str, ...] = (
+    "hypotheses",
+    "cited_prose_blocks",
+    "key_facts",
+    "uncertainties",
+    "citations",
+    "similar_resolved_case_ids",
+    "document_ids",
+    "fact_ids",
+    "citations_document_ids",
+    "citations_fact_ids",
+)
+
+
+def _coerce_json_container(value: Any) -> Any:
+    """Decode a JSON-encoded string into its list/dict. Non-strings, and
+    strings that don't parse to a list/dict, are returned unchanged so
+    downstream validation still surfaces a clear error (no silent swallow)."""
+    if not isinstance(value, str):
+        return value
+    try:
+        decoded = json.loads(value)
+    except (ValueError, TypeError):
+        return value
+    return decoded if isinstance(decoded, (list, dict)) else value
+
+
+def normalize_tier2_payload(payload: Any) -> Any:
+    """Repair the jsonb → `net.http_post` → FastAPI double-encoding where
+    structured fields (notably `hypotheses`) arrive as JSON strings instead
+    of native lists/objects, tripping the `isinstance(..., list)` checks in
+    `validate_tier2_output`. Idempotent and field-scoped: only known
+    container fields are touched, and only when string-encoded. A
+    fully-stringified payload body is decoded once up front. Well-formed
+    input is returned unchanged."""
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            return payload
+    if not isinstance(payload, dict):
+        return payload
+    for key in _TIER2_JSON_CONTAINER_FIELDS:
+        if key in payload:
+            payload[key] = _coerce_json_container(payload[key])
+    return payload
+
+
 def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
     """Return a list of validation errors. Empty list = valid Tier-2 output.
 
@@ -758,6 +810,7 @@ def complete_tier2_run(
     asset_id = run_row["asset_id"]
     payload = normalize_tier2_payload(payload)
 
+    payload = normalize_tier2_payload(payload)
     errors = validate_tier2_output(payload)
     if errors:
         sb._rest(

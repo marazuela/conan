@@ -269,6 +269,71 @@ def test_validate_tier2_output_rejects_non_dict():
 
 
 # ---------------------------------------------------------------------------
+# normalize_tier2_payload — jsonb double-encoding repair
+# ---------------------------------------------------------------------------
+
+def test_normalize_passes_through_native_list_payload():
+    payload = _valid_payload()
+    out = tier2.normalize_tier2_payload(payload)
+    assert out["hypotheses"] == payload["hypotheses"]
+    assert tier2.validate_tier2_output(out) == []
+
+
+def test_normalize_decodes_stringified_hypotheses():
+    import json
+    hyps = [
+        {"label": "bull", "kill_conditions": ["k1", "k2"]},
+        {"label": "base", "kill_conditions": ["k3", "k4"]},
+        {"label": "bear", "kill_conditions": ["k5", "k6"]},
+    ]
+    payload = _valid_payload(hypotheses=json.dumps(hyps))
+    # Without normalization the validator rejects the JSON string.
+    assert "hypotheses must be a list" in tier2.validate_tier2_output(payload)
+    out = tier2.normalize_tier2_payload(payload)
+    assert out["hypotheses"] == hyps
+    assert tier2.validate_tier2_output(out) == []
+
+
+def test_normalize_decodes_other_stringified_containers():
+    import json
+    payload = _valid_payload(
+        cited_prose_blocks=json.dumps([{"text": "x", "citations": []}]),
+        key_facts=json.dumps([{"text": "PDUFA 2026-09-15"}]),
+        similar_resolved_case_ids=json.dumps([]),
+    )
+    out = tier2.normalize_tier2_payload(payload)
+    assert out["cited_prose_blocks"] == [{"text": "x", "citations": []}]
+    assert out["key_facts"] == [{"text": "PDUFA 2026-09-15"}]
+    assert out["similar_resolved_case_ids"] == []
+    assert tier2.validate_tier2_output(out) == []
+
+
+def test_normalize_decodes_fully_stringified_body():
+    import json
+    payload = json.dumps(_valid_payload())
+    out = tier2.normalize_tier2_payload(payload)
+    assert isinstance(out, dict)
+    assert tier2.validate_tier2_output(out) == []
+
+
+def test_normalize_leaves_unparseable_string_for_loud_validation():
+    payload = _valid_payload(hypotheses="not json at all")
+    out = tier2.normalize_tier2_payload(payload)
+    # Left unchanged so the validator still rejects it (no silent swallow).
+    assert out["hypotheses"] == "not json at all"
+    assert "hypotheses must be a list" in tier2.validate_tier2_output(out)
+
+
+def test_normalize_is_idempotent():
+    import json
+    payload = _valid_payload(hypotheses=json.dumps(_valid_payload()["hypotheses"]))
+    once = tier2.normalize_tier2_payload(payload)
+    twice = tier2.normalize_tier2_payload(once)
+    assert once["hypotheses"] == twice["hypotheses"]
+    assert tier2.validate_tier2_output(twice) == []
+
+
+# ---------------------------------------------------------------------------
 # persist_tier2_assessment
 # ---------------------------------------------------------------------------
 
