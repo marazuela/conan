@@ -390,27 +390,6 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         ) or []
         assets_by_id = {row["id"]: row for row in asset_rows}
 
-    # Pre-fetch active evidence for all pending events in one round-trip
-    # rather than N+1 GETs inside the loop. Saves ~56 Supabase round-trips
-    # when 57 events are pending and is the cheapest way to reclaim
-    # wall-clock budget headroom.
-    event_ids_for_evidence = [e["id"] for e in events if e.get("id") and e.get("asset_id")]
-    evidence_by_event: Dict[str, List[Dict[str, Any]]] = {}
-    if event_ids_for_evidence:
-        evid_in_clause = ",".join(event_ids_for_evidence)
-        evidence_rows_all = client._rest(
-            "GET", "fda_event_evidence",
-            params={
-                "event_id": f"in.({evid_in_clause})",
-                "evidence_status": "eq.active",
-                "select": "event_id,source,evidence_type,payload,evidence_status",
-            },
-        ) or []
-        for row in evidence_rows_all:
-            evid = row.get("event_id")
-            if evid:
-                evidence_by_event.setdefault(evid, []).append(row)
-
     for event in events:
         if time.time() > deadline:
             warnings.append("wall-clock budget exceeded during signal build")
@@ -426,7 +405,14 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             skipped += 1
             continue
 
-        evidence_rows = evidence_by_event.get(event_id, [])
+        evidence_rows = client._rest(
+            "GET", "fda_event_evidence",
+            params={
+                "event_id": f"eq.{event_id}",
+                "evidence_status": "eq.active",
+                "select": "source,evidence_type,payload,evidence_status",
+            },
+        ) or []
 
         designations = _designations_from(asset, evidence_rows)
 
