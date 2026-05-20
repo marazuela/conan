@@ -1,36 +1,32 @@
-"""seed_fda_asset_aliases — populate fda_asset_aliases from four sources.
+"""seed_fda_asset_aliases — populate fda_asset_aliases from three sources.
 
-Feeds the deterministic doc/asset prefilter (see
-tasks/skill_asset_linker_edge_prefilter_plan.md). Empty aliases collapse
-recall back to ticker/drug_name/sponsor_name only, which is what the old
-LLM linker effectively did before the burn. The four sources here lift
-recall by adding brand names, generic↔brand crosswalks, NCT IDs, code
-names (LY3502970-style), and sponsor variants (parent/subsidiary).
+Feeds the deterministic doc/asset prefilter. Empty aliases collapse recall
+back to ticker/drug_name only, which is what the prefilter does without
+Layer-2 enrichment. The three sources here lift recall by adding brand
+names, generic↔brand crosswalks, NCT IDs, and code names (LY3502970-style).
 
 Sources, in order of cost and confidence:
 
-  1. ``curated_map`` — reverse-index of
-     ``modal_workers/shared/sponsor_resolver.py::CURATED_MAP``: for each
-     active asset, every CURATED_MAP key that resolves to the asset's
-     ticker becomes a ``sponsor_alias``, plus stripped variants become
-     ``sponsor_stem``. Offline, instant.
-
-  2. ``openfda_label`` — openFDA ``/drug/label`` searched by the asset's
+  1. ``openfda_label`` — openFDA ``/drug/label`` searched by the asset's
      generic_name. Every distinct ``openfda.brand_name`` becomes
      ``alias_kind='brand'``; every distinct ``openfda.generic_name``
      becomes ``alias_kind='generic'``. ~1 API call per active asset.
 
-  3. ``clinicaltrials_v2`` — ClinicalTrials.gov v2 ``/studies`` searched
+  2. ``clinicaltrials_v2`` — ClinicalTrials.gov v2 ``/studies`` searched
      by intervention (drug_name) + lead sponsor. Yields NCT IDs (one
      per matching trial) AND
      ``protocolSection.armsInterventionsModule.interventions[].otherNames[]``
      which is where code names like LY3502970 surface. ~1 API call per asset.
 
-  4. ``extensions_mining`` — SQL pass over already-linked corpus:
+  3. ``extensions_mining`` — SQL pass over already-linked corpus:
      ``SELECT extensions FROM documents JOIN asset_documents`` for each
      asset; surface NCT IDs and intervention "otherNames" present in
      ``documents.extensions`` that aren't yet in fda_asset_aliases.
 
+The ``curated_map`` source (sponsor_alias / sponsor_stem) was removed
+2026-05-20: sponsor matches were dominating the prefilter queue at very
+low precision (Pfizer alone produced 570 edges in one hash window), and
+sponsor_alias / sponsor_stem are no longer valid alias_kind values.
 Synthetic abbreviations are intentionally NOT seeded — false-positive rate
 without curation is too high; the ``source='synthetic'`` slot is reserved
 for a future pass.
@@ -39,7 +35,7 @@ CLI:
 
   python -m modal_workers.scripts.seed_fda_asset_aliases \\
       [--asset-id UUID]          # restrict to one asset (smoke)
-      [--sources curated_map,openfda_label,clinicaltrials_v2,extensions_mining]
+      [--sources openfda_label,clinicaltrials_v2,extensions_mining]
       [--dry-run]                # log proposed inserts, don't write
       [--max-assets N]           # truncate the active-asset list (testing)
 
@@ -61,13 +57,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
-from modal_workers.shared.sponsor_resolver import CURATED_MAP
 from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger("seed_fda_asset_aliases")
 
 ALL_SOURCES = (
-    "curated_map",
     "openfda_label",
     "clinicaltrials_v2",
     "extensions_mining",
@@ -82,37 +76,10 @@ NORMALIZED_BLOCKLIST = {
 }
 
 NCT_PATTERN = re.compile(r"^nct[0-9]{8}$")
-
-# Suffixes stripped from sponsor names to derive shorter sponsor_stem
-# variants. Order matters — longer strings first so "Pharmaceuticals, Inc."
-# gets eaten before "Inc.".
-SPONSOR_SUFFIXES = (
-    " Pharmaceuticals, Inc.",
-    " Pharmaceutical Inc",
-    " Pharmaceuticals Inc",
-    " Pharmaceuticals",
-    " Pharmaceutical",
-    " Therapeutics, Inc.",
-    " Therapeutics Inc",
-    " Therapeutics",
-    " Biosciences, Inc.",
-    " Biosciences Inc",
-    " Biosciences",
-    " Pharma",
-    " and Company",
-    " Incorporated",
-    ", Inc.",
-    ", Inc",
-    " Inc.",
-    " Inc",
-    " LLC",
-    " A/S",
-    " SE",
-    " AG",
-    " plc",
-    " Limited",
-    " Ltd.",
-    " Ltd",
+CODE_ALIAS_SIGNAL_PATTERN = re.compile(r"[0-9.-]")
+LOW_INFORMATION_CODE_TERMS = (
+    "placebo",
+    "vehicle",
 )
 
 OPENFDA_BASE = "https://api.fda.gov"
@@ -121,8 +88,7 @@ DEFAULT_HTTP_TIMEOUT_S = 20.0
 INTER_REQUEST_SLEEP_S = 0.25  # gentle pacing to stay under public-tier limits
 
 ALIAS_KINDS = frozenset({
-    "brand", "generic", "code", "nct_id", "abbreviation",
-    "sponsor_alias", "sponsor_stem", "drug_name",
+    "brand", "generic", "code", "nct_id", "abbreviation", "drug_name",
 })
 
 
@@ -166,6 +132,11 @@ def is_valid_alias(alias_normalized: str, alias_kind: str) -> bool:
         return False
     if alias_kind == "nct_id" and not NCT_PATTERN.match(alias_normalized):
         return False
+    if alias_kind == "code":
+        if any(term in alias_normalized for term in LOW_INFORMATION_CODE_TERMS):
+            return False
+        if not CODE_ALIAS_SIGNAL_PATTERN.search(alias_normalized):
+            return False
     return True
 
 
@@ -185,59 +156,7 @@ def make_candidate(asset_id: str, alias: str, kind: str, source: str,
 
 
 # ---------------------------------------------------------------------------
-# Source 1: CURATED_MAP reverse-index
-# ---------------------------------------------------------------------------
-
-def aliases_from_curated_map(asset: Dict[str, Any]) -> List[AliasCandidate]:
-    """For each asset, find every CURATED_MAP key whose ticker matches the
-    asset's ticker. Each match yields a sponsor_alias (the curated name) plus
-    sponsor_stem variants from stripping suffixes (Inc., LLC, ...).
-    """
-    out: List[AliasCandidate] = []
-    asset_id = asset["id"]
-    ticker = asset.get("ticker")
-    if not ticker:
-        return out
-
-    seen_normalized: Set[Tuple[str, str]] = set()  # (alias_normalized, kind)
-
-    for curated_name, info in CURATED_MAP.items():
-        if info.get("ticker") != ticker:
-            continue
-        cand = make_candidate(asset_id, curated_name, "sponsor_alias",
-                              "curated_map")
-        if cand and (cand.alias_normalized, cand.alias_kind) not in seen_normalized:
-            seen_normalized.add((cand.alias_normalized, cand.alias_kind))
-            out.append(cand)
-
-        # Derive sponsor_stem variants. Apply one suffix strip at a time so we
-        # also pick up intermediate forms (e.g. "Eli Lilly and Company" →
-        # "Eli Lilly" → "Eli" is not useful, so we stop at one strip).
-        for suffix in SPONSOR_SUFFIXES:
-            if curated_name.endswith(suffix):
-                stem = curated_name[: -len(suffix)].strip().rstrip(",").strip()
-                if stem and stem != curated_name:
-                    cand = make_candidate(asset_id, stem, "sponsor_stem",
-                                          "curated_map")
-                    if cand and (cand.alias_normalized, cand.alias_kind) not in seen_normalized:
-                        seen_normalized.add((cand.alias_normalized, cand.alias_kind))
-                        out.append(cand)
-                break  # only strip the longest matching suffix
-
-    # Asset's own sponsor_name → sponsor_alias if not already curated.
-    sponsor_name = asset.get("sponsor_name")
-    if sponsor_name:
-        cand = make_candidate(asset_id, sponsor_name, "sponsor_alias",
-                              "curated_map")
-        if cand and (cand.alias_normalized, cand.alias_kind) not in seen_normalized:
-            seen_normalized.add((cand.alias_normalized, cand.alias_kind))
-            out.append(cand)
-
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Source 2: openFDA /drug/label
+# Source 1: openFDA /drug/label
 # ---------------------------------------------------------------------------
 
 def _openfda_get(path: str, params: Dict[str, Any],
@@ -310,7 +229,7 @@ def aliases_from_openfda(asset: Dict[str, Any],
 
 
 # ---------------------------------------------------------------------------
-# Source 3: ClinicalTrials.gov v2
+# Source 2: ClinicalTrials.gov v2
 # ---------------------------------------------------------------------------
 
 def _ct_get(path: str, params: Dict[str, Any],
@@ -403,7 +322,7 @@ def aliases_from_clinicaltrials(asset: Dict[str, Any],
 
 
 # ---------------------------------------------------------------------------
-# Source 4: documents.extensions mining
+# Source 3: documents.extensions mining
 # ---------------------------------------------------------------------------
 
 def aliases_from_extensions(client: SupabaseClient,
@@ -552,7 +471,7 @@ def load_active_assets(client: SupabaseClient,
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description=("Populate fda_asset_aliases from CURATED_MAP, openFDA labels, "
+        description=("Populate fda_asset_aliases from openFDA labels, "
                      "ClinicalTrials.gov, and existing documents.extensions."),
     )
     p.add_argument("--asset-id", default=None,
@@ -602,13 +521,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             per_asset: List[AliasCandidate] = []
 
             try:
-                if "curated_map" in sources:
-                    cands = aliases_from_curated_map(asset)
-                    per_asset.extend(cands)
-                    stats.by_source["curated_map"] = (
-                        stats.by_source.get("curated_map", 0) + len(cands)
-                    )
-
                 if "openfda_label" in sources:
                     cands = aliases_from_openfda(asset, session, stats)
                     per_asset.extend(cands)

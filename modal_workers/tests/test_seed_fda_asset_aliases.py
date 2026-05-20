@@ -2,8 +2,7 @@
 
 The integration paths (openFDA, ClinicalTrials.gov, Supabase upsert) require
 network + service-role creds and are exercised via dry-run smoke tests against
-staging, not pytest. These tests cover normalization, validity gates,
-CURATED_MAP reverse-indexing, sponsor-stem derivation, and the
+staging, not pytest. These tests cover normalization, validity gates, and the
 ClinicalTrials response parser shape.
 
 Run: python -m pytest modal_workers/tests/test_seed_fda_asset_aliases.py -v
@@ -13,11 +12,9 @@ from __future__ import annotations
 from modal_workers.scripts.seed_fda_asset_aliases import (
     NCT_PATTERN,
     NORMALIZED_BLOCKLIST,
-    SPONSOR_SUFFIXES,
     AliasCandidate,
     SeedStats,
     aliases_from_clinicaltrials,
-    aliases_from_curated_map,
     is_valid_alias,
     make_candidate,
     normalize,
@@ -59,80 +56,20 @@ def test_is_valid_alias_nct_shape() -> None:
     assert not is_valid_alias("NCT05123456", "nct_id")      # must be lowercase
 
 
+def test_is_valid_alias_rejects_low_information_code_aliases() -> None:
+    assert is_valid_alias("ly3502970", "code")
+    assert is_valid_alias("glp-1 small molecule", "code")
+
+    assert not is_valid_alias("placebo", "code")
+    assert not is_valid_alias("xl092-matched placebo", "code")
+    assert not is_valid_alias("vehicle gel", "code")
+    assert not is_valid_alias("leucovorin", "code")
+
+
 def test_make_candidate_returns_none_on_invalid() -> None:
     assert make_candidate("a", "ab", "brand", "openfda_label") is None
     assert make_candidate("a", "peptide", "drug_name", "operator") is None
     assert make_candidate("a", "Mounjaro", "brand", "openfda_label") is not None
-
-
-# ---------------------------------------------------------------------------
-# CURATED_MAP reverse-indexing + sponsor_stem derivation
-# ---------------------------------------------------------------------------
-
-def test_aliases_from_curated_map_emits_sponsor_alias_and_stem_for_lilly() -> None:
-    asset = {
-        "id": "asset-1",
-        "ticker": "LLY",
-        "drug_name": "tirzepatide",
-        "sponsor_name": "Eli Lilly and Company",
-    }
-    cands = aliases_from_curated_map(asset)
-    kinds = {(c.alias_normalized, c.alias_kind) for c in cands}
-
-    # The curated key for LLY is "Eli Lilly and Company" → sponsor_alias.
-    assert ("eli lilly and company", "sponsor_alias") in kinds
-    # Stripping " and Company" yields "Eli Lilly" → sponsor_stem.
-    assert ("eli lilly", "sponsor_stem") in kinds
-
-
-def test_aliases_from_curated_map_subsidiary_to_parent() -> None:
-    # "Janssen Research & Development, LLC" → ticker JNJ in CURATED_MAP.
-    # An asset with ticker JNJ should pick up the Janssen alias.
-    asset = {
-        "id": "asset-jnj",
-        "ticker": "JNJ",
-        "drug_name": "exampledrug",
-        "sponsor_name": "Johnson & Johnson",
-    }
-    cands = aliases_from_curated_map(asset)
-    aliases_lower = {c.alias_normalized for c in cands}
-    assert any("janssen" in a for a in aliases_lower), (
-        "subsidiary Janssen should resolve to JNJ via CURATED_MAP reverse-index"
-    )
-
-
-def test_aliases_from_curated_map_empty_for_unknown_ticker() -> None:
-    asset = {
-        "id": "asset-x",
-        "ticker": "ZZZZ_NOT_LISTED",
-        "drug_name": "foo",
-        "sponsor_name": "Foo Pharma",
-    }
-    cands = aliases_from_curated_map(asset)
-    # Only the asset's own sponsor_name should produce a sponsor_alias
-    # (no CURATED_MAP matches; sponsor_name itself is fine).
-    assert all(c.source == "curated_map" for c in cands)
-    sponsor_aliases = [c for c in cands if c.alias_kind == "sponsor_alias"]
-    assert len(sponsor_aliases) == 1
-    assert sponsor_aliases[0].alias_normalized == "foo pharma"
-
-
-def test_aliases_from_curated_map_no_ticker_no_output() -> None:
-    asset = {
-        "id": "asset-noticker",
-        "ticker": None,
-        "drug_name": "foo",
-        "sponsor_name": "Foo Inc.",
-    }
-    assert aliases_from_curated_map(asset) == []
-
-
-def test_sponsor_suffix_ordering_longer_first() -> None:
-    # Regression: " Pharmaceuticals, Inc." must precede " Inc." in SPONSOR_SUFFIXES
-    # so "Foo Pharmaceuticals, Inc." reduces to "Foo", not "Foo Pharmaceuticals".
-    longer_idx = SPONSOR_SUFFIXES.index(" Pharmaceuticals, Inc.")
-    shorter_idx = SPONSOR_SUFFIXES.index(" Inc.")
-    assert longer_idx < shorter_idx
 
 
 # ---------------------------------------------------------------------------
