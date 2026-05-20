@@ -73,6 +73,14 @@ EVENT_STATUS = "pending"
 PAGE_SIZE = 100
 EDGAR_POLITE_SLEEP_S = 0.12   # 10 req/sec ceiling
 
+# SEC EFTS occasionally returns 5xx under load (observed 2026-05-19 for
+# "PDUFA action date" and "PDUFA target action" within the same daily run
+# where "PDUFA goal date" succeeded). Without retry the fetcher silently
+# drops that query for the day; the same three queries returned HTTP 200
+# on 2026-05-20.
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_MAX_EFTS_RETRIES = 3
+
 # High-precision PDUFA phrasings. Quoted, AND-combined. Each query yields a
 # separate page-paged result; we dedupe on accession across queries.
 _PDUFA_QUERIES = (
@@ -109,23 +117,17 @@ def fetch(
     for q in _PDUFA_QUERIES:
         offset = 0
         while True:
-            try:
-                r = session.get(
-                    EDGAR_SEARCH_URL,
-                    params={
-                        "q": q,
-                        "forms": "8-K",
-                        "dateRange": "custom",
-                        "startdt": start_date.isoformat(),
-                        "enddt": end_date.isoformat(),
-                        "from": str(offset),
-                    },
-                    timeout=30,
-                )
-                r.raise_for_status()
-                body = r.json()
-            except Exception as e:  # noqa: BLE001
-                errors.append({"query": q, "offset": offset, "error": str(e)[:400]})
+            params = {
+                "q": q,
+                "forms": "8-K",
+                "dateRange": "custom",
+                "startdt": start_date.isoformat(),
+                "enddt": end_date.isoformat(),
+                "from": str(offset),
+            }
+            body, err = _efts_get_with_retry(session, params)
+            if err is not None:
+                errors.append({"query": q, "offset": offset, "error": err[:400]})
                 break
 
             hits = (body.get("hits") or {}).get("hits") or []
@@ -379,6 +381,44 @@ def _session() -> requests.Session:
         )
     s.headers.update({"User-Agent": ua, "Accept": "application/json"})
     return s
+
+
+def _efts_get_with_retry(
+    session: requests.Session, params: Dict[str, Any]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Issue one EFTS GET, retrying on 429/5xx and network errors.
+
+    Returns (body, None) on success or (None, error_message) once retries are
+    exhausted. The caller appends the error to its accumulator and breaks the
+    pagination loop, matching the original bare-GET outer-loop semantics.
+    """
+    last_err = "no attempt made"
+    for attempt in range(_MAX_EFTS_RETRIES):
+        try:
+            r = session.get(EDGAR_SEARCH_URL, params=params, timeout=30)
+            status = getattr(r, "status_code", None)
+            if status in _RETRYABLE_STATUS_CODES:
+                last_err = f"HTTP {status} (retryable)"
+                if attempt + 1 < _MAX_EFTS_RETRIES:
+                    time.sleep(min(4.0, 0.6 * (2 ** attempt)) + 0.05)
+                    continue
+                return None, last_err
+            r.raise_for_status()
+            return r.json(), None
+        except requests.exceptions.RequestException as exc:
+            last_err = str(exc)
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            retriable = (
+                status in _RETRYABLE_STATUS_CODES
+                or isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+            )
+            if retriable and attempt + 1 < _MAX_EFTS_RETRIES:
+                time.sleep(min(4.0, 0.6 * (2 ** attempt)) + 0.05)
+                continue
+            return None, last_err
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+    return None, last_err
 
 
 # ---------------------------------------------------------------------------

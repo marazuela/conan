@@ -268,3 +268,88 @@ def test_fetch_dry_run_writes_nothing(monkeypatch):
                      dry_run=True)
     assert result["upserted"] == 1
     assert client.posted == []
+
+
+# ---------------------------------------------------------------------------
+# Retry on SEC EFTS 5xx (regression guard for 2026-05-19 incident)
+# ---------------------------------------------------------------------------
+
+
+class _RetryStubResponse:
+    """Stub HTTP response that exposes status_code, .json() and raise_for_status()."""
+    def __init__(self, status_code: int, body: Optional[Dict[str, Any]] = None):
+        self.status_code = status_code
+        self._body = body or {"hits": {"hits": [], "total": {"value": 0}}}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+            err = requests.exceptions.HTTPError(f"http {self.status_code}")
+            err.response = self
+            raise err
+
+    def json(self):
+        return self._body
+
+
+class _RetrySession:
+    """Returns canned status codes for the first N calls, then a success body."""
+    def __init__(self, sequence: List[Any]):
+        # Each item is either an int status code (retryable) or a dict (success body).
+        self.sequence = list(sequence)
+        self.calls = 0
+        self.headers: Dict[str, str] = {}
+
+    def get(self, url, params=None, timeout=None):
+        self.calls += 1
+        if not self.sequence:
+            return _RetryStubResponse(200, _empty_hits())
+        item = self.sequence.pop(0)
+        if isinstance(item, int):
+            return _RetryStubResponse(item)
+        return _RetryStubResponse(200, item)
+
+
+def test_efts_get_with_retry_recovers_from_transient_500(monkeypatch):
+    # Make sleep a no-op so the test stays fast.
+    monkeypatch.setattr(M.time, "sleep", lambda _s: None)
+    session = _RetrySession([500, 502, _empty_hits()])
+    body, err = M._efts_get_with_retry(session, {"q": '"PDUFA action date"'})
+    assert err is None
+    assert body == _empty_hits()
+    assert session.calls == 3
+
+
+def test_efts_get_with_retry_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setattr(M.time, "sleep", lambda _s: None)
+    session = _RetrySession([500, 500, 500])
+    body, err = M._efts_get_with_retry(session, {"q": '"PDUFA action date"'})
+    assert body is None
+    assert err is not None and "500" in err
+    assert session.calls == M._MAX_EFTS_RETRIES
+
+
+def test_efts_get_with_retry_does_not_retry_on_4xx(monkeypatch):
+    monkeypatch.setattr(M.time, "sleep", lambda _s: None)
+    # 404 is not in the retryable set — fail immediately.
+    session = _RetrySession([404, _empty_hits()])
+    body, err = M._efts_get_with_retry(session, {"q": '"PDUFA action date"'})
+    assert body is None
+    assert err is not None
+    assert session.calls == 1
+
+
+def test_fetch_continues_after_one_query_5xx_fails(monkeypatch):
+    """First PDUFA query exhausts retries on 500; remaining queries still run."""
+    monkeypatch.setattr(M.time, "sleep", lambda _s: None)
+    # 3 attempts of 500 for query #1 (exhaust retries), then empty for queries #2 and #3.
+    session = _RetrySession([500, 500, 500, _empty_hits(), _empty_hits()])
+    monkeypatch.setattr(M, "_session", lambda: session)
+    client = _StubClient()
+    result = M.fetch(client, start_date=date(2026, 5, 1), end_date=date(2026, 5, 19))
+    # One error logged for the failed query, but the run still finished.
+    assert len(result["errors"]) == 1
+    assert "500" in result["errors"][0]["error"]
+    assert result["fetched"] == 0
+    # 3 retries on query #1 + 1 success each for queries #2 and #3 = 5 calls.
+    assert session.calls == 5
