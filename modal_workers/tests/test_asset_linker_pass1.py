@@ -414,6 +414,63 @@ def test_prefilter_does_not_apply_diversified_gate_to_single_drug_sponsor():
 
 
 # ---------------------------------------------------------------------------
+# clinicaltrials-specific gate — 2026-05-20: require sponsor AND
+# (drug_name OR generic_name). At 81-asset watchlist scale the older
+# SPONSOR_ONLY_INSUFFICIENT gate (which let drug-only docs through) was
+# still passing ~80% of clinicaltrials docs against a <3% real-link rate
+# and burned ~$57 in 6h on 2026-05-19.
+# ---------------------------------------------------------------------------
+
+def test_clinicaltrials_requires_sponsor_plus_drug():
+    """clinicaltrials: sponsor + drug_name passes."""
+    idx = build_keyword_index(_assets())  # Viridian / Veligrotug
+    text = "Trial sponsored by Viridian Therapeutics evaluating Veligrotug in TED."
+    result = prefilter_doc(text, idx, source="clinicaltrials",
+                           doc_type="trial")
+    assert len(result) == 1, "sponsor + drug_name hit must pass clinicaltrials gate"
+
+
+def test_clinicaltrials_rejects_drug_only_no_sponsor():
+    """clinicaltrials: drug-only hit (no sponsor mention) is now rejected.
+    Comparator-arm and shared-name false positives leak through here at
+    81-asset scale."""
+    idx = build_keyword_index(_assets())
+    text = ("Comparator arm uses Veligrotug at standard dose. "
+            "Conducted by an unrelated investigator group.")
+    result = prefilter_doc(text, idx, source="clinicaltrials",
+                           doc_type="trial")
+    assert result == [], (
+        "drug-only hit on clinicaltrials must be dropped (requires sponsor "
+        "co-occurrence at the 81-asset watchlist scale)"
+    )
+
+
+def test_clinicaltrials_rejects_sponsor_only():
+    """clinicaltrials: sponsor-only hit was already rejected by the older
+    SPONSOR_ONLY gate; regression-test that the new rule keeps it rejected."""
+    idx = build_keyword_index(_assets())
+    text = "Sponsored by Viridian Therapeutics — multiple ongoing programs."
+    result = prefilter_doc(text, idx, source="clinicaltrials",
+                           doc_type="trial")
+    assert result == [], "sponsor-only on clinicaltrials must still be dropped"
+
+
+def test_dailymed_drug_only_still_passes():
+    """The stricter clinicaltrials rule must NOT bleed into dailymed.
+    A dailymed label that mentions the tracked drug by name (without
+    naming the sponsor explicitly) must still pass — sponsors don't
+    co-occur on every dailymed label."""
+    idx = build_keyword_index(_assets())
+    text = "Veligrotug 50 mg solution for injection — indication: TED."
+    result = prefilter_doc(text, idx, source="dailymed",
+                           doc_type="drug_label")
+    assert len(result) == 1, (
+        "drug-only hit on dailymed must still pass — only clinicaltrials "
+        "requires sponsor co-occurrence"
+    )
+
+
+# ---------------------------------------------------------------------------
 # _active_asset_set_hash — md5 over the sorted active asset id list
 # ---------------------------------------------------------------------------
 
