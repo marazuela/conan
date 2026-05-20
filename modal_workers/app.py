@@ -27,7 +27,8 @@ Scheduled dispatch (2026-04-22 release-time amendment, spec.md §7):
       17 UTC  US midday              (congressional_trading)
       21 UTC  US post-close          (sec_enforcement, courtlistener)
 
-Only rows with `status='operational'` fire; paused rows are skipped inside
+Only rows with `status='operational'` fire; FDA bridge lifecycle rows
+(`shadow`, `shadow_with_emit`) are also runnable. Paused rows are skipped inside
 `_dispatch`. Adding a new scanner = INSERT row with a `scheduled_hour_utc`;
 no code redeploy needed for timing tweaks.
 
@@ -762,6 +763,9 @@ _SCANNERS_SECONDARY_HOUR: dict[int, List[str]] = {
 }
 
 
+_ALLOWED_DISPATCH_STATUSES = frozenset({"operational", "shadow", "shadow_with_emit"})
+
+
 def _load_dispatch_statuses(names: List[str]) -> tuple[dict[str, str], Optional[str]]:
     if not names:
         return {}, None
@@ -799,7 +803,7 @@ def _dispatch(names: List[str]) -> dict:
     errors = []
     for name in names:
         status = statuses.get(name)
-        if status is not None and status != "operational":
+        if status is not None and status not in _ALLOWED_DISPATCH_STATUSES:
             skipped.append({
                 "scanner": name,
                 "status": status,
