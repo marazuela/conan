@@ -2,7 +2,7 @@
 FDA signal bridge — turns canonical fda_regulatory_events rows into either
 shadow-only feature snapshots (Phase 3) or live signals + features (post-cutover).
 
-Operating modes (read from public.scanners.config.mode, defaulting to 'shadow'):
+Operating modes (read from public.scanners.status, defaulting to 'shadow'):
 
   shadow            Write shadow_* columns on fda_event_features only. No signals
                     row emission. Existing binary_catalyst flow continues
@@ -60,6 +60,11 @@ MODE_SHADOW = "shadow"
 MODE_SHADOW_WITH_EMIT = "shadow_with_emit"
 MODE_OPERATIONAL = "operational"
 VALID_MODES = (MODE_SHADOW, MODE_SHADOW_WITH_EMIT, MODE_OPERATIONAL)
+STATUS_TO_MODE = {
+    MODE_SHADOW: MODE_SHADOW,
+    MODE_SHADOW_WITH_EMIT: MODE_SHADOW_WITH_EMIT,
+    MODE_OPERATIONAL: MODE_OPERATIONAL,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +330,7 @@ def _designations_from(asset: Mapping[str, Any], evidence_rows: Sequence[Mapping
 def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circulars
     """Drive the bridge over pending `fda_regulatory_events` rows.
 
-    Mode is read from `cfg.config.mode` and defaults to 'shadow'. Per
+    Mode is read from `cfg.status` and defaults to 'shadow'. Per
     write_flags_for_mode:
       - shadow            → upsert shadow_* columns only, no signal emission.
       - shadow_with_emit  → upsert canonical+shadow, emit signals.
@@ -344,7 +349,9 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
     soft_budget_s = max(int(cfg.timeout_soft_s or 60), 30)
     deadline = started + soft_budget_s
 
-    mode = (cfg.config or {}).get("mode") or MODE_SHADOW
+    mode = STATUS_TO_MODE.get((getattr(cfg, "status", None) or "").lower())
+    if mode is None:
+        mode = (cfg.config or {}).get("mode") or MODE_SHADOW
     if mode not in VALID_MODES:
         return ScannerResult(
             scanner=NAME, status="error",
@@ -390,27 +397,6 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         ) or []
         assets_by_id = {row["id"]: row for row in asset_rows}
 
-    # Pre-fetch active evidence for all pending events in one round-trip
-    # rather than N+1 GETs inside the loop. Saves ~56 Supabase round-trips
-    # when 57 events are pending and is the cheapest way to reclaim
-    # wall-clock budget headroom.
-    event_ids_for_evidence = [e["id"] for e in events if e.get("id") and e.get("asset_id")]
-    evidence_by_event: Dict[str, List[Dict[str, Any]]] = {}
-    if event_ids_for_evidence:
-        evid_in_clause = ",".join(event_ids_for_evidence)
-        evidence_rows_all = client._rest(
-            "GET", "fda_event_evidence",
-            params={
-                "event_id": f"in.({evid_in_clause})",
-                "evidence_status": "eq.active",
-                "select": "event_id,source,evidence_type,payload,evidence_status",
-            },
-        ) or []
-        for row in evidence_rows_all:
-            evid = row.get("event_id")
-            if evid:
-                evidence_by_event.setdefault(evid, []).append(row)
-
     for event in events:
         if time.time() > deadline:
             warnings.append("wall-clock budget exceeded during signal build")
@@ -426,7 +412,14 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             skipped += 1
             continue
 
-        evidence_rows = evidence_by_event.get(event_id, [])
+        evidence_rows = client._rest(
+            "GET", "fda_event_evidence",
+            params={
+                "event_id": f"eq.{event_id}",
+                "evidence_status": "eq.active",
+                "select": "source,evidence_type,payload,evidence_status",
+            },
+        ) or []
 
         designations = _designations_from(asset, evidence_rows)
 

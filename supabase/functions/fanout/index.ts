@@ -39,6 +39,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { deliveryRowFor } from "./deliveries.ts";
+import { formatError } from "../_shared/errors.ts";
 
 interface AlertRow {
   id: string;
@@ -162,6 +163,16 @@ Deno.serve(async (req: Request) => {
       const evt = payload.record;
       const newState = (evt.payload as Record<string, string> | null)?.to;
 
+      // Thesis writer honest-decline rows are operator-visible audit events,
+      // not pages. Keep this before every candidate email branch.
+      const rd = (evt.payload as Record<string, unknown> | null)?.routine_declined;
+      if (rd === true || rd === "true") {
+        return new Response(
+          JSON.stringify({ skipped: "routine_declined" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
       // Email path B: pre-edge promotion (thesis_writer → candidate row created).
       if (evt.event_type === "created" || evt.event_type === "thesis_drafted_by_claude") {
         const out = await dispatchPreEdgePromotion(evt);
@@ -188,8 +199,8 @@ Deno.serve(async (req: Request) => {
     }
     return new Response(JSON.stringify({ skipped: "unsupported table" }), { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), {
+    const info = formatError(err);
+    return new Response(JSON.stringify({ error: info.message, code: info.code, details: info.details, hint: info.hint }), {
       status: 500, headers: { "content-type": "application/json" },
     });
   }
@@ -840,16 +851,16 @@ function truncate(s: string, n: number): string {
 
 interface FdaAssetRow {
   id: string;
-  asset_name: string | null;
-  brand_name: string | null;
-  sponsor: string | null;
+  ticker: string | null;
+  mic: string | null;
+  drug_name: string | null;
+  generic_name: string | null;
+  sponsor_name: string | null;
   indication: string | null;
   indication_normalized: string | null;
   program_status: string | null;
   watch_priority: number | null;
   reference_class_signature: string | null;
-  primary_ticker: string | null;
-  primary_mic: string | null;
   entity_id: string | null;
 }
 
@@ -858,7 +869,7 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
   const { data: assetRaw, error: aErr } = await sb
     .from("fda_assets")
     .select(
-      "id,asset_name,brand_name,sponsor,indication,indication_normalized,program_status,watch_priority,reference_class_signature,primary_ticker,primary_mic,entity_id",
+      "id,ticker,mic,drug_name,generic_name,sponsor_name,indication,indication_normalized,program_status,watch_priority,reference_class_signature,entity_id",
     )
     .eq("id", row.asset_id)
     .maybeSingle();
@@ -967,10 +978,10 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
 }
 
 function _assetLabel(asset: FdaAssetRow | null, entity: EntityRow | null): string {
-  const ticker = asset?.primary_ticker ?? entity?.primary_ticker ?? null;
-  const mic = asset?.primary_mic ?? entity?.primary_mic ?? null;
+  const ticker = asset?.ticker ?? entity?.primary_ticker ?? null;
+  const mic = asset?.mic ?? entity?.primary_mic ?? null;
   if (ticker) return `${ticker}${mic ? `.${mic}` : ""}`;
-  const name = entity?.name ?? asset?.sponsor ?? asset?.asset_name ?? "";
+  const name = entity?.name ?? asset?.sponsor_name ?? asset?.drug_name ?? "";
   if (name) return name.length > 40 ? `${name.slice(0, 40)}…` : name;
   return "?";
 }
@@ -1022,8 +1033,8 @@ function renderAssessmentHtml(
   entity: EntityRow | null,
 ): string {
   const label = _assetLabel(asset, entity);
-  const name = entity?.name ?? asset?.sponsor ?? "Unknown sponsor";
-  const assetName = asset?.asset_name ?? asset?.brand_name ?? "—";
+  const name = entity?.name ?? asset?.sponsor_name ?? "Unknown sponsor";
+  const assetName = asset?.drug_name ?? asset?.generic_name ?? "—";
   const indication = asset?.indication_normalized ?? asset?.indication ?? "—";
   const programStatus = asset?.program_status ?? "—";
   const conviction = _formatConviction(row);
@@ -1082,8 +1093,8 @@ function renderAssessmentText(
   entity: EntityRow | null,
 ): string {
   const label = _assetLabel(asset, entity);
-  const name = entity?.name ?? asset?.sponsor ?? "Unknown sponsor";
-  const assetName = asset?.asset_name ?? asset?.brand_name ?? "—";
+  const name = entity?.name ?? asset?.sponsor_name ?? "Unknown sponsor";
+  const assetName = asset?.drug_name ?? asset?.generic_name ?? "—";
   const indication = asset?.indication_normalized ?? asset?.indication ?? "—";
   const conviction = _formatConviction(row);
   const direction = row.thesis_direction ?? "—";
