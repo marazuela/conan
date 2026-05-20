@@ -10,7 +10,7 @@ Endpoints used:
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 from modal_workers.providers.polygon.base import PolygonClient
 
@@ -25,6 +25,13 @@ class MarketDataProvider(Protocol):
 class PolygonMarketData:
     def __init__(self, client: PolygonClient):
         self.client = client
+        # Per-instance caches. Providers are built fresh per scanner run via
+        # _build_polygon_providers(), so cache lifetime == one run. The bridge
+        # processes ~57 events over ~35 distinct tickers; sharing market_cap
+        # and ADV lookups across events for the same ticker cuts ~40% of
+        # Polygon market-data calls per run.
+        self._market_cap_cache: Dict[str, Optional[float]] = {}
+        self._adv_cache: Dict[Tuple[str, int], Optional[float]] = {}
 
     # --------------------------------------------------------------
     # Quote (last available)
@@ -72,23 +79,35 @@ class PolygonMarketData:
     # --------------------------------------------------------------
 
     def get_market_cap(self, ticker: str) -> Optional[float]:
+        if ticker in self._market_cap_cache:
+            return self._market_cap_cache[ticker]
         body = self.client.get(f"/v3/reference/tickers/{ticker}")
         if not body or not isinstance(body, dict):
+            self._market_cap_cache[ticker] = None
             return None
         results = body.get("results") or {}
         mcap = results.get("market_cap")
-        return float(mcap) if mcap is not None else None
+        val = float(mcap) if mcap is not None else None
+        self._market_cap_cache[ticker] = val
+        return val
 
     # --------------------------------------------------------------
     # Average Daily Volume in USD (close * volume averaged across N days)
     # --------------------------------------------------------------
 
     def get_adv(self, ticker: str, days: int = 30) -> Optional[float]:
+        key = (ticker, days)
+        if key in self._adv_cache:
+            return self._adv_cache[key]
         rows = self.get_historical_prices(ticker, days)
         if rows is None:
+            self._adv_cache[key] = None
             return None
         usable = [r for r in rows if r.get("c") and r.get("v")]
         if not usable:
+            self._adv_cache[key] = None
             return None
         dollar_volumes = [float(r["c"]) * float(r["v"]) for r in usable]
-        return sum(dollar_volumes) / len(dollar_volumes)
+        val = sum(dollar_volumes) / len(dollar_volumes)
+        self._adv_cache[key] = val
+        return val
