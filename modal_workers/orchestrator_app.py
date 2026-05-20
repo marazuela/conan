@@ -8,8 +8,7 @@ without touching v2 scanner / compute-endpoint registrations. Deploy with:
 Functions:
   asset_linker_run         — run extractor.asset_linker over unlinked docs
                              for one asset (or all is_active assets)
-  fact_extractor_run       — run extractor.sonnet_fact_extractor over
-                             unextracted material links
+  fact_extractor_run       — disabled placeholder; local skill workflow only
   orchestrator_run_one     — produce one convergence_assessment for an asset
                              (single-shot, ensemble streaming, or ensemble
                              batch, with optional Stage 7 constitutional)
@@ -169,26 +168,19 @@ def ingest_asset_corpus(
 )
 def asset_linker_run(
     asset_id: Optional[str] = None,
-    max_docs: int = 100,
-    budget_usd: float = 5.0,
-    ignore_24h_halt: bool = False,
-    doc_ids: Optional[str] = None,
+    max_docs: int = 200,
+    budget_usd: float = 15.0,
 ) -> Dict[str, Any]:
-    """Classify unlinked documents into asset_documents. Use --asset-id to
-    restrict to one asset or omit for all is_active=true. `ignore_24h_halt`
-    and `doc_ids` are operator overrides for one-off test invocations — the
-    cron-driven call path never sets them."""
-    from modal_workers.extractor.asset_linker import main as linker_main
+    """Disabled production entrypoint.
 
-    argv = ["--max", str(max_docs), "--budget-usd", str(budget_usd)]
-    if asset_id:
-        argv.extend(["--asset-id", asset_id])
-    if ignore_24h_halt:
-        argv.append("--ignore-24h-halt")
-    if doc_ids:
-        argv.extend(["--doc-ids", doc_ids])
-    rc = linker_main(argv)
-    return {"return_code": rc}
+    Asset linking now runs through the project-local Cursor skill so production
+    cannot burn the Modal Anthropic API key on document classification.
+    """
+    return {
+        "return_code": 0,
+        "disabled": True,
+        "reason": "asset_linker_run disabled; use the local asset-linker skill",
+    }
 
 
 # ============================================================================
@@ -206,25 +198,19 @@ def asset_linker_pass2_run(
     threshold: float = 0.80,
     budget_usd: float = 2.0,
 ) -> Dict[str, Any]:
-    """Verify low-confidence pass-1 links with Haiku 4.5. Updates
-    asset_documents.{verified_by_pass2, pass2_verdict, pass2_confidence,
-    pass2_at}; rejected verdicts also flip is_material=false (no DELETE).
-    Idempotent — skips rows already verified."""
-    from modal_workers.extractor.asset_linker import pass2_main
+    """Disabled production entrypoint.
 
-    argv = [
-        "--max-links", str(max_links),
-        "--threshold", str(threshold),
-        "--budget-usd", str(budget_usd),
-    ]
-    if asset_id:
-        argv.extend(["--asset-id", asset_id])
-    rc = pass2_main(argv)
-    return {"return_code": rc}
+    Pass-2 verification belongs to the same local asset-linker skill workflow.
+    """
+    return {
+        "return_code": 0,
+        "disabled": True,
+        "reason": "asset_linker_pass2_run disabled; use the local asset-linker skill",
+    }
 
 
 # ============================================================================
-# Fact extractor — Sonnet structured fact extraction
+# Fact extractor — disabled Sonnet structured fact extraction
 # ============================================================================
 
 @app.function(
@@ -237,14 +223,45 @@ def fact_extractor_run(
     max_links: int = 200,
     budget_usd: float = 30.0,
 ) -> Dict[str, Any]:
-    """Extract structured facts from material asset_documents links."""
-    from modal_workers.extractor.sonnet_fact_extractor import main as extractor_main
+    """Disabled production entrypoint.
 
-    argv = ["--max", str(max_links), "--budget-usd", str(budget_usd)]
-    if asset_id:
-        argv.extend(["--asset-id", asset_id])
-    rc = extractor_main(argv)
-    return {"return_code": rc}
+    Fact extraction is moving to local skill execution; production Modal cron
+    must not spend the shared Anthropic API key on background extraction.
+    """
+    return {
+        "return_code": 0,
+        "disabled": True,
+        "reason": "fact_extractor_run disabled; use the local fact-extraction skill",
+    }
+
+
+# ============================================================================
+# Asset-alias seed refresh — refreshes fda_asset_aliases from openFDA and
+# ClinicalTrials.gov. Cron-fired weekly so newly approved brands and newly
+# registered trials get added to the alias index without operator action.
+# Zero LLM cost — only public HTTP APIs + Supabase writes. The full
+# `seed_fda_asset_aliases.py` script with all four sources is also runnable
+# manually for the initial seed pass.
+# ============================================================================
+
+@app.function(
+    image=image,
+    timeout=1800,
+    secrets=[supabase_secrets],
+)
+def seed_fda_asset_aliases_refresh(
+    sources: str = "openfda_label,clinicaltrials_v2",
+) -> Dict[str, Any]:
+    """Refresh fda_asset_aliases from the public-API sources. Designed for
+    the v3-asset-alias-weekly-refresh pg_cron job. Defaults to openFDA labels
+    + ClinicalTrials.gov; `curated_map` and `extensions_mining` are skipped
+    here because they don't change between scheduled runs (curated_map ships
+    with the code, extensions_mining catches up via the initial seed pass)."""
+    from modal_workers.scripts.seed_fda_asset_aliases import main as seed_main
+
+    argv = ["--sources", sources]
+    rc = seed_main(argv)
+    return {"return_code": rc, "sources": sources}
 
 
 # ============================================================================
@@ -635,6 +652,10 @@ def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
 #   tier2_fail:        args={run_id, error_message}
 #   ic_memo_run:       args={assessment_id, question?, persist?}
 #
+# Asset linking and fact extraction intentionally are not exposed here. They
+# are local skill workflows now, so production cannot spend the Modal Anthropic
+# API key on background extraction/classification.
+#
 # Each action's response shape matches the underlying runtime helper's
 # return value verbatim — see orchestrator_runtime.tier2 / ic_memo_runner
 # for the per-action contracts.
@@ -648,9 +669,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "ic_memo_run",
     "feedback_loop_kickoff",
     "orchestrator_drain_queue",
-    "asset_linker_run",
-    "asset_linker_pass2_run",
-    "fact_extractor_run",
+    "seed_fda_asset_aliases_refresh",
 })
 
 
@@ -721,45 +740,18 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 
-    if action == "asset_linker_run":
-        # Fire-and-forget spawn of the pass-1 Sonnet asset_linker so pg_cron
-        # returns in <1s while the linker runs up to 3600s. Fired by pg_cron
-        # job `v3-asset-linker-pass1` (every 15 min).
+    if action == "seed_fda_asset_aliases_refresh":
+        # Fire-and-forget spawn of the alias-seed refresh. Pulls fresh
+        # openFDA labels + ClinicalTrials.gov entries for every active
+        # asset and idempotently upserts into fda_asset_aliases. Fired by
+        # pg_cron job `v3-asset-alias-weekly-refresh` (Mon 03:00 UTC).
+        # Zero LLM cost — only public HTTP APIs.
         fn = modal.Function.from_name(
-            "conan-v3-orchestrator", "asset_linker_run",
+            "conan-v3-orchestrator", "seed_fda_asset_aliases_refresh",
         )
         kwargs: Dict[str, Any] = {}
-        for k in ("asset_id", "max_docs", "budget_usd"):
-            if k in args:
-                kwargs[k] = args[k]
-        handle = fn.spawn(**kwargs)
-        return {"spawned": True, "function_call_id": handle.object_id}
-
-    if action == "asset_linker_pass2_run":
-        # Fire-and-forget spawn of the pass-2 Haiku verifier over
-        # low-confidence pass-1 links. Fired by pg_cron job
-        # `v3-asset-linker-pass2` (twice hourly at :10/:40, offset from pass-1).
-        fn = modal.Function.from_name(
-            "conan-v3-orchestrator", "asset_linker_pass2_run",
-        )
-        kwargs: Dict[str, Any] = {}
-        for k in ("asset_id", "max_links", "threshold", "budget_usd"):
-            if k in args:
-                kwargs[k] = args[k]
-        handle = fn.spawn(**kwargs)
-        return {"spawned": True, "function_call_id": handle.object_id}
-
-    if action == "fact_extractor_run":
-        # Fire-and-forget spawn of the Sonnet fact_extractor over material
-        # asset_documents links. Fired by pg_cron job `v3-fact-extractor`
-        # (hourly at :20).
-        fn = modal.Function.from_name(
-            "conan-v3-orchestrator", "fact_extractor_run",
-        )
-        kwargs: Dict[str, Any] = {}
-        for k in ("asset_id", "max_links", "budget_usd"):
-            if k in args:
-                kwargs[k] = args[k]
+        if "sources" in args:
+            kwargs["sources"] = args["sources"]
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 
