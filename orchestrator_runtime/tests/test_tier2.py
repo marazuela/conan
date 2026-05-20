@@ -286,12 +286,15 @@ def test_normalize_decodes_stringified_hypotheses():
         {"label": "base", "kill_conditions": ["k3", "k4"]},
         {"label": "bear", "kill_conditions": ["k5", "k6"]},
     ]
-    payload = _valid_payload(hypotheses=json.dumps(hyps))
-    # Without normalization the validator rejects the JSON string.
-    assert "hypotheses must be a list" in tier2.validate_tier2_output(payload)
-    out = tier2.normalize_tier2_payload(payload)
+    # Direct check on the normalize helper: a JSON-string-encoded array of
+    # hypothesis dicts (the jsonb → pg_net → FastAPI double-encoding seen
+    # 2026-05-19) is decoded back to a native list.
+    out = tier2.normalize_tier2_payload(_valid_payload(hypotheses=json.dumps(hyps)))
     assert out["hypotheses"] == hyps
-    assert tier2.validate_tier2_output(out) == []
+    # And the validator (which calls normalize internally) accepts it end-to-end.
+    assert tier2.validate_tier2_output(
+        _valid_payload(hypotheses=json.dumps(hyps))
+    ) == []
 
 
 def test_normalize_decodes_other_stringified_containers():

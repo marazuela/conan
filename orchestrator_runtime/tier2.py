@@ -124,12 +124,27 @@ def _as_list(value: Any) -> List[Any]:
 
 
 def _normalize_hypotheses(value: Any) -> Any:
-    """Accept the common Cowork drift of {bull,base,bear} as a list.
+    """Accept the common Cowork drifts of:
 
-    The intended contract is still an array. This only canonicalizes the exact
-    keyed shape the skill has emitted in production, then lets normal validation
-    enforce each hypothesis object and its kill_conditions.
+      * a JSON-string-encoded list (the jsonb → `net.http_post` → FastAPI
+        boundary double-encoding observed 2026-05-19 — every Tier-2
+        bulk_orchestrator persist failed with `hypotheses must be a list`),
+      * a `{bull, base, bear}` keyed object,
+
+    and canonicalize to the contract array. Anything that does not parse to a
+    list/dict (or a keyed-object whose three labels are themselves dicts) is
+    returned unchanged so `validate_tier2_output` still surfaces a clear error
+    — no silent swallow.
     """
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, TypeError):
+            return value
+        if not isinstance(decoded, (list, dict)):
+            return value
+        value = decoded
+
     if not isinstance(value, dict):
         return value
 
@@ -144,12 +159,36 @@ def _normalize_hypotheses(value: Any) -> Any:
     return ordered
 
 
-def normalize_tier2_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a canonical Tier-2 payload without mutating the caller's dict."""
+def normalize_tier2_payload(payload: Any) -> Any:
+    """Return a canonical Tier-2 payload without mutating the caller's dict.
+
+    Repairs three production drifts seen at the Cowork-skill / Postgres-jsonb
+    / Modal-FastAPI boundaries:
+
+      1. A fully JSON-string-encoded payload body (top-level decode once).
+      2. JSON-string-encoded container fields (hypotheses, cited_prose_blocks,
+         key_facts, uncertainties, citations, similar_resolved_case_ids,
+         document_ids/citations_document_ids, fact_ids/citations_fact_ids).
+         These trip `isinstance(..., list)` in `validate_tier2_output` after
+         pg_net round-trips them as strings.
+      3. The `{bull, base, bear}` keyed-object hypotheses shape.
+
+    Idempotent. Unparseable strings are left in place so validation still
+    fails loudly (no silent swallow). Non-dict input is returned unchanged
+    after the top-level decode attempt.
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            return payload
     if not isinstance(payload, dict):
         return payload
 
     normalized = dict(payload)
+    for key in _TIER2_JSON_CONTAINER_FIELDS:
+        if key in normalized:
+            normalized[key] = _coerce_json_container(normalized[key])
     if "hypotheses" in normalized:
         normalized["hypotheses"] = _normalize_hypotheses(
             normalized.get("hypotheses"),
@@ -364,27 +403,6 @@ def _coerce_json_container(value: Any) -> Any:
     except (ValueError, TypeError):
         return value
     return decoded if isinstance(decoded, (list, dict)) else value
-
-
-def normalize_tier2_payload(payload: Any) -> Any:
-    """Repair the jsonb → `net.http_post` → FastAPI double-encoding where
-    structured fields (notably `hypotheses`) arrive as JSON strings instead
-    of native lists/objects, tripping the `isinstance(..., list)` checks in
-    `validate_tier2_output`. Idempotent and field-scoped: only known
-    container fields are touched, and only when string-encoded. A
-    fully-stringified payload body is decoded once up front. Well-formed
-    input is returned unchanged."""
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except (ValueError, TypeError):
-            return payload
-    if not isinstance(payload, dict):
-        return payload
-    for key in _TIER2_JSON_CONTAINER_FIELDS:
-        if key in payload:
-            payload[key] = _coerce_json_container(payload[key])
-    return payload
 
 
 def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
@@ -808,8 +826,6 @@ def complete_tier2_run(
             f"not 2; refusing to complete as Tier-2"
         )
     asset_id = run_row["asset_id"]
-    payload = normalize_tier2_payload(payload)
-
     payload = normalize_tier2_payload(payload)
     errors = validate_tier2_output(payload)
     if errors:
