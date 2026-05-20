@@ -124,49 +124,24 @@ def _as_list(value: Any) -> List[Any]:
 
 
 def _normalize_hypotheses(value: Any) -> Any:
-    """Coerce common Cowork drift shapes back to the contracted list-of-dicts.
+    """Accept the common Cowork drift of {bull,base,bear} as a list.
 
-    The intended contract is an array. We canonicalize three observed drifts:
-      1. {bull,base,bear} ordered dict-of-dicts → ordered list with stamped labels
-      2. Arbitrary dict-of-dicts {label_a: {...}, label_b: {...}} → list with
-         each key promoted to the item's `label` field (preserves the
-         kill_conditions check and the ≥2-entries D-115 invariant)
-      3. JSON-encoded string of a list → parsed list
-
-    Anything else (scalars, ragged dicts where some values are non-dicts) is
-    returned unchanged so the validator emits a clear error.
+    The intended contract is still an array. This only canonicalizes the exact
+    keyed shape the skill has emitted in production, then lets normal validation
+    enforce each hypothesis object and its kill_conditions.
     """
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (ValueError, TypeError):
-            return value
-        if isinstance(parsed, (list, dict)):
-            return _normalize_hypotheses(parsed)
-        return value
-
     if not isinstance(value, dict):
         return value
 
-    # Shape 1: legacy {bull,base,bear} canonical ordering.
-    if all(isinstance(value.get(k), dict) for k in ("bull", "base", "bear")):
-        ordered: List[Dict[str, Any]] = []
-        for label in ("bull", "base", "bear"):
-            item = dict(value[label])
-            item.setdefault("label", label)
-            ordered.append(item)
-        return ordered
-
-    # Shape 2: arbitrary dict-of-dicts keyed by hypothesis label/id.
-    if value and all(isinstance(v, dict) for v in value.values()):
-        coerced: List[Dict[str, Any]] = []
-        for label, item in value.items():
-            normalized = dict(item)
-            normalized.setdefault("label", str(label))
-            coerced.append(normalized)
-        return coerced
-
-    return value
+    ordered: List[Dict[str, Any]] = []
+    for label in ("bull", "base", "bear"):
+        item = value.get(label)
+        if not isinstance(item, dict):
+            return value
+        normalized = dict(item)
+        normalized.setdefault("label", label)
+        ordered.append(normalized)
+    return ordered
 
 
 def normalize_tier2_payload(payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -9,7 +9,6 @@ Run: python3 -m pytest orchestrator_runtime/tests/test_tier2.py -v
 """
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -240,35 +239,6 @@ def test_validate_tier2_output_accepts_keyed_hypotheses_object():
     assert [h["label"] for h in normalized["hypotheses"]] == [
         "bull", "base", "bear",
     ]
-
-
-def test_validate_tier2_output_accepts_arbitrary_keyed_hypotheses_dict():
-    """Cowork drift: dict-of-dicts with non-bull/base/bear labels."""
-    keyed = {
-        "primary": {"claim": "approval", "kill_conditions": ["k1", "k2"]},
-        "alt": {"claim": "delay", "kill_conditions": ["k3", "k4"]},
-    }
-    assert tier2.validate_tier2_output(_valid_payload(hypotheses=keyed)) == []
-    normalized = tier2.normalize_tier2_payload(
-        _valid_payload(hypotheses=keyed),
-    )
-    labels = sorted(h["label"] for h in normalized["hypotheses"])
-    assert labels == ["alt", "primary"]
-
-
-def test_validate_tier2_output_accepts_json_encoded_hypotheses_string():
-    """Cowork drift: hypotheses serialized as a JSON string."""
-    raw_list = [
-        {"label": "bull", "claim": "approval",
-         "kill_conditions": ["k1", "k2"]},
-        {"label": "bear", "claim": "crl",
-         "kill_conditions": ["k3", "k4"]},
-    ]
-    payload = _valid_payload(hypotheses=json.dumps(raw_list))
-    assert tier2.validate_tier2_output(payload) == []
-    normalized = tier2.normalize_tier2_payload(payload)
-    assert isinstance(normalized["hypotheses"], list)
-    assert len(normalized["hypotheses"]) == 2
 
 
 def test_validate_tier2_output_rejects_scalar_list_fields():
