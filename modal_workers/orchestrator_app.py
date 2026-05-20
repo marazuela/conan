@@ -169,16 +169,24 @@ def ingest_asset_corpus(
 )
 def asset_linker_run(
     asset_id: Optional[str] = None,
-    max_docs: int = 200,
-    budget_usd: float = 15.0,
+    max_docs: int = 100,
+    budget_usd: float = 5.0,
+    ignore_24h_halt: bool = False,
+    doc_ids: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Classify unlinked documents into asset_documents. Use --asset-id to
-    restrict to one asset or omit for all is_active=true."""
+    restrict to one asset or omit for all is_active=true. `ignore_24h_halt`
+    and `doc_ids` are operator overrides for one-off test invocations — the
+    cron-driven call path never sets them."""
     from modal_workers.extractor.asset_linker import main as linker_main
 
     argv = ["--max", str(max_docs), "--budget-usd", str(budget_usd)]
     if asset_id:
         argv.extend(["--asset-id", asset_id])
+    if ignore_24h_halt:
+        argv.append("--ignore-24h-halt")
+    if doc_ids:
+        argv.extend(["--doc-ids", doc_ids])
     rc = linker_main(argv)
     return {"return_code": rc}
 
