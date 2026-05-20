@@ -280,8 +280,10 @@ in place (still unmerged on this branch). Append in this order:
    UPSERT into candidates + insert into prefilter_runs
 9. `cron.schedule('v3-doc-asset-prefilter', '*/2 * * * *', ...)`
 10. `cron.schedule('v3-asset-alias-weekly-refresh', '0 3 * * 1', ...)` — Mondays 03:00 UTC, calls a stub that the seed script binds to via Modal
-11. Update `v3_ingestion_scheduler_watchdog()` `v_expected` to include both
-    `v3-doc-asset-prefilter` and `v3-asset-alias-weekly-refresh`
+11. Update `v3_ingestion_scheduler_watchdog()` `v_expected` to contain exactly
+    `['v3-doc-asset-prefilter', 'v3-asset-alias-weekly-refresh']`. Drop
+    `v3-fact-extractor` — fact extraction is also being cut over to a local
+    skill, so the watchdog should not recreate the LLM cron either.
 12. Replace `v_asset_linker_skill_queue` body with edge-shaped query
 13. `v_recent_auto_aliases` view
 14. Extend `asset_linker_runs_pass_check` to allow `'seed'` in addition to
