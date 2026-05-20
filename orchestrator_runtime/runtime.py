@@ -38,6 +38,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -691,6 +692,31 @@ def derive_band(conviction_pct: float) -> str:
         if conviction_pct >= thresh:
             return band
     return "discard"
+
+
+def compute_document_set_hash(
+    sb: SupabaseClient, asset_id: str
+) -> Optional[str]:
+    # Parity contract with reactor `computeDocSetHash` (supabase/functions/
+    # reactor/index.ts): MD5 over the sorted document_id list of the asset's
+    # current material-primary asset_documents rows. Both sides MUST produce
+    # the same hash for the dedup index in
+    # 20260527000010_v3_content_dedup_document_set_hash.sql to suppress
+    # re-enqueues whose evidence set is unchanged.
+    rows = sb._rest(
+        "GET", "asset_documents",
+        params={
+            "select": "document_id",
+            "asset_id": f"eq.{asset_id}",
+            "link_type": "eq.primary",
+            "is_material": "is.true",
+        },
+    ) or []
+    if not rows:
+        return None
+    sorted_ids = sorted(r["document_id"] for r in rows)
+    payload = ",".join(sorted_ids).encode("utf-8")
+    return hashlib.md5(payload).hexdigest()
 
 
 def stage_10_persist(
