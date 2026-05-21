@@ -356,6 +356,8 @@ def run_scanner(
     final_status: ScannerStatus = "error"
     final_signals_emitted = 0
     final_errors: List[Dict[str, Any]] = []
+    final_warnings: List[str] = []
+    final_run_metrics: Dict[str, Any] = {}
     final_fetched_records: Optional[int] = None
 
     try:
@@ -373,7 +375,8 @@ def run_scanner(
 
         if result.status == "auth_required":
             final_status = "auth_required"
-            final_errors = _warning_payloads(result.warnings) + _metrics_payload(result.run_metrics)
+            final_warnings = list(result.warnings or [])
+            final_run_metrics = dict(result.run_metrics or {})
             return result
 
         # Build signal rows, resolving entities as we go.
@@ -438,11 +441,9 @@ def run_scanner(
             final_status = "partial"
 
         final_signals_emitted = len(inserted)
-        final_errors = (
-            per_signal_errors
-            + _warning_payloads(result.warnings)
-            + _metrics_payload(result.run_metrics)
-        )
+        final_errors = per_signal_errors
+        final_warnings = list(result.warnings or [])
+        final_run_metrics = dict(result.run_metrics or {})
         result.status = final_status
         return result
     except Exception as e:  # noqa: BLE001 — catch post-scan pipeline failures too
@@ -452,8 +453,8 @@ def run_scanner(
         final_signals_emitted = 0
         final_fetched_records = result.fetched_records
         final_errors = [{"type": e.__class__.__name__, "message": str(e), "trace": tb}]
-        final_errors.extend(_warning_payloads(existing_warnings))
-        final_errors.extend(_metrics_payload(result.run_metrics))
+        final_warnings = existing_warnings
+        final_run_metrics = dict(result.run_metrics or {})
         result = ScannerResult(
             scanner=scanner_name,
             status="error",
@@ -474,6 +475,8 @@ def run_scanner(
                 signals_emitted=final_signals_emitted,
                 fetched_records=final_fetched_records,
                 errors=final_errors,
+                warnings=final_warnings,
+                run_metrics=final_run_metrics,
             )
         except Exception as e:  # noqa: BLE001
             finalization_warnings.append(

@@ -15,7 +15,7 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "x")
 os.environ.setdefault("ANTHROPIC_API_KEY", "x")
 os.environ.setdefault("ANTHROPIC_ORCHESTRATOR_KEY", "test-key")
 
-from modal_workers.shared.document_writer import DocumentWriter
+from modal_workers.shared.document_writer import DocumentWriter, safe_anthropic_filename
 
 
 def test_upload_returns_file_id_on_success():
@@ -39,6 +39,37 @@ def test_upload_returns_file_id_on_success():
     assert fname == "test.pdf"
     assert body == b"%PDF-1.4 test"
     assert mime == "application/pdf"
+
+
+def test_upload_sanitizes_anthropic_filename():
+    writer = DocumentWriter(client=MagicMock(), anthropic_api_key="test-key")
+    fake_file = MagicMock()
+    fake_file.id = "file_abc123"
+    fake_files_api = MagicMock()
+    fake_files_api.create.return_value = fake_file
+    fake_anthropic_module = MagicMock()
+    fake_anthropic_module.Anthropic.return_value.beta.files = fake_files_api
+
+    with patch.dict("sys.modules", {"anthropic": fake_anthropic_module}):
+        file_id = writer._upload_to_anthropic(
+            b"%PDF-1.4 test",
+            "Viridian Therapeutics, Inc.\\DE / (VRDN): final? filing",
+        )
+
+    assert file_id == "file_abc123"
+    fname, _, mime = fake_files_api.create.call_args.kwargs["file"]
+    assert fname == "Viridian Therapeutics Inc. DE (VRDN) final filing.pdf"
+    assert "/" not in fname
+    assert "\\" not in fname
+    assert ":" not in fname
+    assert mime == "application/pdf"
+
+
+def test_safe_anthropic_filename_truncates_long_titles():
+    filename = safe_anthropic_filename("A" * 400)
+
+    assert filename.endswith(".pdf")
+    assert len(filename) == 255
 
 
 def test_upload_returns_none_on_anthropic_exception():

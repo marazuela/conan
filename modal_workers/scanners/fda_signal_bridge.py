@@ -397,6 +397,26 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         ) or []
         assets_by_id = {row["id"]: row for row in asset_rows}
 
+    # Evidence was originally fetched once per event. At ~50 pending events that
+    # spent most of the 90s soft budget on REST round trips and caused recurring
+    # partial bridge runs. Bulk load it here and keep the per-event loop CPU-bound.
+    event_ids = [e["id"] for e in events if e.get("id")]
+    evidence_by_event: Dict[str, List[Dict[str, Any]]] = {}
+    if event_ids:
+        in_clause = ",".join(event_ids)
+        evidence_rows = client._rest(
+            "GET", "fda_event_evidence",
+            params={
+                "event_id": f"in.({in_clause})",
+                "evidence_status": "eq.active",
+                "select": "event_id,source,evidence_type,payload,evidence_status",
+            },
+        ) or []
+        for row in evidence_rows:
+            event_key = row.get("event_id")
+            if event_key:
+                evidence_by_event.setdefault(event_key, []).append(row)
+
     for event in events:
         if time.time() > deadline:
             warnings.append("wall-clock budget exceeded during signal build")
@@ -412,14 +432,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             skipped += 1
             continue
 
-        evidence_rows = client._rest(
-            "GET", "fda_event_evidence",
-            params={
-                "event_id": f"eq.{event_id}",
-                "evidence_status": "eq.active",
-                "select": "source,evidence_type,payload,evidence_status",
-            },
-        ) or []
+        evidence_rows = evidence_by_event.get(event_id, [])
 
         designations = _designations_from(asset, evidence_rows)
 

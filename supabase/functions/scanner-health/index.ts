@@ -78,6 +78,8 @@ interface ScannerRunRow {
   started_at: string;
   completed_at: string | null;
   errors: Array<Record<string, unknown>>;
+  warnings?: string[] | null;
+  run_metrics?: Record<string, unknown> | null;
 }
 
 interface ScannerRunDiagnostics {
@@ -137,7 +139,7 @@ async function build() {
     ).order("name"),
     // Last 7 days of scanner_runs for the per-scanner "recent_runs" rolling view.
     sb.from("scanner_runs").select(
-      "scanner_id,status,signals_emitted,started_at,completed_at,errors",
+      "scanner_id,status,signals_emitted,started_at,completed_at,errors,warnings,run_metrics",
     ).gte("started_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
       .order("started_at", { ascending: false }).limit(500),
     sb.from("operator_flags").select(
@@ -176,6 +178,13 @@ async function build() {
   const scannerOut = scanners.map((s) => {
     const recent = (runsByScanner.get(s.id) ?? []).map((r) => {
       const diagnostics = extractRunDiagnostics(r.errors);
+      const warnings = Array.isArray(r.warnings) && r.warnings.length > 0
+        ? r.warnings.filter((value): value is string => typeof value === "string")
+        : diagnostics.warnings;
+      const metrics = r.run_metrics && typeof r.run_metrics === "object" &&
+          !Array.isArray(r.run_metrics) && Object.keys(r.run_metrics).length > 0
+        ? r.run_metrics
+        : diagnostics.metrics;
       return {
       status: r.status,
       signals_emitted: r.signals_emitted,
@@ -185,8 +194,8 @@ async function build() {
         ? Math.round((Date.parse(r.completed_at) - Date.parse(r.started_at)) / 1000)
         : null,
       error: diagnostics.error,
-      warnings: diagnostics.warnings,
-      metrics: diagnostics.metrics,
+      warnings,
+      metrics,
     };
     });
     const myFlags = flagsByScanner.get(s.id) ?? [];

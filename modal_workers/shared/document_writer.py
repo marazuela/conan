@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -47,6 +48,9 @@ DOCUMENT_STORAGE_BUCKET = "documents"
 
 # Anthropic Files API endpoint (used by _maybe_upload_to_anthropic).
 ANTHROPIC_FILES_ENDPOINT = "https://api.anthropic.com/v1/files"
+_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._() -]+")
+_FILENAME_SPACE_RE = re.compile(r"\s+")
+_MAX_ANTHROPIC_FILENAME_CHARS = 255
 
 # Source values must match the CHECK constraint in 20260506000010_v3_phase_0_1_schema.sql.
 VALID_SOURCES = {
@@ -67,6 +71,27 @@ class WriteResult:
 def compute_content_hash(raw_text: str) -> str:
     """sha256 of raw_text (utf-8). Caller can pre-compute or let writer do it."""
     return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+
+
+def safe_anthropic_filename(filename: str) -> str:
+    """Return a Files API-safe PDF filename.
+
+    Anthropic rejects path separators, control-ish punctuation, and names over
+    255 chars. Source titles often contain SEC suffixes like `/DE/` or full
+    Federal Register titles, so sanitize at the upload boundary.
+    """
+    candidate = str(filename or "").replace("/", " ").replace("\\", " ")
+    candidate = _FILENAME_SAFE_RE.sub(" ", candidate)
+    candidate = _FILENAME_SPACE_RE.sub(" ", candidate).strip(" ._-")
+    if not candidate:
+        candidate = "document"
+    if not candidate.lower().endswith(".pdf"):
+        candidate = f"{candidate}.pdf"
+    if len(candidate) <= _MAX_ANTHROPIC_FILENAME_CHARS:
+        return candidate
+    stem, ext = os.path.splitext(candidate)
+    ext = ext or ".pdf"
+    return f"{stem[:_MAX_ANTHROPIC_FILENAME_CHARS - len(ext)].rstrip(' ._-')}{ext}"
 
 
 class DocumentWriter:
@@ -212,14 +237,15 @@ class DocumentWriter:
                     "skipping upload for %s", filename,
                 )
                 return None
+            safe_filename = safe_anthropic_filename(filename)
             resp = files_api.create(
-                file=(filename, body, "application/pdf"),
+                file=(safe_filename, body, "application/pdf"),
             )
             file_id = getattr(resp, "id", None)
             if file_id:
                 logger.info(
                     "document_writer: uploaded to anthropic files api filename=%s file_id=%s",
-                    filename, file_id,
+                    safe_filename, file_id,
                 )
             return file_id
         except Exception as exc:  # noqa: BLE001

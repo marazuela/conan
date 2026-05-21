@@ -113,6 +113,27 @@ def test_run_scanner_warns_when_finalization_still_fails_after_retries():
     assert any("update_scanner_last_run failed after retries" in warning for warning in result.warnings)
 
 
+def test_run_scanner_separates_errors_warnings_and_metrics():
+    client = FakeClient()
+
+    def scan_fn(cfg: ScannerConfig) -> ScannerResult:
+        return ScannerResult(
+            scanner=cfg.name,
+            status="ok",
+            signals=[],
+            warnings=["non-fatal upstream warning"],
+            fetched_records=7,
+            run_metrics={"records_seen": 7},
+        )
+
+    result = run_scanner("test_scanner", scan_fn, client=client)
+
+    assert result.status == "ok"
+    assert client.closed[0]["errors"] == []
+    assert client.closed[0]["warnings"] == ["non-fatal upstream warning"]
+    assert client.closed[0]["run_metrics"] == {"records_seen": 7}
+
+
 # ----------------------------------------------------------------------
 # scoring_meta — data_freshness stamping from market_snapshot liveness
 # ----------------------------------------------------------------------
