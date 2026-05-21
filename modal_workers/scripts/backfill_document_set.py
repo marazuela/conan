@@ -183,15 +183,23 @@ def backfill_row(
     appl = (asset.get("application_number") or "").strip()
 
     outcome_data = eval_row.get("realized_outcome_data") or {}
-    resolution_iso = outcome_data.get("approval_or_crl_date")
+    # Prefer the Phase 0 holdout shape's explicit approval_or_crl_date; fall
+    # back to the eval_harness.reference_assessment_date column which is the
+    # canonical "what date is this event" anchor for D-116-labelled phase4b
+    # rows (whose realized_outcome_data carries anchor_date, not
+    # approval_or_crl_date).
+    resolution_iso = (
+        outcome_data.get("approval_or_crl_date")
+        or eval_row.get("reference_assessment_date")
+    )
     if not resolution_iso:
         return RowStats(eval_id=eval_id, drug=drug, ticker=ticker,
-                        skipped_reason="no approval_or_crl_date")
+                        skipped_reason="no resolution date")
     try:
         resolution_d = datetime.strptime(resolution_iso, "%Y-%m-%d").date()
     except ValueError:
         return RowStats(eval_id=eval_id, drug=drug, ticker=ticker,
-                        skipped_reason="unparseable approval_or_crl_date")
+                        skipped_reason="unparseable resolution date")
 
     # Reference window: 30 days before resolution, ending at resolution date.
     window_start = resolution_d - timedelta(days=30)
@@ -311,7 +319,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     rows = client._rest(
         "GET", "eval_harness",
         params={
-            "select": "id,asset_id,document_set,realized_outcome,realized_outcome_data,"
+            "select": "id,asset_id,reference_assessment_date,document_set,"
+                      "realized_outcome,realized_outcome_data,"
                       "fda_assets(id,ticker,drug_name,application_number,extensions)",
             "limit": str(args.limit),
         },

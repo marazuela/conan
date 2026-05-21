@@ -567,10 +567,25 @@ def convergence_qa(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
         ref_winner = ref.get("winner_signal_id")
         if ref_winner is not None and ref_winner != row["signal_id"] and reactor_bonus > 0:
             # Reactor stamps bonus only on the winner row, so if we sampled a
-            # bonus>0 row the reference must pick the same winner.
-            mismatch_keys.append(
-                f"winner: reactor={row['signal_id']} ref={ref_winner}"
+            # bonus>0 row the reference must pick the same winner — UNLESS the
+            # reactor's winner and the reference winner have equal scores. In
+            # that case the deterministic signal_id-ASC tiebreak now lands them
+            # on the same pick going forward, but rows stamped before the
+            # tiebreak fix can still legitimately disagree. Tolerate score ties;
+            # flag only true ordering errors.
+            ref_winner_score: Optional[float] = next(
+                (
+                    float(s.get("score") or 0.0)
+                    for s in group
+                    if s.get("signal_id") == ref_winner
+                ),
+                None,
             )
+            reactor_winner_score = float(row.get("score") or 0.0)
+            if ref_winner_score is None or abs(ref_winner_score - reactor_winner_score) > 1e-9:
+                mismatch_keys.append(
+                    f"winner: reactor={row['signal_id']} ref={ref_winner}"
+                )
 
         if mismatch_keys:
             summary["mismatches"] += 1
