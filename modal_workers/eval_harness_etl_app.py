@@ -10,6 +10,9 @@ function reads from a fixed path.
 
 Deploy:  modal deploy modal_workers/eval_harness_etl_app.py
 Run:     modal run modal_workers/eval_harness_etl_app.py::run_seed --apply
+Backfill existing seeded document sets:
+         modal run modal_workers/eval_harness_etl_app.py::run_seed \
+           --apply --backfill-existing-document-set
 
 Apart from the file mount and the secrets attachment, this is a thin
 wrapper — all logic is in `seed_eval_harness_db_etl`.
@@ -44,6 +47,7 @@ def run_seed(
     multi_asset: str = "newest",
     limit: Optional[int] = None,
     apply: bool = False,
+    backfill_existing_document_set: bool = False,
 ) -> Dict[str, Any]:
     """Execute the Phase 4B subset ETL. Returns the EtlSummary as a dict."""
     from pathlib import Path
@@ -56,5 +60,6 @@ def run_seed(
         multi_asset=multi_asset,
         limit=limit,
         apply=apply,
+        backfill_existing_document_set=backfill_existing_document_set,
     )
     return asdict(summary)

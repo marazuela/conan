@@ -51,8 +51,9 @@ import logging
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from modal_workers.shared.supabase_client import SupabaseClient
 
@@ -80,6 +81,7 @@ class TickerMap:
     chosen: Dict[str, str] = field(default_factory=dict)        # ticker → asset_id
     ambiguous: Dict[str, List[str]] = field(default_factory=dict)  # ticker → all asset_ids
     skipped: List[str] = field(default_factory=list)             # ticker (in --skip mode)
+    assets_by_ticker: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -92,9 +94,24 @@ class EtlSummary:
     skipped_existing: int = 0
     skipped_no_asset: int = 0
     skipped_multi_asset: int = 0
+    document_set_resolved: int = 0
+    document_set_empty: int = 0
+    patched_existing_document_set: int = 0
     by_hit: Counter = field(default_factory=Counter)
+    unresolved_by_reason: Counter = field(default_factory=Counter)
+    unresolved_examples: List[Dict[str, Any]] = field(default_factory=list)
     errors: int = 0
     apply: bool = False
+
+
+@dataclass
+class ExistingEvalRow:
+    id: str
+    asset_id: str
+    reference_assessment_date: str
+    document_set: List[str] = field(default_factory=list)
+    is_holdout: bool = False
+    notes: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +143,10 @@ def _resolve_tickers(
     # PostgREST `in.(...)` filter — comma-separated.
     in_filter = "in.(" + ",".join(tickers) + ")"
     rows = sb._rest("GET", "fda_assets", params={
-        "select": "id,ticker,is_active,created_at",
+        "select": (
+            "id,ticker,is_active,created_at,drug_name,indication,"
+            "application_number,sponsor_name"
+        ),
         "ticker": in_filter,
         "limit": "10000",
     }) or []
@@ -136,6 +156,7 @@ def _resolve_tickers(
         by_ticker.setdefault(r["ticker"], []).append(r)
 
     out = TickerMap()
+    out.assets_by_ticker = by_ticker
     for tk, group in by_ticker.items():
         if len(group) == 1:
             out.chosen[tk] = group[0]["id"]
@@ -156,6 +177,160 @@ def _resolve_tickers(
         winner = max(pool, key=lambda g: g.get("created_at") or "")
         out.chosen[tk] = winner["id"]
 
+    return out
+
+
+def _record_unresolved(
+    summary: EtlSummary,
+    *,
+    reason: str,
+    staged: Dict[str, Any],
+) -> None:
+    summary.unresolved_by_reason[reason] += 1
+    if len(summary.unresolved_examples) < 25:
+        summary.unresolved_examples.append({
+            "reason": reason,
+            "event_id": staged.get("event_id"),
+            "ticker": staged.get("ticker"),
+            "filed_at": staged.get("filed_at"),
+        })
+
+
+def _norm_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _metadata_score(staged: Dict[str, Any], asset: Dict[str, Any]) -> int:
+    """Score staged event metadata against an asset row.
+
+    The current binary_catalyst staging mostly has ticker/date only, but this
+    lets future staging ledgers carry drug/sponsor/application hints without
+    changing the resolver contract.
+    """
+    score = 0
+    candidate_pairs = (
+        ("drug_name", "drug_name"),
+        ("asset_name", "drug_name"),
+        ("compound", "drug_name"),
+        ("indication", "indication"),
+        ("application_number", "application_number"),
+        ("sponsor_name", "sponsor_name"),
+    )
+    for staged_key, asset_key in candidate_pairs:
+        left = _norm_text(staged.get(staged_key) or (staged.get("label") or {}).get(staged_key))
+        right = _norm_text(asset.get(asset_key))
+        if not left or not right:
+            continue
+        if left == right:
+            score += 4
+        elif left in right or right in left:
+            score += 2
+    return score
+
+
+def _resolve_asset_id_for_staged(
+    staged: Dict[str, Any],
+    tmap: TickerMap,
+) -> Optional[str]:
+    ticker = staged.get("ticker")
+    if not ticker:
+        return None
+
+    group = tmap.assets_by_ticker.get(ticker) or []
+    staged_asset_id = staged.get("asset_id")
+    if staged_asset_id and any(a.get("id") == staged_asset_id for a in group):
+        return staged_asset_id
+
+    if len(group) > 1:
+        scored = [(_metadata_score(staged, asset), asset) for asset in group]
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if scored and scored[0][0] > 0 and (
+            len(scored) == 1 or scored[0][0] > scored[1][0]
+        ):
+            return scored[0][1]["id"]
+
+    return tmap.chosen.get(ticker)
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def _coerce_document_set(value: Any) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    return [str(value)]
+
+
+def _load_asset_documents(
+    sb: SupabaseClient,
+    asset_ids: Iterable[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    asset_ids = sorted({a for a in asset_ids if a})
+    if not asset_ids:
+        return {}
+    rows = sb._rest("GET", "asset_documents", params={
+        "select": (
+            "asset_id,document_id,link_type,is_material,"
+            "documents!inner(id,published_at,doc_type,title)"
+        ),
+        "asset_id": "in.(" + ",".join(asset_ids) + ")",
+        "limit": "10000",
+    }) or []
+
+    by_asset: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        by_asset.setdefault(row.get("asset_id"), []).append(row)
+    return by_asset
+
+
+def _document_set_for_staged(
+    staged: Dict[str, Any],
+    asset_docs: List[Dict[str, Any]],
+    *,
+    window_before_days: int = 30,
+    window_after_days: int = 7,
+) -> List[str]:
+    explicit = _coerce_document_set(staged.get("document_set"))
+    if explicit:
+        return explicit
+
+    filed = _parse_iso_date(staged.get("filed_at"))
+    if not filed:
+        return []
+    start = filed - timedelta(days=window_before_days)
+    end = filed + timedelta(days=window_after_days)
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for row in asset_docs:
+        if row.get("is_material") is False:
+            continue
+        if row.get("link_type") not in ("primary", "safety_signal"):
+            continue
+        doc = row.get("documents") or {}
+        published = _parse_iso_date(doc.get("published_at"))
+        if not published or published < start or published > end:
+            continue
+        doc_id = row.get("document_id") or doc.get("id")
+        if doc_id and doc_id not in seen:
+            seen.add(doc_id)
+            out.append(doc_id)
     return out
 
 
@@ -181,7 +356,7 @@ def _derive_realized_outcome(label: Dict[str, Any]) -> str:
 
 
 def _build_eval_harness_row(
-    *, asset_id: str, staged: Dict[str, Any],
+    *, asset_id: str, staged: Dict[str, Any], document_set: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     label = staged.get("label") or {}
     return {
@@ -189,7 +364,7 @@ def _build_eval_harness_row(
         "reference_assessment_date": staged["filed_at"],
         "realized_outcome": _derive_realized_outcome(label),
         "realized_outcome_data": label,
-        "document_set": [],  # postgres uuid[] '{}'; backfill_document_set fills later
+        "document_set": document_set or [],
         "is_holdout": False,
         "difficulty": None,
         "notes": (
@@ -224,6 +399,33 @@ def _existing_eval_keys(
     return {(r["asset_id"], r["reference_assessment_date"]) for r in rows}
 
 
+def _existing_eval_rows(
+    sb: SupabaseClient,
+    asset_ids: Iterable[str],
+) -> Dict[Tuple[str, str], ExistingEvalRow]:
+    asset_ids = sorted({a for a in asset_ids})
+    if not asset_ids:
+        return {}
+    in_filter = "in.(" + ",".join(asset_ids) + ")"
+    rows = sb._rest("GET", "eval_harness", params={
+        "select": "id,asset_id,reference_assessment_date,document_set,is_holdout,notes",
+        "asset_id": in_filter,
+        "limit": "10000",
+    }) or []
+    out: Dict[Tuple[str, str], ExistingEvalRow] = {}
+    for r in rows:
+        key = (r["asset_id"], r["reference_assessment_date"])
+        out[key] = ExistingEvalRow(
+            id=r["id"],
+            asset_id=r["asset_id"],
+            reference_assessment_date=r["reference_assessment_date"],
+            document_set=_coerce_document_set(r.get("document_set")),
+            is_holdout=bool(r.get("is_holdout")),
+            notes=r.get("notes"),
+        )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -235,6 +437,7 @@ def run_etl(
     multi_asset: MultiAssetMode = "newest",
     limit: Optional[int] = None,
     apply: bool = False,
+    backfill_existing_document_set: bool = False,
 ) -> EtlSummary:
     """Execute the subset ETL. Idempotent + dry-run-safe."""
     sb = sb or SupabaseClient()
@@ -260,40 +463,85 @@ def run_etl(
             sorted(tmap.skipped),
         )
 
-    # Step 2: pre-load existing eval_harness keys for idempotency.
-    existing = _existing_eval_keys(sb, tmap.chosen.values())
+    staged_asset_ids: Dict[int, str] = {}
+    for idx, staged in enumerate(resolved_rows):
+        asset_id = _resolve_asset_id_for_staged(staged, tmap)
+        if asset_id:
+            staged_asset_ids[idx] = asset_id
+
+    # Step 2: pre-load existing eval_harness keys and linked documents.
+    existing_rows = _existing_eval_rows(sb, staged_asset_ids.values())
+    existing = set(existing_rows)
+    docs_by_asset = _load_asset_documents(sb, staged_asset_ids.values())
 
     # Step 3: walk the resolved rows, build INSERT payload list.
     payloads: List[Dict[str, Any]] = []
-    for staged in resolved_rows:
+    patch_payloads: List[Dict[str, Any]] = []
+    for idx, staged in enumerate(resolved_rows):
         ticker = staged.get("ticker")
         if not ticker:
             summary.errors += 1
+            _record_unresolved(summary, reason="missing_ticker", staged=staged)
             continue
 
-        asset_id = tmap.chosen.get(ticker)
+        asset_id = staged_asset_ids.get(idx)
         if not asset_id:
             if ticker in tmap.ambiguous and ticker in tmap.skipped:
                 summary.skipped_multi_asset += 1
+                _record_unresolved(summary, reason="ambiguous_asset", staged=staged)
             else:
                 summary.skipped_no_asset += 1
+                _record_unresolved(summary, reason="no_asset", staged=staged)
             continue
 
+        document_set = _document_set_for_staged(
+            staged,
+            docs_by_asset.get(asset_id, []),
+        )
         key = (asset_id, staged["filed_at"])
         if key in existing:
             summary.skipped_existing += 1
+            existing_row = existing_rows.get(key)
+            if (
+                backfill_existing_document_set
+                and existing_row
+                and document_set
+                and not existing_row.document_set
+                and not existing_row.is_holdout
+                and (existing_row.notes or "").startswith("phase4b_seed:")
+            ):
+                patch_payloads.append({
+                    "id": existing_row.id,
+                    "document_set": document_set,
+                })
+                summary.document_set_resolved += 1
+            elif document_set:
+                summary.document_set_resolved += 1
+            else:
+                summary.document_set_empty += 1
+                _record_unresolved(summary, reason="no_matching_documents", staged=staged)
             continue
 
-        payloads.append(_build_eval_harness_row(asset_id=asset_id, staged=staged))
+        payloads.append(_build_eval_harness_row(
+            asset_id=asset_id,
+            staged=staged,
+            document_set=document_set,
+        ))
         existing.add(key)  # avoid intra-run duplicates if staging has them
         summary.matched_records += 1
+        if document_set:
+            summary.document_set_resolved += 1
+        else:
+            summary.document_set_empty += 1
+            _record_unresolved(summary, reason="no_matching_documents", staged=staged)
         hit = (staged.get("label") or {}).get("hit")
         summary.by_hit["HIT" if hit is True else "MISS" if hit is False else "UNRESOLVED"] += 1
 
     if not apply:
         logger.info(
-            "[dry-run] would INSERT %d rows (re-run with --apply to commit)",
-            len(payloads),
+            "[dry-run] would INSERT %d rows and PATCH %d existing rows "
+            "(re-run with --apply to commit)",
+            len(payloads), len(patch_payloads),
         )
         summary.inserted = 0
         return summary
@@ -312,6 +560,19 @@ def run_etl(
         except Exception as exc:  # noqa: BLE001
             logger.error("eval_harness INSERT batch %d failed: %s", i // BATCH, exc)
             summary.errors += len(batch)
+
+    for patch in patch_payloads:
+        try:
+            sb._rest_with_retry(
+                "PATCH", "eval_harness",
+                params={"id": f"eq.{patch['id']}"},
+                json_body={"document_set": patch["document_set"]},
+                prefer="return=minimal",
+            )
+            summary.patched_existing_document_set += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.error("eval_harness document_set PATCH failed: %s", exc)
+            summary.errors += 1
 
     return summary
 
@@ -337,6 +598,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--apply", action="store_true",
         help="actually INSERT (default is dry-run)",
     )
+    p.add_argument(
+        "--backfill-existing-document-set",
+        action="store_true",
+        help="PATCH existing phase4b_seed rows that still have empty document_set",
+    )
     args = p.parse_args(argv)
 
     summary = run_etl(
@@ -344,6 +610,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         multi_asset=args.multi_asset,
         limit=args.limit,
         apply=args.apply,
+        backfill_existing_document_set=args.backfill_existing_document_set,
     )
 
     logger.info("ETL summary: %s", summary)
