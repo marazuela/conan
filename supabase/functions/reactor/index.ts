@@ -669,7 +669,7 @@ async function flagHeuristicMissingScoringMeta(sig: SignalRow): Promise<void> {
       .limit(1);
     if (existing && existing.length > 0) return;
     await sb.from("operator_flags").insert({
-      severity: "error",
+      severity: "critical",
       source: "reactor",
       kind: "heuristic_missing_scoring_meta",
       title:

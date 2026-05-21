@@ -351,11 +351,11 @@ def test_provisional_convergence_audit_flags_violators(monkeypatch):
     assert params["extensions->scoring_meta->>requires_resolution"] == "eq.true"
     assert params["band_with_bonus"] == "not.is.null"
 
-    # Must insert an error-severity flag, not warn/info.
+    # Must insert a DB-allowed red-severity flag, not warn/info.
     posts = [c for c in captured_rest
              if c["method"] == "POST" and c["path"] == "operator_flags"]
     assert len(posts) == 1
-    assert posts[0]["json_body"]["severity"] == "error"
+    assert posts[0]["json_body"]["severity"] == "critical"
     assert posts[0]["json_body"]["kind"] == "provisional_converged_invariant_violated"
 
 
@@ -414,14 +414,14 @@ def test_thesis_jobs_sla_sweeper_flags_each_breaching_status(monkeypatch):
     assert dlq_patch["json_body"]["attempt_count"] == 3
     assert dlq_patch["params"]["id"] == "eq.j3"
 
-    # Scoring flag must be severity=error because at least one row was DLQ'd.
+    # Scoring flag must be critical because at least one row was DLQ'd.
     scoring_flag_posts = [
         c for c in captured
         if c["method"] == "POST" and c["path"] == "operator_flags"
         and c["json_body"].get("kind") == "sla_breach_scoring"
     ]
     assert len(scoring_flag_posts) == 1
-    assert scoring_flag_posts[0]["json_body"]["severity"] == "error"
+    assert scoring_flag_posts[0]["json_body"]["severity"] == "critical"
     # needs_scoring flag is warn (not auto-acted).
     ns_flag_posts = [
         c for c in captured

@@ -1016,7 +1016,7 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
             summary["scoring_resets"] = resets
             summary["scoring_dlqs"] = dlqs
             if dlqs > 0:
-                severity = "error"
+                severity = "critical"
 
         _upsert_flag(
             client,
@@ -1113,7 +1113,7 @@ def thesis_jobs_sla_sweeper(client: Optional[SupabaseClient] = None) -> Dict[str
 #
 # This sweeper does NOT auto-fix: stamping a convergence result is not safe to
 # silently undo (the row may have driven alerts / thesis drafts). It just
-# surfaces a severity=error flag so an operator can investigate.
+# surfaces a severity=critical flag so an operator can investigate.
 # ===========================================================================
 
 _PROVISIONAL_AUDIT_LIMIT = 100
@@ -1156,7 +1156,7 @@ def provisional_convergence_audit(client: Optional[SupabaseClient] = None) -> Di
 
     _upsert_flag(
         client,
-        severity="error",
+        severity="critical",
         source="reactor",
         kind="provisional_converged_invariant_violated",
         title=f"{len(violators)} provisional rows carry convergence stamps",
