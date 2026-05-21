@@ -282,12 +282,17 @@ class SupabaseClient:
 
     def close_scanner_run(self, run_id: str, *, status: str, signals_emitted: int = 0,
                           fetched_records: Optional[int] = None,
-                          errors: Optional[List[Any]] = None, raw_log_path: Optional[str] = None) -> None:
+                          errors: Optional[List[Any]] = None,
+                          warnings: Optional[List[str]] = None,
+                          run_metrics: Optional[Dict[str, Any]] = None,
+                          raw_log_path: Optional[str] = None) -> None:
         patch: Dict[str, Any] = {
             "status": status,
             "signals_emitted": signals_emitted,
             "completed_at": "now()",
             "errors": errors or [],
+            "warnings": warnings or [],
+            "run_metrics": run_metrics or {},
         }
         if fetched_records is not None:
             patch["fetched_records"] = fetched_records
