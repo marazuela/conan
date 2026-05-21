@@ -363,8 +363,11 @@ def test_persist_tier2_assessment_writes_tier_and_supersedes_prior(monkeypatch):
     assert new_id == "new-assessment-1"
 
     posts = [c for c in captured if c["method"] == "POST"]
-    assert len(posts) == 1
-    body = posts[0]["json_body"]
+    assert len(posts) == 2
+    assessment_post = next(
+        c for c in posts if c["path"] == "convergence_assessments"
+    )
+    body = assessment_post["json_body"]
     assert body["tier"] == 2
     assert body["orchestrator_version"] == tier2.TIER2_ORCHESTRATOR_VERSION
     assert body["model_id"] == tier2.TIER2_MODEL_ID
@@ -379,6 +382,15 @@ def test_persist_tier2_assessment_writes_tier_and_supersedes_prior(monkeypatch):
     assert body["conviction_pct"] == 52.0
     assert body["cost_usd"] == 0.42
     assert body["latency_ms"] == 45000
+
+    marker_post = next(
+        c for c in posts if c["path"] == "assessment_stage_metrics"
+    )
+    marker = marker_post["json_body"]
+    assert marker["assessment_id"] == "new-assessment-1"
+    assert marker["stage_name"] == tier2.TIER2_STAGE_METRIC_NAME
+    assert marker["cost_usd"] == 0.42
+    assert marker["latency_ms"] == 45000
 
     # Supersession PATCH excludes the just-inserted row
     patches = [c for c in captured if c["method"] == "PATCH"]
@@ -644,6 +656,8 @@ def _make_rest_recorder(*, fda_assets=None, facts=None, asset_documents=None,
             return [{"id": insert_run_id or "run-1"}]
         if method == "POST" and path == "convergence_assessments":
             return [{"id": insert_assessment_id or "assess-1"}]
+        if method == "POST" and path == "assessment_stage_metrics":
+            return []
         return []
 
     return fake_rest, captured
@@ -742,12 +756,33 @@ def test_complete_tier2_run_happy_path(monkeypatch):
     assert posts[0]["json_body"]["document_window_start"]
     assert posts[0]["json_body"]["document_window_end"]
 
+    marker_posts = [
+        c for c in captured
+        if c["method"] == "POST" and c["path"] == "assessment_stage_metrics"
+    ]
+    assert len(marker_posts) == 1
+    marker = marker_posts[0]["json_body"]
+    assert marker["assessment_id"] == "assess-X"
+    assert marker["stage_name"] == tier2.TIER2_STAGE_METRIC_NAME
+    assert marker["model"] == tier2.TIER2_MODEL_ID
+    assert marker["cost_usd"] == 0.42
+    assert marker["latency_ms"] == 45000
+    assert marker["notes"]["gate_status"] == "tier2_skipped"
+
     # Run patched twice: running → completed
     run_patches = [c for c in captured
                    if c["method"] == "PATCH" and c["path"] == "orchestrator_runs"]
     statuses = [p["json_body"].get("status") for p in run_patches]
     assert "running" in statuses
     assert "completed" in statuses
+    marker_idx = captured.index(marker_posts[0])
+    completed_idx = next(
+        i for i, c in enumerate(captured)
+        if c["method"] == "PATCH"
+        and c["path"] == "orchestrator_runs"
+        and c["json_body"].get("status") == "completed"
+    )
+    assert marker_idx < completed_idx
 
 
 def test_complete_tier2_run_rejects_wrong_tier(monkeypatch):

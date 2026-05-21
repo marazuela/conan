@@ -48,6 +48,7 @@ TIER2_MAX_DOCS = 50
 TIER2_ORCHESTRATOR_VERSION = "bulk_v0"
 TIER2_MODEL_ID = "claude-sonnet-4-6"
 TIER2_DEFAULT_WINDOW_DAYS = 180
+TIER2_STAGE_METRIC_NAME = "tier2_bulk_synthesis"
 
 # Escalation rule per bulk_orchestrator.md §Escalation rule.
 TIER2_ESCALATION_CONVICTION_THRESHOLD = 60.0
@@ -582,6 +583,31 @@ def persist_tier2_assessment(
             "Tier-2: failed to insert convergence_assessments row"
         )
     assessment_id = rows[0]["id"]
+
+    # The orphan sweeper defines a real assessment as one with at least one
+    # stage metric child. Tier-2 skips Tier-1's stage graph, so write a compact
+    # marker before the run is marked completed.
+    sb._rest(
+        "POST", "assessment_stage_metrics",
+        json_body={
+            "assessment_id": assessment_id,
+            "stage_name": TIER2_STAGE_METRIC_NAME,
+            "model": TIER2_MODEL_ID,
+            "cost_usd": round(cost_usd, 4),
+            "latency_ms": latency_ms or 0,
+            "status": "completed",
+            "notes": {
+                "tier": 2,
+                "orchestrator_version": TIER2_ORCHESTRATOR_VERSION,
+                "trigger_type": trigger_type,
+                "trigger_doc_id": trigger_doc_id,
+                "document_count": len(_as_list(document_ids)),
+                "fact_count": len(_as_list(fact_ids)),
+                "gate_status": "tier2_skipped",
+            },
+        },
+        prefer="return=minimal",
+    )
 
     # Supersede the prior non-superseded row for this asset (skip the row we
     # just inserted). Mirrors the Tier-1 supersession pattern.

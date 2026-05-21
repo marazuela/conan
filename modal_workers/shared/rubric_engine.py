@@ -724,7 +724,12 @@ def convergence_reference(group: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _pick_winner(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
-    return max(signals, key=_score_of)
+    # Highest score wins; signal_id ASC breaks ties so the winner is deterministic
+    # across the Python reference (convergence_qa) and the TS reactor pickWinner
+    # in supabase/functions/_shared/convergence.ts. Without the tiebreak the two
+    # implementations could pick different winners on score ties, producing
+    # spurious convergence_qa convergence_disagreement flags.
+    return min(signals, key=lambda s: (-_score_of(s), s.get("signal_id") or ""))
 
 
 def _score_of(s: Dict[str, Any]) -> float:

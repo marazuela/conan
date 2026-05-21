@@ -91,8 +91,16 @@ export function classifyGroup(signals: GroupSignal[]): GroupVerdict {
   return { bonus, type, winner_signal_id: pickWinner(unique).signal_id, unique_signals: unique };
 }
 
-function pickWinner(signals: GroupSignal[]): GroupSignal {
-  return signals.reduce((best, s) => (s.score > best.score ? s : best), signals[0]);
+// Highest score wins; signal_id ASC breaks ties so the winner is deterministic
+// across this TS reactor and the Python reference at
+// modal_workers/shared/rubric_engine.py _pick_winner. Without the tiebreak the
+// two implementations could pick different winners on score ties, producing
+// spurious convergence_qa convergence_disagreement flags.
+export function pickWinner(signals: GroupSignal[]): GroupSignal {
+  return signals.reduce((best, s) => {
+    if (s.score !== best.score) return s.score > best.score ? s : best;
+    return s.signal_id < best.signal_id ? s : best;
+  }, signals[0]);
 }
 
 // classify_band — exact threshold logic from rubric_engine.py.

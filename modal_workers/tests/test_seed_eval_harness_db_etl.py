@@ -21,6 +21,7 @@ from modal_workers.scripts.seed_eval_harness_db_etl import (
     EtlSummary,
     _build_eval_harness_row,
     _derive_realized_outcome,
+    _document_set_for_staged,
     _resolve_tickers,
     run_etl,
 )
@@ -45,9 +46,13 @@ class _StubSb:
         *,
         assets_by_ticker: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         existing_eval_keys: Optional[set[tuple[str, str]]] = None,
+        asset_documents_by_asset: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        existing_eval_overrides: Optional[Dict[tuple[str, str], Dict[str, Any]]] = None,
     ):
         self.assets_by_ticker = assets_by_ticker or {}
         self.existing_eval_keys = existing_eval_keys or set()
+        self.asset_documents_by_asset = asset_documents_by_asset or {}
+        self.existing_eval_overrides = existing_eval_overrides or {}
         self.calls: List[Dict[str, Any]] = []
 
     def _rest(
@@ -81,10 +86,29 @@ class _StubSb:
                 if in_filter.startswith("in.(") else []
             )
             return [
-                {"asset_id": aid, "reference_assessment_date": d}
+                {
+                    "id": f"eval-{aid}-{d}",
+                    "asset_id": aid,
+                    "reference_assessment_date": d,
+                    "document_set": [],
+                    "is_holdout": False,
+                    "notes": "phase4b_seed: test",
+                    **self.existing_eval_overrides.get((aid, d), {}),
+                }
                 for (aid, d) in self.existing_eval_keys
                 if aid in asset_ids
             ]
+
+        if table == "asset_documents":
+            in_filter = (params or {}).get("asset_id") or ""
+            asset_ids = (
+                in_filter.removeprefix("in.(").removesuffix(")").split(",")
+                if in_filter.startswith("in.(") else []
+            )
+            rows: List[Dict[str, Any]] = []
+            for aid in asset_ids:
+                rows.extend(self.asset_documents_by_asset.get(aid, []))
+            return rows
 
         return []
 
@@ -206,6 +230,58 @@ def test_build_row_populates_required_columns():
     assert "x1" in row["notes"]
 
 
+def test_build_row_uses_resolved_document_set():
+    staged = {
+        "event_id": "x1", "ticker": "AXSM", "filed_at": "2024-09-15",
+        "label": {"hit": False},
+    }
+    row = _build_eval_harness_row(
+        asset_id="aaaa",
+        staged=staged,
+        document_set=["doc-1", "doc-2"],
+    )
+    assert row["document_set"] == ["doc-1", "doc-2"]
+
+
+def test_document_set_for_staged_uses_material_docs_in_window():
+    staged = {"filed_at": "2024-06-20"}
+    docs = [
+        {
+            "asset_id": "a",
+            "document_id": "doc-in-window",
+            "link_type": "primary",
+            "is_material": True,
+            "documents": {"published_at": "2024-06-19T12:00:00+00:00"},
+        },
+        {
+            "asset_id": "a",
+            "document_id": "doc-safety",
+            "link_type": "safety_signal",
+            "is_material": True,
+            "documents": {"published_at": "2024-06-21"},
+        },
+        {
+            "asset_id": "a",
+            "document_id": "doc-old",
+            "link_type": "primary",
+            "is_material": True,
+            "documents": {"published_at": "2024-04-01"},
+        },
+        {
+            "asset_id": "a",
+            "document_id": "doc-mention",
+            "link_type": "mentions",
+            "is_material": True,
+            "documents": {"published_at": "2024-06-19"},
+        },
+    ]
+
+    assert _document_set_for_staged(staged, docs) == [
+        "doc-in-window",
+        "doc-safety",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Ticker resolution
 # ---------------------------------------------------------------------------
@@ -315,11 +391,32 @@ def test_etl_apply_writes_eval_harness_rows(staging_file: Path):
                   "is_active": True, "created_at": "2024"}],
         "PFE": [{"id": "p-pfe", "ticker": "PFE",
                  "is_active": True, "created_at": "2024"}],
+    }, asset_documents_by_asset={
+        "a-axsm": [
+            {
+                "asset_id": "a-axsm",
+                "document_id": "doc-evt1",
+                "link_type": "primary",
+                "is_material": True,
+                "documents": {"published_at": "2024-01-15"},
+            },
+        ],
+        "p-pfe": [
+            {
+                "asset_id": "p-pfe",
+                "document_id": "doc-evt3",
+                "link_type": "primary",
+                "is_material": True,
+                "documents": {"published_at": "2024-03-01"},
+            },
+        ],
     })
     summary = run_etl(staging_path=staging_file, sb=sb, apply=True)
 
     assert summary.inserted == 3
     assert summary.errors == 0
+    assert summary.document_set_resolved == 2
+    assert summary.document_set_empty == 1
 
     # Check the POST batch included the right shapes.
     inserts = [c for c in sb.calls if c["method"] == "POST"]
@@ -333,8 +430,14 @@ def test_etl_apply_writes_eval_harness_rows(staging_file: Path):
     for row in batch:
         assert row["realized_outcome"]
         assert row["realized_outcome_data"]
-        assert row["document_set"] == []
         assert row["is_holdout"] is False
+    docsets = {
+        (row["asset_id"], row["reference_assessment_date"]): row["document_set"]
+        for row in batch
+    }
+    assert docsets[("a-axsm", "2024-01-15")] == ["doc-evt1"]
+    assert docsets[("a-axsm", "2024-06-20")] == []
+    assert docsets[("p-pfe", "2024-03-01")] == ["doc-evt3"]
 
 
 def test_etl_skips_already_existing_pairs(staging_file: Path):
@@ -357,6 +460,113 @@ def test_etl_skips_already_existing_pairs(staging_file: Path):
     assert summary.matched_records == 1
     assert summary.skipped_existing == 2
     assert summary.inserted == 1
+
+
+def test_etl_backfill_existing_document_set_patches_empty_rows(staging_file: Path):
+    sb = _StubSb(
+        assets_by_ticker={
+            "AXSM": [{"id": "a-axsm", "ticker": "AXSM",
+                      "is_active": True, "created_at": "2024"}],
+            "PFE": [{"id": "p-pfe", "ticker": "PFE",
+                     "is_active": True, "created_at": "2024"}],
+        },
+        existing_eval_keys={
+            ("a-axsm", "2024-01-15"),
+            ("a-axsm", "2024-06-20"),
+            ("p-pfe", "2024-03-01"),
+        },
+        asset_documents_by_asset={
+            "a-axsm": [
+                {
+                    "asset_id": "a-axsm",
+                    "document_id": "doc-evt1",
+                    "link_type": "primary",
+                    "is_material": True,
+                    "documents": {"published_at": "2024-01-15"},
+                },
+            ],
+            "p-pfe": [
+                {
+                    "asset_id": "p-pfe",
+                    "document_id": "doc-evt3",
+                    "link_type": "primary",
+                    "is_material": True,
+                    "documents": {"published_at": "2024-03-01"},
+                },
+            ],
+        },
+    )
+
+    summary = run_etl(
+        staging_path=staging_file,
+        sb=sb,
+        apply=True,
+        backfill_existing_document_set=True,
+    )
+
+    assert summary.inserted == 0
+    assert summary.skipped_existing == 3
+    assert summary.patched_existing_document_set == 2
+
+    patches = [c for c in sb.calls if c["method"] == "PATCH"]
+    assert len(patches) == 2
+    patched_sets = [p["json_body"]["document_set"] for p in patches]
+    assert ["doc-evt1"] in patched_sets
+    assert ["doc-evt3"] in patched_sets
+
+
+def test_etl_backfill_existing_document_set_preserves_holdouts(staging_file: Path):
+    sb = _StubSb(
+        assets_by_ticker={
+            "AXSM": [{"id": "a-axsm", "ticker": "AXSM",
+                      "is_active": True, "created_at": "2024"}],
+            "PFE": [{"id": "p-pfe", "ticker": "PFE",
+                     "is_active": True, "created_at": "2024"}],
+        },
+        existing_eval_keys={
+            ("a-axsm", "2024-01-15"),
+            ("a-axsm", "2024-06-20"),
+            ("p-pfe", "2024-03-01"),
+        },
+        existing_eval_overrides={
+            ("a-axsm", "2024-01-15"): {
+                "is_holdout": True,
+                "notes": "curated holdout",
+            },
+        },
+        asset_documents_by_asset={
+            "a-axsm": [
+                {
+                    "asset_id": "a-axsm",
+                    "document_id": "doc-evt1",
+                    "link_type": "primary",
+                    "is_material": True,
+                    "documents": {"published_at": "2024-01-15"},
+                },
+            ],
+            "p-pfe": [
+                {
+                    "asset_id": "p-pfe",
+                    "document_id": "doc-evt3",
+                    "link_type": "primary",
+                    "is_material": True,
+                    "documents": {"published_at": "2024-03-01"},
+                },
+            ],
+        },
+    )
+
+    summary = run_etl(
+        staging_path=staging_file,
+        sb=sb,
+        apply=True,
+        backfill_existing_document_set=True,
+    )
+
+    assert summary.patched_existing_document_set == 1
+    patches = [c for c in sb.calls if c["method"] == "PATCH"]
+    assert len(patches) == 1
+    assert patches[0]["json_body"]["document_set"] == ["doc-evt3"]
 
 
 def test_etl_unmatched_ticker_increments_no_asset_skip(staging_file: Path):
