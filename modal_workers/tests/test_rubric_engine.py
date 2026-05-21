@@ -972,6 +972,23 @@ def test_convergence_dedup_collapses_cross_listing_echoes():
     assert len(v["unique_signal_ids"]) == 1
 
 
+def test_convergence_tiebreak_uses_signal_id_ascending():
+    # Two signals with identical scores must converge on the lower signal_id
+    # regardless of input order. Without the tiebreak, this test would be
+    # sensitive to dict-iteration / REST-result ordering and produce flaky
+    # winners across Python + TS implementations.
+    v_forward = convergence_reference([
+        _sig("s_alpha", "merger_arb", "long", 30, "h-alpha"),
+        _sig("s_beta", "merger_arb", "long", 30, "h-beta"),
+    ])
+    v_reverse = convergence_reference([
+        _sig("s_beta", "merger_arb", "long", 30, "h-beta"),
+        _sig("s_alpha", "merger_arb", "long", 30, "h-alpha"),
+    ])
+    assert v_forward["winner_signal_id"] == "s_alpha"
+    assert v_reverse["winner_signal_id"] == "s_alpha"
+
+
 def test_convergence_dedup_keeps_highest_score_per_hash():
     v = convergence_reference([
         _sig("s1-low", "merger_arb", "long", 10, "h1"),
