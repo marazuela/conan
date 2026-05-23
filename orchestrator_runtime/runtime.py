@@ -107,7 +107,12 @@ ENABLE_SUB_AGENTS_DEFAULT = os.environ.get("ORCH_ENABLE_SUB_AGENTS") == "1"
 # once the RAG backfill (Phase 1A) is run against live data.
 ENABLE_STAGE_1_RAG_DEFAULT = os.environ.get("ORCH_ENABLE_STAGE_1_RAG") == "1"
 STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
-SUB_AGENT_LOOP_MAX_TURNS = 4
+# Raised 4 → 8 (2026-05-23, audit/sub_agent_schema_drift_2026-05-23.md §S-1):
+# 4 turns proved too tight on VRDN dry-run — Stage 1 used 3 turns dispatching 3
+# of 4 sub-agents and ran out on the 4th turn before producing final JSON. 8
+# leaves headroom for parallel dispatch + per-role retry + final synthesis.
+# Per-turn cost is bounded by the $15/run BudgetExceededError ceiling.
+SUB_AGENT_LOOP_MAX_TURNS = 8
 
 # D-119: shared system prefix lifted from per-stage user content. All stages
 # in one assessment send the same asset preamble + anchor + fact layer as the

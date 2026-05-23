@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "asset_id": "00000000-0000-0000-0000-000000000001",
+  "papers": [
+    {
+      "pmid": "37999812",
+      "doi": "10.1056/NEJMoa2306584",
+      "title": "Veligrotug versus Placebo in Active Thyroid Eye Disease",
+      "authors": ["Smith J", "Doe A", "Roe B"],
+      "journal": "NEJM",
+      "year": 2024,
+      "abstract": "In a randomized, double-blind phase-3 trial of veligrotug in active TED, mean proptosis reduction at week 24 was 2.4 mm greater than placebo (p<0.001).",
+      "study_type": "phase3_pivotal",
+      "is_peer_reviewed": true,
+      "relevance_score": 0.97,
+      "supports_thesis_direction": "supports",
+      "evidence_strength": "strong",
+      "key_findings": [
+        "primary endpoint met with 2.4 mm proptosis delta",
+        "hearing AE rate 12.4% vs 3.1% placebo"
+      ],
+      "verbatim_quote": "Mean reduction in proptosis at week 24 was 2.4 mm greater in the veligrotug group than in the placebo group (95% CI, 1.9 to 2.9; P<0.001).",
+      "primary_source_url": "https://www.nejm.org/doi/10.1056/NEJMoa2306584",
+      "fact_citations": [],
+      "citations_inbound": 24,
+      "citations_outbound_seminal": ["32219882"]
+    }
+  ],
+  "synthesis": {
+    "thesis_alignment": "bull",
+    "summary": "Veligrotug's THRIVE phase-3 pivotal showed clinically and statistically significant proptosis reduction with a class-consistent safety profile. The signal is strong enough that label expansion is the likeliest open question, not approval itself.",
+    "kill_conditions": [
+      "hearing AE rate above 15% (vs class precedent)",
+      "FDA requires new manufacturing data"
+    ],
+    "contradictory_findings": []
+  },
+  "query_used": "veligrotug AND (thyroid eye disease OR Graves orbitopathy) AND phase 3",
+  "missed_seminal_via_citation_graph": [],
+  "sourcing_completeness_pct": 1.0,
+  "retrieved_at": "2026-05-23T12:00:00Z",
+  "confidence": 0.91,
+  "memory_writeback_path": "/memories/sub_agents/literature/00000000-0000-0000-0000-000000000001.md",
+  "partial_output": false
+}

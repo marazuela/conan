@@ -51,6 +51,82 @@ This sub-agent does NOT score conviction. It scores *what the market thinks* wit
 
 ## Output schema (`options_microstructure_v1.json`)
 
+**Your output MUST validate against the schema below. Do not invent new top-level keys; missing required fields or extra fields will hard-fail validation and the dispatch result will be discarded.** The schema is the single source of truth — if this skill's worked example below ever drifts from the schema, the schema wins.
+
+```jsonschema
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conan/marazuela/schemas/options_microstructure_v1.json",
+  "title": "Options Microstructure Sub-Agent Output (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "asset_id", "ticker", "computed_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "asset_id": { "type": "string", "format": "uuid" },
+    "ticker": { "type": "string" },
+    "underlying_price": { "type": ["number", "null"], "minimum": 0 },
+    "event_date": { "type": ["string", "null"], "format": "date" },
+    "straddle_implied_move_pct": { "type": ["number", "null"] },
+    "iv_30d": { "type": ["number", "null"], "minimum": 0 },
+    "iv_60d": { "type": ["number", "null"], "minimum": 0 },
+    "iv_term_slope": { "type": ["string", "null"], "enum": [null, "front_loaded", "flat", "backward_loaded"] },
+    "event_window_liquidity_score": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "oi_concentration": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "top_strikes": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["strike", "side", "open_interest"],
+            "properties": {
+              "strike": { "type": "number" },
+              "side": { "type": "string", "enum": ["call", "put"] },
+              "open_interest": { "type": "integer", "minimum": 0 },
+              "volume_today": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
+        },
+        "put_call_ratio": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "position_inferred": { "type": "string", "enum": ["long_vol", "short_vol", "directional_long", "directional_short", "neutral", "unknown"] },
+    "computed_at": { "type": "string", "format": "date-time" },
+    "data_quality": { "type": "string", "enum": ["fresh", "stale", "unavailable"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "partial_output": { "type": "boolean", "default": false }
+  }
+}
+```
+
+### Degraded mode (hard rule, no exceptions)
+
+When **any** of the following is true — `POLYGON_API_KEY` env var is absent, the chain-pull tool returns no data, or the underlying ticker is not options-listed — emit the **literal degraded shape** below and return immediately:
+
+```json
+{
+  "schema_version": 1,
+  "asset_id": "<the provided uuid>",
+  "ticker": "<the provided ticker>",
+  "underlying_price": null,
+  "event_date": null,
+  "straddle_implied_move_pct": null,
+  "iv_30d": null, "iv_60d": null,
+  "iv_term_slope": null,
+  "event_window_liquidity_score": 0,
+  "position_inferred": "unknown",
+  "computed_at": "<now in ISO-8601>",
+  "data_quality": "unavailable",
+  "confidence": 0,
+  "partial_output": true
+}
+```
+
+Do NOT synthesize a plausible-looking shape from prior knowledge. Do NOT make up IV numbers or strike levels. Do NOT call additional tools after one returns "no data" — the failure is structural, not a retry problem.
+
+Worked example (only when chain data is actually available):
+
 ```json
 {
   "schema_version": 1,
@@ -71,7 +147,7 @@ This sub-agent does NOT score conviction. It scores *what the market thinks* wit
     "put_call_ratio": 1.21
   },
   "position_inferred": "long_vol",
-  "computed_at": "2026-05-07T15:30:00Z",
+  "computed_at": "2026-05-23T15:30:00Z",
   "data_quality": "fresh",
   "confidence": 0.85
 }

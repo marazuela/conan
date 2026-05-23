@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "asset_id": "00000000-0000-0000-0000-000000000001",
+  "indication": "Thyroid Eye Disease",
+  "class_membership_source": "passed_in",
+  "competitors": [
+    {
+      "sponsor": "Amgen",
+      "drug": "teprotumumab (Tepezza)",
+      "ticker": "AMGN",
+      "sponsor_market_cap_usd": 175000000000,
+      "phase": "approved",
+      "next_milestone": "label expansion",
+      "next_milestone_date": null,
+      "differentiator": "first-in-class",
+      "endpoint_overlap": "primary_same",
+      "threat_level": "high",
+      "primary_source_url": "https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=761143",
+      "fact_citations": []
+    },
+    {
+      "sponsor": "Sling Therapeutics",
+      "drug": "linsitinib (SLN-124)",
+      "ticker": null,
+      "sponsor_market_cap_usd": null,
+      "phase": "2",
+      "next_milestone": "Phase 2b readout",
+      "next_milestone_date": "2027-03-31",
+      "differentiator": "cheaper_admin",
+      "endpoint_overlap": "primary_same",
+      "threat_level": "low",
+      "primary_source_url": "https://clinicaltrials.gov/study/NCT05276063",
+      "fact_citations": []
+    }
+  ],
+  "market_dynamics": {
+    "n_competitors_phase3_or_later": 2,
+    "n_recent_in_class_approvals_36mo": 1,
+    "n_recent_in_class_crls_36mo": 0,
+    "indication_TAM_usd": 4500000000,
+    "incumbent_market_share_top3_pct": [95, 4, 1]
+  },
+  "white_space_assessment": {
+    "is_first_in_class_for_indication": false,
+    "is_first_in_subpopulation": true,
+    "subpopulation": "chronic / inactive TED",
+    "differentiation_durability_months": 18
+  },
+  "moat_summary": null,
+  "sourcing_completeness_pct": 1.0,
+  "retrieved_at": "2026-05-23T12:00:00Z",
+  "confidence": 0.82,
+  "memory_writeback_path": "/memories/sub_agents/competitive/thyroid_eye_disease.md",
+  "partial_output": false
+}

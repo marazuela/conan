@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "asset_id": "00000000-0000-0000-0000-000000000001",
+  "class_membership": {
+    "moa_canonical": "anti-IGF-1R monoclonal antibody",
+    "class_drugs_in_scope": ["teprotumumab", "veligrotug"],
+    "membership_confidence": 0.92,
+    "fallback": false
+  },
+  "class_precedents": [
+    {
+      "drug": "teprotumumab",
+      "sponsor": "Horizon Therapeutics / Amgen",
+      "year": 2020,
+      "decision": "approval",
+      "indication": "Thyroid Eye Disease",
+      "outcome_factors": ["pivotal HZNP-TED-301 met primary endpoint", "BLA priority review"],
+      "boxed_warning": false,
+      "rems": false,
+      "adcomm_held": false,
+      "adcomm_vote": null,
+      "primary_source_url": "https://www.accessdata.fda.gov/drugsatfda_docs/appletter/2020/761143Orig1s000ltr.pdf",
+      "fact_citations": []
+    }
+  ],
+  "base_rates": {
+    "class_approval_rate": 1.0,
+    "class_approval_rate_ci_low": 0.16,
+    "class_approval_rate_ci_high": 1.0,
+    "n": 1,
+    "adcomm_convene_rate": 0.0,
+    "boxed_warning_rate": 0.0,
+    "median_nda_to_decision_days": 240
+  },
+  "sponsor_track_record": {
+    "prior_approvals": 0,
+    "prior_crls": 0,
+    "prior_breakthrough": 1,
+    "rtor_participated": false,
+    "active_warning_letters": 0,
+    "recent_facility_inspections": [
+      {"facility": "Lonza Biologics Visp", "date": "2025-09-15", "outcome": "NAI"}
+    ]
+  },
+  "reviewer_panel_concerns": [
+    "hearing impairment AE class signal",
+    "infusion-reaction monitoring requirements"
+  ],
+  "divergence_from_norm_flags": [
+    "first non-teprotumumab approval in TED — no prior class CRLs to extrapolate"
+  ],
+  "sourcing_completeness_pct": 0.95,
+  "retrieved_at": "2026-05-23T12:00:00Z",
+  "confidence": 0.78,
+  "memory_writeback_path": "/memories/sub_agents/regulatory/thyroid_eye_disease_dermatology_ophthalmology.md",
+  "partial_output": false
+}

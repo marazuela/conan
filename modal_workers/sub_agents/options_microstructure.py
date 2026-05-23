@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date as _date
+from datetime import date as _date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .runtime import ROLE_REGISTRY, SubAgentRunner, ToolHandler
+from .runtime import ROLE_REGISTRY, SubAgentRunner, SubAgentResult, ToolHandler
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,61 @@ class OptionsMicrostructureRunner(SubAgentRunner):
     skill_path = SKILL_PATH
     schema_filename = "options_microstructure_v1.json"
     tool_defs = _TOOL_DEFS
+
+    def run(
+        self,
+        *,
+        question: str,
+        asset_context: Dict[str, Any],
+        budget_token_cap: Optional[int] = None,
+    ) -> SubAgentResult:
+        """Short-circuit when POLYGON_API_KEY is absent — emit the literal
+        degraded shape (schema-valid) without entering the Sonnet loop.
+
+        Saves the per-dispatch Sonnet cost (~$0.30–0.50) AND eliminates the
+        degraded-mode runtime drift we saw on the 2026-05-23 VRDN dry-run, where
+        Claude — with no Polygon data — invented its own plausible-looking but
+        spec-disjoint shape (atm_iv_pct, iv_term_structure, ...). See audit/
+        sub_agent_schema_drift_2026-05-23.md §S-3 + §R-3.
+        """
+        if not os.environ.get("POLYGON_API_KEY"):
+            degraded_payload = {
+                "schema_version": 1,
+                "asset_id": asset_context.get("asset_id", ""),
+                "ticker": asset_context.get("ticker", "") or "UNKNOWN",
+                "underlying_price": None,
+                "event_date": None,
+                "straddle_implied_move_pct": None,
+                "iv_30d": None,
+                "iv_60d": None,
+                "iv_term_slope": None,
+                "event_window_liquidity_score": 0,
+                "position_inferred": "unknown",
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+                "data_quality": "unavailable",
+                "confidence": 0,
+                "partial_output": True,
+            }
+            logger.info(
+                "options_microstructure: POLYGON_API_KEY absent — short-circuit "
+                "with degraded shape (no Sonnet call)"
+            )
+            return SubAgentResult(
+                role=self.role,
+                schema_pass=True,
+                schema_retries=0,
+                output=degraded_payload,
+                tokens_input=0,
+                tokens_output=0,
+                cost_usd=0.0,
+                latency_ms=0,
+                tool_call_log=[],
+            )
+        return super().run(
+            question=question,
+            asset_context=asset_context,
+            budget_token_cap=budget_token_cap,
+        )
 
     def build_handler(self) -> ToolHandler:
         def handle(name: str, inp: Dict[str, Any]) -> Dict[str, Any]:

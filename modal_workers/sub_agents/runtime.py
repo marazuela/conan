@@ -63,11 +63,29 @@ if not SCHEMA_DIR.exists():
 
 
 class SubAgentSchemaError(RuntimeError):
-    def __init__(self, role: str, errors: List[str], payload: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        role: str,
+        errors: List[str],
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        tokens_input: int = 0,
+        tokens_output: int = 0,
+        cost_usd: float = 0.0,
+        latency_ms: int = 0,
+    ):
         super().__init__(f"sub_agent[{role}] schema validation failed: {errors[:1]}")
         self.role = role
         self.errors = errors
         self.payload = payload
+        # Metrics from the partial-but-spent run. Without these, the dispatcher's
+        # `except SubAgentSchemaError` branch logs 0-cost rows even though real
+        # Anthropic tokens were burned — corrupting cost soak. See audit/
+        # sub_agent_schema_drift_2026-05-23.md §S-2.
+        self.tokens_input = tokens_input
+        self.tokens_output = tokens_output
+        self.cost_usd = cost_usd
+        self.latency_ms = latency_ms
 
 
 @dataclass
@@ -376,7 +394,13 @@ class SubAgentRunner:
         schema_pass = not errors
 
         if not schema_pass:
-            raise SubAgentSchemaError(self.role, errors, payload)
+            raise SubAgentSchemaError(
+                self.role, errors, payload,
+                tokens_input=total_in,
+                tokens_output=total_out,
+                cost_usd=total_cost,
+                latency_ms=latency_ms,
+            )
 
         return SubAgentResult(
             role=self.role,

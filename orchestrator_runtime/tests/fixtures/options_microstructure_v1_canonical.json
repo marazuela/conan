@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "asset_id": "00000000-0000-0000-0000-000000000001",
+  "ticker": "VRDN",
+  "underlying_price": 27.42,
+  "event_date": "2026-06-30",
+  "straddle_implied_move_pct": 22.8,
+  "iv_30d": 1.18,
+  "iv_60d": 0.96,
+  "iv_term_slope": "front_loaded",
+  "event_window_liquidity_score": 3,
+  "oi_concentration": {
+    "top_strikes": [
+      {"strike": 27.5, "side": "call", "open_interest": 5820, "volume_today": 410},
+      {"strike": 25.0, "side": "put", "open_interest": 4905, "volume_today": 232}
+    ],
+    "put_call_ratio": 0.84
+  },
+  "position_inferred": "long_vol",
+  "computed_at": "2026-05-23T12:00:00Z",
+  "data_quality": "fresh",
+  "confidence": 0.78,
+  "partial_output": false
+}
