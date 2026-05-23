@@ -248,6 +248,11 @@ def dispatch_sub_agent(
         schema_pass = False
         errors = exc.errors
         output = exc.payload or {}
+        # Capture partial-run metrics so sub_agent_calls records real burn (not 0).
+        # See audit/sub_agent_schema_drift_2026-05-23.md §S-2.
+        tokens = (exc.tokens_input or 0) + (exc.tokens_output or 0)
+        cost = exc.cost_usd or 0.0
+        latency = exc.latency_ms or 0
         _log_to_dlq(role, errors, output)
     except Exception as exc:  # noqa: BLE001
         schema_pass = False
