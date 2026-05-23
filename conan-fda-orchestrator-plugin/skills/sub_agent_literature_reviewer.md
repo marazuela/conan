@@ -51,6 +51,83 @@ This sub-agent does NOT score approval probability. It scores *evidence quality 
 
 ## Output schema (`literature_review_v1.json`)
 
+**Your output MUST validate against the schema below. Do not invent new top-level keys; missing required fields or extra fields will hard-fail validation and the dispatch result will be discarded.** The schema is the single source of truth — if this skill's worked example below ever drifts from the schema, the schema wins.
+
+```jsonschema
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conan/marazuela/schemas/literature_review_v1.json",
+  "title": "Literature Review Sub-Agent Output (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "asset_id", "papers", "synthesis", "query_used", "retrieved_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "asset_id": { "type": "string", "format": "uuid" },
+    "papers": {
+      "type": "array", "minItems": 0, "maxItems": 50,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["title", "year", "abstract", "relevance_score", "primary_source_url"],
+        "properties": {
+          "pmid": { "type": ["string", "null"] },
+          "doi": { "type": ["string", "null"] },
+          "title": { "type": "string" },
+          "authors": { "type": "array", "items": { "type": "string" }, "maxItems": 50 },
+          "journal": { "type": ["string", "null"], "description": "Journal or preprint server name (e.g. 'NEJM', 'biorxiv')." },
+          "year": { "type": "integer", "minimum": 1950, "maximum": 2100 },
+          "abstract": { "type": "string" },
+          "study_type": { "type": ["string", "null"], "enum": [null, "phase3_pivotal", "phase2", "phase1", "meta_analysis", "MoA", "RWE", "safety_case_series", "review", "preclinical", "other"] },
+          "is_peer_reviewed": { "type": "boolean" },
+          "relevance_score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "supports_thesis_direction": { "type": "string", "enum": ["supports", "contradicts", "neutral"] },
+          "evidence_strength": { "type": "string", "enum": ["strong", "moderate", "weak"] },
+          "key_findings": { "type": "array", "items": { "type": "string" }, "maxItems": 10 },
+          "verbatim_quote": { "type": ["string", "null"] },
+          "primary_source_url": { "type": "string", "format": "uri" },
+          "fact_citations": { "type": "array", "items": { "type": "string" } },
+          "citations_inbound": { "type": ["integer", "null"], "minimum": 0 },
+          "citations_outbound_seminal": { "type": "array", "items": { "type": "string" }, "maxItems": 20 }
+        }
+      }
+    },
+    "synthesis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["thesis_alignment", "summary"],
+      "properties": {
+        "thesis_alignment": { "type": "string", "enum": ["bull", "base", "bear", "neutral"] },
+        "summary": { "type": "string" },
+        "kill_conditions": { "type": "array", "items": { "type": "string" }, "maxItems": 10 },
+        "contradictory_findings": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["claim", "supporting_pmids", "contradicting_pmids"],
+            "properties": {
+              "claim": { "type": "string" },
+              "supporting_pmids": { "type": "array", "items": { "type": "string" } },
+              "contradicting_pmids": { "type": "array", "items": { "type": "string" } },
+              "resolution": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "query_used": { "type": "string" },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "missed_seminal_via_citation_graph": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+    "sourcing_completeness_pct": { "type": "number", "minimum": 0, "maximum": 1 },
+    "memory_writeback_path": { "type": ["string", "null"] },
+    "partial_output": { "type": "boolean", "default": false }
+  }
+}
+```
+
+Note: `contradictory_findings[]` lives INSIDE `synthesis{}`, not at the top level. Use `verbatim_quote` (not `verbatim_quote_for_finding`) and `journal` (not `venue`) — these are the schema's canonical field names.
+
+Worked example (illustrative shape; substitute your real findings):
+
 ```json
 {
   "schema_version": 1,
@@ -60,25 +137,32 @@ This sub-agent does NOT score approval probability. It scores *evidence quality 
       "pmid": "12345678",
       "title": "...",
       "abstract": "...",
-      "venue": "NEJM|Lancet|biorxiv|...",
+      "journal": "NEJM",
       "year": 2024,
-      "study_type": "phase3_pivotal|phase2|meta_analysis|MoA|RWE|safety_case_series",
-      "is_peer_reviewed": true|false,
+      "study_type": "phase3_pivotal",
+      "is_peer_reviewed": true,
       "relevance_score": 0.92,
       "key_findings": ["finding_1","finding_2"],
-      "supports_thesis_direction": "supports|contradicts|neutral",
-      "evidence_strength": "strong|moderate|weak",
+      "supports_thesis_direction": "supports",
+      "evidence_strength": "strong",
       "primary_source_url": "https://pubmed.ncbi.nlm.nih.gov/...",
       "citations_inbound": 47,
       "citations_outbound_seminal": ["pmid_1","pmid_2"],
-      "verbatim_quote_for_finding": "..."
+      "verbatim_quote": "..."
     }
   ],
-  "contradictory_findings": [
-    {"claim":"...","supporting_pmids":["..."],"contradicting_pmids":["..."],"resolution":"..."}
-  ],
+  "synthesis": {
+    "thesis_alignment": "bull",
+    "summary": "...",
+    "kill_conditions": ["...","..."],
+    "contradictory_findings": [
+      {"claim":"...","supporting_pmids":["..."],"contradicting_pmids":["..."],"resolution":"..."}
+    ]
+  },
+  "query_used": "moa:NMDA-antagonist indication:MDD",
   "missed_seminal_via_citation_graph": ["pmid_1","pmid_2"],
   "sourcing_completeness_pct": 0.0,
+  "retrieved_at": "2026-05-23T12:00:00Z",
   "confidence": 0.0,
   "memory_writeback_path": "/memories/sub_agents/literature/<asset_id>.md"
 }

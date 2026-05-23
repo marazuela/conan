@@ -58,6 +58,98 @@ The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` t
 
 ## Output schema (`regulatory_history_v1.json`)
 
+**Your output MUST validate against the schema below. Do not invent new top-level keys; missing required fields or extra fields will hard-fail validation and the dispatch result will be discarded.** The schema is the single source of truth — if this skill's worked example below ever drifts from the schema, the schema wins.
+
+```jsonschema
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conan/marazuela/schemas/regulatory_history_v1.json",
+  "title": "Regulatory History Sub-Agent Output (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "asset_id", "class_membership", "class_precedents",
+    "base_rates", "sponsor_track_record", "reviewer_panel_concerns",
+    "divergence_from_norm_flags", "sourcing_completeness_pct", "retrieved_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "asset_id": { "type": "string", "format": "uuid" },
+    "class_membership": {
+      "type": "object", "additionalProperties": false,
+      "required": ["moa_canonical", "class_drugs_in_scope", "membership_confidence"],
+      "properties": {
+        "moa_canonical": { "type": "string" },
+        "class_drugs_in_scope": { "type": "array", "items": { "type": "string" }, "maxItems": 50 },
+        "membership_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fallback": { "type": "boolean", "default": false }
+      }
+    },
+    "class_precedents": {
+      "type": "array", "minItems": 0, "maxItems": 50,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["drug", "sponsor", "year", "decision", "indication", "primary_source_url"],
+        "properties": {
+          "drug": { "type": "string" }, "sponsor": { "type": "string" },
+          "year": { "type": "integer", "minimum": 1950, "maximum": 2100 },
+          "decision": { "type": "string", "enum": ["approval", "CRL", "withdrawal"] },
+          "indication": { "type": "string" },
+          "outcome_factors": { "type": "array", "items": { "type": "string" }, "maxItems": 15 },
+          "boxed_warning": { "type": "boolean" }, "rems": { "type": "boolean" },
+          "adcomm_held": { "type": "boolean" },
+          "adcomm_vote": { "type": ["string", "null"] },
+          "primary_source_url": { "type": "string", "format": "uri" },
+          "fact_citations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "base_rates": {
+      "type": "object", "additionalProperties": false,
+      "required": ["class_approval_rate", "n"],
+      "properties": {
+        "class_approval_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "class_approval_rate_ci_low": { "type": ["number", "null"] },
+        "class_approval_rate_ci_high": { "type": ["number", "null"] },
+        "n": { "type": "integer", "minimum": 0 },
+        "adcomm_convene_rate": { "type": ["number", "null"] },
+        "boxed_warning_rate": { "type": ["number", "null"] },
+        "median_nda_to_decision_days": { "type": ["integer", "null"] }
+      }
+    },
+    "sponsor_track_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prior_approvals", "prior_crls"],
+      "properties": {
+        "prior_approvals": { "type": "integer" }, "prior_crls": { "type": "integer" },
+        "prior_breakthrough": { "type": "integer" }, "rtor_participated": { "type": "boolean" },
+        "active_warning_letters": { "type": "integer" },
+        "recent_facility_inspections": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["facility", "date", "outcome"],
+            "properties": {
+              "facility": { "type": "string" }, "date": { "type": "string", "format": "date" },
+              "outcome": { "type": "string", "enum": ["OAI", "VAI", "NAI", "none", "unknown"] }
+            }
+          }, "maxItems": 20
+        }
+      }
+    },
+    "reviewer_panel_concerns": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+    "divergence_from_norm_flags": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+    "sourcing_completeness_pct": { "type": "number", "minimum": 0, "maximum": 1 },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "memory_writeback_path": { "type": ["string", "null"] },
+    "partial_output": { "type": "boolean", "default": false }
+  }
+}
+```
+
+Worked example (illustrative shape; substitute your real findings):
+
 ```json
 {
   "schema_version": 1,
@@ -91,6 +183,7 @@ The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` t
   "reviewer_panel_concerns": ["concern_1","concern_2"],
   "divergence_from_norm_flags": ["flag_1","flag_2"],
   "sourcing_completeness_pct": 0.0,
+  "retrieved_at": "2026-05-23T12:00:00Z",
   "confidence": 0.0,
   "memory_writeback_path": "/memories/sub_agents/regulatory/<indication>_<panel>.md"
 }
