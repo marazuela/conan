@@ -51,38 +51,53 @@ This sub-agent does NOT score approval probability. It scores *evidence quality 
 
 ## Output schema (`literature_review_v1.json`)
 
+**Canonical schema** — the runtime injects this schema body into your user content at dispatch time; `additionalProperties: false` means top-level keys not in this list will be REJECTED. Note: `contradictory_findings` lives INSIDE `synthesis` (not at top level), and the per-paper field is `verbatim_quote` (not `verbatim_quote_for_finding`).
+
 ```json
 {
   "schema_version": 1,
-  "asset_id": "uuid",
+  "asset_id": "<uuid of the v3 fda_assets row>",
   "papers": [
     {
-      "pmid": "12345678",
-      "title": "...",
-      "abstract": "...",
-      "venue": "NEJM|Lancet|biorxiv|...",
+      "pmid": "12345678 or null",
+      "doi": "10.xxxx/yyyy or null",
+      "title": "paper title",
+      "authors": ["last_first_initial", "..."],
+      "journal": "NEJM | Lancet | bioRxiv | ... or null",
       "year": 2024,
-      "study_type": "phase3_pivotal|phase2|meta_analysis|MoA|RWE|safety_case_series",
-      "is_peer_reviewed": true|false,
+      "abstract": "abstract text",
+      "study_type": "phase3_pivotal | phase2 | phase1 | meta_analysis | MoA | RWE | safety_case_series | review | preclinical | other | null",
+      "is_peer_reviewed": true,
       "relevance_score": 0.92,
-      "key_findings": ["finding_1","finding_2"],
-      "supports_thesis_direction": "supports|contradicts|neutral",
-      "evidence_strength": "strong|moderate|weak",
+      "supports_thesis_direction": "supports | contradicts | neutral",
+      "evidence_strength": "strong | moderate | weak",
+      "key_findings": ["finding_1", "finding_2"],
+      "verbatim_quote": "verbatim quote from paper supporting key finding",
       "primary_source_url": "https://pubmed.ncbi.nlm.nih.gov/...",
-      "citations_inbound": 47,
-      "citations_outbound_seminal": ["pmid_1","pmid_2"],
-      "verbatim_quote_for_finding": "..."
+      "fact_citations": ["extracted_facts.id values"]
     }
   ],
-  "contradictory_findings": [
-    {"claim":"...","supporting_pmids":["..."],"contradicting_pmids":["..."],"resolution":"..."}
-  ],
-  "missed_seminal_via_citation_graph": ["pmid_1","pmid_2"],
-  "sourcing_completeness_pct": 0.0,
+  "synthesis": {
+    "thesis_alignment": "bull | base | bear | neutral",
+    "summary": "one-paragraph synthesis of the literature against the thesis",
+    "kill_conditions": ["falsifiable condition 1", "..."],
+    "contradictory_findings": [
+      {
+        "claim": "...",
+        "supporting_pmids": ["..."],
+        "contradicting_pmids": ["..."],
+        "resolution": "resolution or null"
+      }
+    ]
+  },
+  "query_used": "the planned search query string (single line ok)",
+  "retrieved_at": "ISO 8601 UTC",
   "confidence": 0.0,
-  "memory_writeback_path": "/memories/sub_agents/literature/<asset_id>.md"
+  "partial_output": false
 }
 ```
+
+**Required top-level fields:** `schema_version`, `asset_id`, `papers`, `synthesis`, `query_used`, `retrieved_at`. Required inside `synthesis`: `thesis_alignment`, `summary`. Required per `papers[]` entry: `title`, `year`, `abstract`, `relevance_score`, `primary_source_url`. Empty `papers: []` is valid when the search returned no relevant work — but `synthesis` and `query_used` must still be populated. Optional: `confidence`, `partial_output`.
 
 ## Internal loop (interleaved thinking, max 6 tool-call turns)
 

@@ -63,11 +63,27 @@ if not SCHEMA_DIR.exists():
 
 
 class SubAgentSchemaError(RuntimeError):
-    def __init__(self, role: str, errors: List[str], payload: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        role: str,
+        errors: List[str],
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        tokens_input: int = 0,
+        tokens_output: int = 0,
+        cost_usd: float = 0.0,
+        latency_ms: int = 0,
+    ):
         super().__init__(f"sub_agent[{role}] schema validation failed: {errors[:1]}")
         self.role = role
         self.errors = errors
         self.payload = payload
+        # Carry the partial-execution observability so the dispatcher can stamp
+        # sub_agent_calls with real numbers instead of zeros on schema failure.
+        self.tokens_input = tokens_input
+        self.tokens_output = tokens_output
+        self.cost_usd = cost_usd
+        self.latency_ms = latency_ms
 
 
 @dataclass
@@ -203,12 +219,28 @@ class SubAgentRunner:
         raise NotImplementedError
 
     def build_user_content(self, question: str, asset_context: Dict[str, Any]) -> str:
-        """Default user prompt: question + asset_context json. Subclasses can override."""
+        """Default user prompt: question + asset_context + the full schema body.
+
+        Sonnet was inventing field names (VRDN 2026-05-23 dry-run) because the
+        prior prompt only named the schema filename. Embedding the schema's
+        required[] + additionalProperties=false constraint inline grounds the
+        model in the actual contract validation will run against.
+        """
+        try:
+            schema_body = _load_schema(self.schema_filename)
+            schema_block = json.dumps(schema_body, indent=2)
+        except FileNotFoundError:
+            # Fallback: at least name the file. The runtime validation will
+            # still reject any non-matching output.
+            schema_block = f'/* schema {self.schema_filename} not found at load time */'
         return (
             f"Asset context:\n```json\n{json.dumps(asset_context, indent=2, default=str)}\n```\n\n"
             f"Question:\n{question}\n\n"
-            f"Use the available tools to gather evidence, then return ONLY a JSON "
-            f"object matching the {self.schema_filename} schema. No prose outside the JSON."
+            f"Output contract — return ONLY a JSON object matching this schema "
+            f"verbatim. All `required` fields must be present; `additionalProperties: "
+            f"false` means any field not in the schema will be REJECTED by the "
+            f"validator. No prose outside the JSON.\n\n"
+            f"```json\n{schema_block}\n```"
         )
 
     # ---------- core loop ----------
@@ -376,7 +408,15 @@ class SubAgentRunner:
         schema_pass = not errors
 
         if not schema_pass:
-            raise SubAgentSchemaError(self.role, errors, payload)
+            raise SubAgentSchemaError(
+                self.role,
+                errors,
+                payload,
+                tokens_input=total_in,
+                tokens_output=total_out,
+                cost_usd=total_cost,
+                latency_ms=latency_ms,
+            )
 
         return SubAgentResult(
             role=self.role,

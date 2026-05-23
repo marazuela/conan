@@ -50,41 +50,37 @@ This sub-agent does NOT score the asset's value. It scores the competitive *terr
 
 ## Output schema (`competitive_landscape_v1.json`)
 
+**Canonical schema** — the runtime injects this schema body into your user content at dispatch time; `additionalProperties: false` means top-level keys not in this list will be REJECTED. Roll richer competitor intelligence (sponsor sizing, indication TAM, white-space depth) into `competitors[].differentiators[]` / `threats_to_thesis[]` and `moat_summary.key_factors[]` rather than emitting separate top-level blocks.
+
 ```json
 {
   "schema_version": 1,
-  "asset_id": "uuid",
-  "indication": "...",
-  "class_membership_source": "passed_in|inferred",
+  "asset_id": "<uuid of the v3 fda_assets row>",
   "competitors": [
     {
-      "sponsor": "...","drug": "...","ticker":"...","sponsor_market_cap_usd": N,
-      "phase": "preclinical|1|2|3|filed|approved|withdrawn",
-      "next_milestone": "...","next_milestone_date": "YYYY-MM-DD|null",
-      "differentiator": "first-in-class|best-in-class|me-too|cheaper_admin|safer_label|...",
-      "endpoint_overlap": "primary_same|primary_different|secondary_overlap",
-      "threat_level": "high|medium|low",
-      "primary_source_url": "https://clinicaltrials.gov/...|https://api.fda.gov/..."
+      "name": "competitor drug name",
+      "ticker": "TICK or null",
+      "pipeline_stage": "preclinical | phase1 | phase2 | phase3 | filed | approved | discontinued | unknown",
+      "mechanism": "MOA description",
+      "indication": "indication or null",
+      "differentiators": ["first-in-class for second-line MDD", "oral vs injectable", "..."],
+      "threats_to_thesis": ["could file 6 months ahead", "..."],
+      "primary_source_urls": ["https://clinicaltrials.gov/...", "https://api.fda.gov/..."],
+      "fact_citations": ["extracted_facts.id values"]
     }
   ],
-  "market_dynamics": {
-    "n_competitors_phase3_or_later": N,
-    "n_recent_in_class_approvals_36mo": M,
-    "n_recent_in_class_crls_36mo": K,
-    "indication_TAM_usd": "N|null",
-    "incumbent_market_share_top3_pct": [s1, s2, s3]
+  "moat_summary": {
+    "assessment": "strong_moat | moderate_moat | weak_moat | no_moat | first_mover_only",
+    "key_factors": ["IP runway through 2034", "first-in-class for indication", "..."],
+    "summary": "one-paragraph moat thesis"
   },
-  "white_space_assessment": {
-    "is_first_in_class_for_indication": bool,
-    "is_first_in_subpopulation": bool,
-    "subpopulation": "...|null",
-    "differentiation_durability_months": N
-  },
-  "sourcing_completeness_pct": 0.0,
+  "retrieved_at": "ISO 8601 UTC",
   "confidence": 0.0,
-  "memory_writeback_path": "/memories/sub_agents/competitive/<indication>.md"
+  "partial_output": false
 }
 ```
+
+**Required top-level fields:** `schema_version`, `asset_id`, `competitors`, `moat_summary`, `retrieved_at`. `competitors[]` may be empty (`[]`) when the indication has no enumerable competitors — but the key must be present. Each competitor must carry at least one `primary_source_urls[]` entry; cap at 5 per competitor and 30 competitors total. Optional: `confidence`, `partial_output`.
 
 ## Internal loop (interleaved thinking, max 5 tool-call turns)
 

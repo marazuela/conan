@@ -58,56 +58,64 @@ The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` t
 
 ## Output schema (`regulatory_history_v1.json`)
 
+**Canonical schema** — the runtime injects this exact schema body into your user content at dispatch time; deviations are rejected by JSON-Schema Draft 7 validation with `additionalProperties: false`. Reproduced here for authoring reference:
+
 ```json
 {
   "schema_version": 1,
-  "asset_id": "uuid",
-  "class_membership": {
-    "moa_canonical": "NMDA receptor antagonist",
-    "class_drugs_in_scope": ["dextromethorphan","ketamine","esketamine","..."],
-    "membership_confidence": 0.72
-  },
-  "class_precedents": [
+  "asset_id": "<uuid of the v3 fda_assets row>",
+  "prior_adcomms": [
     {
-      "drug": "...","sponsor":"...","year":YYYY,
-      "decision": "approval|CRL|withdrawal",
-      "indication":"...","outcome_factors":["..."],
-      "boxed_warning": true|false, "rems": true|false,
-      "adcomm_held": true|false, "adcomm_vote": "12-1 yes|6-6|...",
-      "primary_source_url":"https://api.fda.gov/..."
+      "date": "YYYY-MM-DD",
+      "drug": "drug name",
+      "sponsor": "sponsor or null",
+      "indication": "indication",
+      "vote": "14-1 favor | 6-9 against | split | no vote — discussion only",
+      "fda_concerns": ["concern_1", "concern_2"],
+      "primary_source_url": "https://api.fda.gov/...",
+      "fact_citations": ["extracted_facts.id values"]
     }
   ],
-  "base_rates": {
-    "class_approval_rate": 0.62, "class_approval_rate_ci_low": 0.51, "class_approval_rate_ci_high": 0.73, "n": 39,
-    "adcomm_convene_rate": 0.31,
-    "boxed_warning_rate": 0.22,
-    "median_nda_to_decision_days": 305
-  },
-  "sponsor_track_record": {
-    "prior_approvals": N, "prior_crls": M, "prior_breakthrough": K,
-    "rtor_participated": bool, "active_warning_letters": N_wl,
-    "recent_facility_inspections": [{"facility":"...","date":"YYYY-MM-DD","outcome":"OAI|VAI|NAI|none"}]
-  },
-  "reviewer_panel_concerns": ["concern_1","concern_2"],
-  "divergence_from_norm_flags": ["flag_1","flag_2"],
-  "sourcing_completeness_pct": 0.0,
+  "analogous_approvals": [
+    {
+      "drug": "drug name",
+      "indication": "indication",
+      "approval_date": "YYYY-MM-DD",
+      "basis_for_approval": "regular | accelerated | priority review | breakthrough",
+      "endpoint_used": "endpoint or null",
+      "primary_source_url": "https://...",
+      "fact_citations": ["..."]
+    }
+  ],
+  "regulatory_risks": [
+    {
+      "risk": "concise risk statement",
+      "severity": "high | medium | low",
+      "mitigation": "mitigation or null"
+    }
+  ],
+  "crl_precedent_found": false,
+  "retrieved_at": "ISO 8601 UTC",
   "confidence": 0.0,
-  "memory_writeback_path": "/memories/sub_agents/regulatory/<indication>_<panel>.md"
+  "partial_output": false
 }
 ```
 
-Every entry in `class_precedents`, every base rate, every sponsor-history element MUST carry `primary_source_url`. Stage 7 constitutional check rejects the assessment if any non-null claim lacks a primary source.
+**Required top-level fields:** `schema_version`, `asset_id`, `prior_adcomms`, `analogous_approvals`, `regulatory_risks`, `retrieved_at`. The arrays may be empty if no evidence is found, but the keys must be present. Optional: `crl_precedent_found`, `confidence`, `partial_output`.
+
+Every AdComm entry, every analogous-approval entry, and every regulatory-risk element MUST carry a `primary_source_url` where applicable. Stage 7 constitutional check rejects the assessment if any non-null claim lacks a primary source.
 
 ## Internal loop (interleaved thinking, max 6 tool-call turns)
 
-1. **Memory load.** Read `/memories/sub_agents/regulatory/<indication>_<reviewer_panel_id>.md` if present. This is the per-indication-per-panel memory file with cumulative precedent map + recurring panel concerns. New panels start empty.
-2. **Class membership inference.** If `class_drugs_in_scope` not in memory: split MoA on `+`/`/`/`,`; for each fragment query ChEMBL via `compute_base_rate` MCP (target_search) for canonical class members. Fall back to a hardcoded class table (see Methodology fallbacks below) for common classes. Record `membership_confidence < 0.70` if any fragment was inferred via fallback.
-3. **openFDA precedent enumeration.** `openfda-mcp.search_approvals` for class drugs over `lookback_years=10`. For each approval: pull label (boxed warning, REMS, indication breadth), filing-to-decision interval, AdComm flag. For CRLs: `openfda-mcp.search_warning_letters` cross-referenced against EDGAR 8-K Item 8.01 mentions of the drug name within 30 days of action date.
-4. **AdComm history.** `fda-adcomm-mcp.get_calendar` for the reviewer panel × indication over `lookback_years`. For each AdComm: `search_transcripts` for the recurring concern themes, `get_voting_history` for vote tallies, `get_panel_composition` for current vs historical members.
-5. **Sponsor track record.** EDGAR EFTS (`internal-rag-mcp.hybrid_search_internal`) for the sponsor's prior FDA disclosures (8-K Item 8.01s referencing CRLs, BTD grants, priority designations, RTOR). Cross-reference openFDA warning letters by sponsor address.
-6. **Synthesis.** Compute base rates with binomial CIs (Wilson interval). List divergence-from-norm flags ONLY when supported by enumerated precedents (e.g., "no class member has been approved with full label without an AdComm in the last 5 years; this indication's panel convenes for ~31% of NDAs in this class"). Refuse to invent flags.
-7. **Schema validation.** Pydantic-validate against `regulatory_history_v1.json`. Retry up to 3× on failure with feedback prompt; escalate with `validation_pass=false` on terminal failure.
-8. **Memory writeback.** Append new precedents + new panel concerns to the memory file via Supabase Storage. Storage path written into output for the orchestrator's per-stage cost tracker.
+The search strategy below can still draw on class membership, sponsor track record, and base-rate context as *intermediate reasoning*. Only the final JSON must conform to the schema — collapse the richer scaffold into `prior_adcomms`, `analogous_approvals`, and `regulatory_risks`.
+
+1. **AdComm precedent enumeration → `prior_adcomms[]`.** Use `fda_adcomm_historical` (catalyst_universe-backed) and `fda_adcomm_upcoming` for the reviewer panel × indication over a 10-year lookback. For each AdComm: extract `date`, `drug`, `sponsor`, `indication`, `vote` (as string, e.g. "14-1 favor"), `fda_concerns[]`, and a `primary_source_url` pointing at the FDA briefing-document or transcript. Cite source documents via `fact_citations` when extracted facts already exist.
+2. **Analogous-approval enumeration → `analogous_approvals[]`.** Use `openfda_drugsfda_approvals` for class drugs across the same lookback. Per approval emit `drug`, `indication`, `approval_date`, `basis_for_approval` (regular / accelerated / priority / breakthrough), `endpoint_used` (null if unknown), `primary_source_url`. Cross-reference labels via `openfda_labels_recent` when the basis string isn't directly available from the approval record.
+3. **Risk synthesis → `regulatory_risks[]`.** Distill what the precedents collectively imply about the *current* asset: each risk gets a one-line `risk` statement, a `severity` of `high`/`medium`/`low`, and an optional `mitigation`. Refuse to invent risks not grounded in enumerated AdComm concerns, CRL precedents, or label patterns. If any class member has received a CRL in the lookback window, set `crl_precedent_found: true`.
+4. **Sponsor disclosure cross-check (input only, no output field).** EDGAR EFTS via `internal_rag_hybrid_search` (corpus=`filings`) for the sponsor's prior FDA disclosures. Use this to *enrich* `prior_adcomms[].fda_concerns` and `regulatory_risks[]`, not as its own output block.
+5. **Sourcing.** Every non-empty array element MUST carry a working `primary_source_url`. Empty arrays are valid when the lookback genuinely produced no evidence — Stage 5 prefers an honest empty over fabrication.
+6. **Stamp `retrieved_at`** with the current UTC ISO 8601 timestamp at synthesis time. Set `confidence` as your aggregate sourcing completeness × precedent depth (0.0–1.0). Set `partial_output: true` ONLY if budget exhausted before all three arrays were populated.
+7. **Emit the JSON** matching the schema verbatim (no field renames, no extra top-level keys). Schema validation is hard; the dispatcher captures the failure in `failed_reactor_events` with `source='sub_agent.regulatory_history'`.
 
 ## Methodology fallbacks (when MCP tools unavailable)
 

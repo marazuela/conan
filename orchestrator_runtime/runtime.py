@@ -107,7 +107,13 @@ ENABLE_SUB_AGENTS_DEFAULT = os.environ.get("ORCH_ENABLE_SUB_AGENTS") == "1"
 # once the RAG backfill (Phase 1A) is run against live data.
 ENABLE_STAGE_1_RAG_DEFAULT = os.environ.get("ORCH_ENABLE_STAGE_1_RAG") == "1"
 STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
-SUB_AGENT_LOOP_MAX_TURNS = 4
+# S-2 fix (2026-05-23): bumped from 4 → 6 after the VRDN dry-run showed
+# Sonnet dispatching the 4 sub-agents sequentially across turns 0–2 and
+# exhausting the budget before synthesis. 6 gives 1 fan-out turn + up to 4
+# sub-agent turns + 1 final synthesis turn under sequential dispatch, or
+# significant headroom if parallel-tool-use kicks in. Env override mirrors
+# ORCH_SUB_AGENT_BUDGET_TOKENS convention so runtime tuning needs no redeploy.
+SUB_AGENT_LOOP_MAX_TURNS = int(os.environ.get("ORCH_SUB_AGENT_LOOP_MAX_TURNS", "6"))
 
 # D-119: shared system prefix lifted from per-stage user content. All stages
 # in one assessment send the same asset preamble + anchor + fact layer as the

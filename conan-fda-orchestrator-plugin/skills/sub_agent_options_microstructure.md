@@ -51,17 +51,19 @@ This sub-agent does NOT score conviction. It scores *what the market thinks* wit
 
 ## Output schema (`options_microstructure_v1.json`)
 
+**Canonical schema** — the runtime injects this schema body into your user content at dispatch time; `additionalProperties: false` means inventing or renaming a field (e.g. `iv_term_structure` instead of `iv_term_slope`, `liquidity_score` instead of `event_window_liquidity_score`, `open_interest_analysis` instead of `oi_concentration`) will be REJECTED. Use the exact field names below:
+
 ```json
 {
   "schema_version": 1,
-  "asset_id": "uuid",
+  "asset_id": "<uuid of the v3 fda_assets row>",
   "ticker": "TICKER",
   "underlying_price": 12.34,
   "event_date": "2026-09-15",
   "straddle_implied_move_pct": 18.5,
   "iv_30d": 1.25,
   "iv_60d": 0.95,
-  "iv_term_slope": "front_loaded",
+  "iv_term_slope": "front_loaded | flat | backward_loaded | null",
   "event_window_liquidity_score": 3,
   "oi_concentration": {
     "top_strikes": [
@@ -70,12 +72,15 @@ This sub-agent does NOT score conviction. It scores *what the market thinks* wit
     ],
     "put_call_ratio": 1.21
   },
-  "position_inferred": "long_vol",
-  "computed_at": "2026-05-07T15:30:00Z",
-  "data_quality": "fresh",
-  "confidence": 0.85
+  "position_inferred": "long_vol | short_vol | directional_long | directional_short | neutral | unknown",
+  "computed_at": "ISO 8601 UTC",
+  "data_quality": "fresh | stale | unavailable",
+  "confidence": 0.85,
+  "partial_output": false
 }
 ```
+
+**Required top-level fields:** `schema_version`, `asset_id`, `ticker`, `computed_at`. All other fields are optional; if `data_quality='unavailable'` (Polygon degraded), emit nulls for the IV/move/strike fields and set `confidence: 0`.
 
 ## Internal loop (max 4 tool-call turns)
 

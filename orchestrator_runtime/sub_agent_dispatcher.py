@@ -248,6 +248,12 @@ def dispatch_sub_agent(
         schema_pass = False
         errors = exc.errors
         output = exc.payload or {}
+        # Partial-execution metrics carried on the exception (S-1 fix).
+        # Without these, sub_agent_calls rows for failures landed tokens=0,
+        # cost=0, latency=0 even when real Anthropic spend occurred.
+        tokens = exc.tokens_input + exc.tokens_output
+        cost = exc.cost_usd
+        latency = exc.latency_ms
         _log_to_dlq(role, errors, output)
     except Exception as exc:  # noqa: BLE001
         schema_pass = False
