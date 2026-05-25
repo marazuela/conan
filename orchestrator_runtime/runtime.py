@@ -112,7 +112,7 @@ STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
 # of 4 sub-agents and ran out on the 4th turn before producing final JSON. 8
 # leaves headroom for parallel dispatch + per-role retry + final synthesis.
 # Per-turn cost is bounded by the $15/run BudgetExceededError ceiling.
-SUB_AGENT_LOOP_MAX_TURNS = 8
+SUB_AGENT_LOOP_MAX_TURNS = int(os.environ.get("ORCH_SUB_AGENT_LOOP_MAX_TURNS", "8"))
 
 # D-119: shared system prefix lifted from per-stage user content. All stages
 # in one assessment send the same asset preamble + anchor + fact layer as the
