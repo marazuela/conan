@@ -42,6 +42,14 @@ One rule: **if it has a Pedro cron and runs on Cowork, it goes in `conan-cowork-
 
 If a skill needs both a Cowork-scheduled trigger AND plugin-context tools, that's a sign you actually have two skills — write a thin runner for Cowork that wraps the plugin skill, or escalate to Pedro.
 
+## Run tracking
+
+Every operational skill should write `public.skill_runs` when it starts,
+heartbeat while processing work, and finish with a terminal status. Configure
+`public.skill_run_expectations` only for skills that are expected to run on a
+cadence; `_skill_run_watchdog()` raises `operator_flags` under
+`source='skill_watchdog'` when a configured skill is silent or stuck running.
+
 ## Stale homes (deleted / ignored)
 
 - `unified_system/_ARCHIVED_Investment_tool_Delta_2026-04-16/litigation_system/skills/` — removed in v2 teardown phase 1 follow-up (2026-05-11).
