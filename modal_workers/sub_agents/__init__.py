@@ -3,6 +3,7 @@ from .literature import LiteratureRunner
 from .competitive import CompetitiveRunner
 from .regulatory_history import RegulatoryHistoryRunner
 from .options_microstructure import OptionsMicrostructureRunner
+from .commercial_opportunity import CommercialOpportunityRunner
 from .ic_memo import ICMemoRunner
 
 __all__ = [
@@ -14,5 +15,6 @@ __all__ = [
     "CompetitiveRunner",
     "RegulatoryHistoryRunner",
     "OptionsMicrostructureRunner",
+    "CommercialOpportunityRunner",
     "ICMemoRunner",
 ]
