@@ -239,3 +239,15 @@ Phase 2C is currently halted. The reconciliation becomes urgent when:
 - The next eval-harness backfill cycle wants sub-agent outputs as features (currently dark, so no calibration delta).
 
 Until then, this sits as a known structural blocker with the reconciliation strategy scoped above.
+
+---
+
+## Appendix A — Schema-sync gotcha for local Cowork machines
+
+The runner's `SCHEMA_DIR` resolution at [modal_workers/sub_agents/runtime.py:54–62](../modal_workers/sub_agents/runtime.py#L54) walks `parents[3]/conan-cowork-skills/schemas` and falls back to `parents[2]/conan-cowork-skills/schemas`. From the worktree-root `modal_workers/sub_agents/runtime.py`, `parents[3]` = `.claude/worktrees/` — and if a machine has a stale `conan-cowork-skills` checkout there with a RICHER `regulatory_history_v1.json` (extra required fields beyond canonical), the walk hits the stale copy first.
+
+Production is NOT affected — Modal packages the canonical minimal schema. But local Cowork runs on a machine with the stale rich copy will inject the wrong schema into the prompt and accept the wrong outputs.
+
+**Recommend:** on each operator machine, `ls .claude/worktrees/conan-cowork-skills/schemas/regulatory_history_v1.json` — if present, diff against canonical and delete or re-sync. Zero code change; one operator action.
+
+Captured here so future investigations of "schemas look right on Modal but wrong in local cowork dispatch" have a place to start.
