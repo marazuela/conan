@@ -567,6 +567,48 @@ def _form4_signal_type_breakdown(signals: List[Signal]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# v4 Phase 4: FDA-tracked-asset routing
+# ---------------------------------------------------------------------------
+#
+# When an insider cluster fires on an issuer that's in `fda_assets` (a drug
+# we track), the signal carries meaningful information about the binary
+# regulatory catalyst, not just generic short-positioning. Phase 4 of the v4
+# architecture simplification (~/.claude/plans/proud-booping-seal.md) routes
+# those clusters to scoring_profile='binary_catalyst' with
+# signal_category='insider_activity'. Non-biotech clusters keep their existing
+# short_positioning route — Form 4's short_positioning coverage is unchanged.
+#
+# The lookup is fetched once per scan() run (typically ~50-200 active assets)
+# and the per-cluster check is O(1) set membership.
+
+
+def _load_fda_tracked_tickers(client: SupabaseClient) -> set[str]:
+    """Return uppercase tickers of currently-active FDA-tracked assets.
+
+    Best-effort: a query failure leaves the set empty, which means every
+    insider cluster routes to short_positioning (the v3 default) — degraded
+    but safe. The scanner logs the warning in the caller.
+    """
+    try:
+        rows = client._rest(
+            "GET",
+            "fda_assets",
+            params={
+                "select": "ticker",
+                "is_active": "eq.true",
+                "ticker": "not.is.null",
+            },
+        ) or []
+    except Exception:  # noqa: BLE001
+        return set()
+    return {
+        (r.get("ticker") or "").strip().upper()
+        for r in rows
+        if r.get("ticker")
+    }
+
+
+# ---------------------------------------------------------------------------
 # scan entrypoint
 # ---------------------------------------------------------------------------
 
@@ -580,6 +622,11 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
     client = SupabaseClient()
     from modal_workers.shared.openfigi_resolver import set_cache_backend
     set_cache_backend(*client.openfigi_cache_backend())
+
+    # v4 Phase 4: pre-fetch the FDA-tracked ticker set so per-cluster routing
+    # is O(1) set membership. Empty on query failure → all clusters fall back
+    # to short_positioning (the v3 default behavior — safe degraded mode).
+    fda_tracked_tickers = _load_fda_tracked_tickers(client)
 
     budget_s = max(20, (cfg.timeout_soft_s or DEFAULT_WALL_CLOCK_S) - 10)
     scan_start = time.time()
@@ -850,6 +897,20 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             if latest_url:
                 break
 
+        # v4 Phase 4: route insider clusters on FDA-tracked tickers to the
+        # binary_catalyst profile with signal_category='insider_activity'.
+        # The cluster carries information about the regulatory binary, not
+        # generic short-positioning. Non-biotech tickers keep the default
+        # short_positioning route (scoring_profile=None lets _resolve_profile
+        # fall through to cfg.default_scoring_profile).
+        scoring_profile_override: Optional[str] = None
+        extensions: Dict[str, Any] = {}
+        if ticker and ticker.upper() in fda_tracked_tickers:
+            scoring_profile_override = "binary_catalyst"
+            extensions["signal_category"] = "insider_activity"
+            extensions["routed_from"] = "short_positioning"
+            raw_payload["signal_category"] = "insider_activity"
+
         signals.append(Signal(
             signal_id=sig_id,
             source_content_hash=src_content_hash,
@@ -862,6 +923,8 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             entity_hints=entity_hints,
             thesis_direction=thesis_direction,
             strength_estimate=strength,
+            scoring_profile=scoring_profile_override,
+            extensions=extensions,
         ))
 
     pre_cap_count = len(signals)
@@ -893,5 +956,11 @@ def scan(cfg: ScannerConfig) -> ScannerResult:
             "clusters_emitted": pre_cap_count,
             "clusters_kept": len(kept_signals),
             "top_signal_capped": len(dropped_signals),
+            # v4 Phase 4: observability for the FDA-tracked-asset reroute.
+            # Helps operators confirm the routing fires when it should.
+            "fda_tracked_tickers_loaded": len(fda_tracked_tickers),
+            "clusters_routed_binary_catalyst": sum(
+                1 for s in signals if s.scoring_profile == "binary_catalyst"
+            ),
         },
     )
