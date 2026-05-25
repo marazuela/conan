@@ -259,6 +259,7 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "fomc_calendar_refresh",
         "q1_audit_run",
         "q2_audit_run",
+        "calibration_refit_run",
         "fda_event_harvest_daily",
     })
 

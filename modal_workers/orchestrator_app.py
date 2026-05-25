@@ -763,6 +763,33 @@ def q2_audit_run_worker(profile: str = "binary_catalyst") -> Dict[str, Any]:
 
 @app.function(
     image=image,
+    timeout=1800,
+    secrets=[supabase_secrets],
+)
+def calibration_refit_run_worker(
+    min_n: int = 200,
+    bootstrap_resamples: int = 10000,
+    enable_promotion: bool = False,
+    training_source: str = "post_mortem_queue",
+) -> Dict[str, Any]:
+    """Run the D-103 calibration refit gate in explicit manual-promotion mode."""
+    from dataclasses import asdict
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.nightly_calibration_refit import run_nightly_refit
+
+    result = run_nightly_refit(
+        sb=SupabaseClient(),
+        min_n=min_n,
+        bootstrap_resamples=bootstrap_resamples,
+        enable_promotion=enable_promotion,
+        training_source=training_source,
+    )
+    return asdict(result)
+
+
+@app.function(
+    image=image,
     timeout=900,  # 15min: openFDA paging over a daily window
     secrets=[supabase_secrets, scanner_secrets],
 )
@@ -844,6 +871,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "fomc_calendar_refresh",
     "q1_audit_run",
     "q2_audit_run",
+    "calibration_refit_run",
     "fda_event_harvest_daily",
 })
 
@@ -858,6 +886,7 @@ _SPAWN_ONLY_ACTIONS: Dict[str, str] = {
     "fomc_calendar_refresh": "phase3a_fomc_calendar_refresh_worker",
     "q1_audit_run": "q1_audit_run_worker",
     "q2_audit_run": "q2_audit_run_worker",
+    "calibration_refit_run": "calibration_refit_run_worker",
     "fda_event_harvest_daily": "fda_event_harvest_daily_worker",
 }
 
@@ -985,6 +1014,18 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         kwargs = {}
         if "profile" in args:
             kwargs["profile"] = args["profile"]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "calibration_refit_run":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "calibration_refit_run_worker",
+        )
+        kwargs = {}
+        for k in ("min_n", "bootstrap_resamples", "enable_promotion",
+                  "training_source"):
+            if k in args:
+                kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from modal_workers.shared.supabase_client import SupabaseClient
@@ -197,32 +198,86 @@ def persist_ic_memo_result(
     assessment_id: str,
     question: str,
     result: SubAgentResult,
-) -> str:
-    """Insert one `sub_agent_calls` row with role='ic_memo'. Returns the
-    new row id. The caller validated `result.schema_pass` already (the
-    base `SubAgentRunner.run()` raises `SubAgentSchemaError` on failure
-    before we get here)."""
+) -> Optional[str]:
+    """Persist the synthesized IC memo where promotion can read it.
+
+    `fda_signal_promote_to_thesis()` is event-scoped and reads
+    `fda_agent_reviews.agent_kind='ic_memo'`, not `sub_agent_calls`. Resolve the
+    assessment's current pending event and write the memo there. If no pending
+    event exists, skip persist honestly so the assessment can still complete
+    without creating an orphaned memo.
+    """
+    event_id = _resolve_event_id_for_assessment(sb, assessment_id)
+    if event_id is None:
+        logger.warning(
+            "ic_memo: assessment %s has no pending fda_regulatory_events row; "
+            "skipping fda_agent_reviews persist",
+            assessment_id,
+        )
+        return None
+
     rows = sb._rest(
-        "POST", "sub_agent_calls",
+        "POST", "fda_agent_reviews",
         json_body={
-            "assessment_id": assessment_id,
-            "role": IC_MEMO_ROLE,
-            "query": question,
-            "output": result.output,
-            "schema_pass": result.schema_pass,
-            "schema_retries": result.schema_retries,
-            "tokens": result.tokens_input + result.tokens_output,
-            "cost_usd": round(result.cost_usd, 4),
-            "latency_ms": result.latency_ms,
+            "event_id": event_id,
+            "agent_kind": IC_MEMO_ROLE,
+            "version": "ic_memo_runner_v1",
+            "status": "completed",
+            "structured_output": {
+                **(result.output if isinstance(result.output, dict) else {}),
+                "_orchestrator_meta": {
+                    "assessment_id": assessment_id,
+                    "question": question,
+                    "schema_pass": result.schema_pass,
+                    "schema_retries": result.schema_retries,
+                    "tokens": result.tokens_input + result.tokens_output,
+                    "cost_usd": round(result.cost_usd, 4),
+                    "latency_ms": result.latency_ms,
+                },
+            },
+            "citations": result.output.get("citations", []),
+            "confidence": result.output.get("confidence"),
+            "snapshot_hash": f"assessment:{assessment_id}",
+            "ran_at": datetime.now(timezone.utc).isoformat(),
         },
         prefer="return=representation",
     )
     if not rows:
         raise ICMemoOrchestrationError(
-            f"sub_agent_calls insert returned no row for assessment "
+            f"fda_agent_reviews insert returned no row for assessment "
             f"{assessment_id}"
         )
     return rows[0]["id"]
+
+
+def _resolve_event_id_for_assessment(
+    sb: SupabaseClient,
+    assessment_id: str,
+) -> Optional[str]:
+    rows = sb._rest(
+        "GET",
+        "convergence_assessments",
+        params={"select": "asset_id", "id": f"eq.{assessment_id}", "limit": "1"},
+    ) or []
+    if not rows:
+        raise ICMemoOrchestrationError(
+            f"convergence_assessments row {assessment_id} not found"
+        )
+    asset_id = rows[0].get("asset_id")
+    if not asset_id:
+        return None
+    events = sb._rest(
+        "GET",
+        "fda_regulatory_events",
+        params={
+            "select": "id",
+            "asset_id": f"eq.{asset_id}",
+            "event_status": "eq.pending",
+            "order": "created_at.desc",
+            "limit": "1",
+        },
+    ) or []
+    return events[0].get("id") if events else None
 
 
 def run_ic_memo(

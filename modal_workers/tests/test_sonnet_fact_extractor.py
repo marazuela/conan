@@ -157,3 +157,40 @@ def test_main_returns_2_when_api_key_missing(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     rc = extractor.main(["--asset-id", "a1"])
     assert rc == 2
+
+
+def test_verify_fact_quote_accepts_exact_span():
+    text = "The application has a PDUFA date of June 30, 2026."
+    quote = "PDUFA date of June 30, 2026"
+    start = text.index(quote)
+    result = extractor.verify_fact_quote(
+        shown_text=text,
+        evidence_quote=quote,
+        citation_span={"start": start, "end": start + len(quote)},
+    )
+    assert result["verified"] is True
+    assert result["status"] == "span_exact"
+    assert result["span"]["start"] == start
+    assert result["span"]["end"] == start + len(quote)
+
+
+def test_verify_fact_quote_repairs_bad_span_when_quote_is_verbatim():
+    text = "Primary endpoint met with p<0.001 at week 15."
+    result = extractor.verify_fact_quote(
+        shown_text=text,
+        evidence_quote="p<0.001 at week 15",
+        citation_span={"start": 0, "end": 5},
+    )
+    assert result["verified"] is True
+    assert result["status"] == "quote_exact_span_repaired"
+    assert text[result["span"]["start"]:result["span"]["end"]] == "p<0.001 at week 15"
+
+
+def test_verify_fact_quote_rejects_paraphrase():
+    result = extractor.verify_fact_quote(
+        shown_text="The FDA assigned a PDUFA goal date of June 30, 2026.",
+        evidence_quote="PDUFA is expected around late June 2026",
+        citation_span={"start": 0, "end": 10},
+    )
+    assert result["verified"] is False
+    assert result["status"] == "quote_not_found_in_shown_text"

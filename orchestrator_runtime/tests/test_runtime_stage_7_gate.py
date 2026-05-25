@@ -223,10 +223,14 @@ def _baseline_ctx() -> Dict[str, Any]:
              "fact_type": "trial_result", "fact_text": "Endpoint met",
              "evidence_quote": "p<0.001", "confidence": 0.95},
         ],
-        "documents": [],
+        "documents": [
+            {"id": "dd44ee55ff66aabb", "source": "fixture", "doc_type": "primary"},
+        ],
         "memory_text": None,
         "reference_class_anchor": None,
-        "asset_doc_links": [],
+        "asset_doc_links": [
+            {"document_id": "dd44ee55ff66aabb", "link_type": "primary", "is_material": True},
+        ],
     }
 
 
@@ -450,8 +454,13 @@ def test_streaming_ensemble_routes_through_call_wrapper():
 
     s1_kwargs = a_client.call.call_args_list[0].kwargs
     s9_kwargs = a_client.call.call_args_list[1].kwargs
-    # Stage 1 carries the diversity temperature; Stage 9 is deterministic.
-    assert s1_kwargs.get("temperature") == 0.8
+    # Stage 1 carries diversity temperature only on models whose API still
+    # accepts the parameter; Claude 4.5+ rejects it, so the wrapper omits it.
+    from orchestrator_runtime.client import model_accepts_temperature
+    if model_accepts_temperature("claude-sonnet-4-5-20250929"):
+        assert s1_kwargs.get("temperature") == 0.8
+    else:
+        assert "temperature" not in s1_kwargs or s1_kwargs.get("temperature") is None
     assert "temperature" not in s9_kwargs or s9_kwargs.get("temperature") is None
 
     # EnsembleRun aggregates s1 + s9 cache tokens / cost (not just s1).

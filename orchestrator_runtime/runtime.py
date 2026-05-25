@@ -71,6 +71,7 @@ from orchestrator_runtime.ensemble import (
 )
 from orchestrator_runtime.constitutional import (
     SEMANTIC_SYSTEM_PROMPT,
+    ConstitutionalFinding,
     ConstitutionalResult,
     run_constitutional_check,
 )
@@ -80,6 +81,7 @@ from orchestrator_runtime.sub_agent_dispatcher import (
     dispatch_sub_agent_tool,
     reset_budget as reset_sub_agent_budget,
 )
+from orchestrator_runtime.tier2 import validate_evidence_packet
 from orchestrator_runtime.hypothesis import (
     STAGE_2_SYSTEM,
     HypothesisResult,
@@ -211,6 +213,33 @@ class AssessmentRun:
     stage_metrics: List[StageMetric] = field(default_factory=list)
 
 
+class EvidencePacketError(RuntimeError):
+    """Raised when Tier-1 would synthesize without enough grounded evidence."""
+
+
+class ConstitutionalFailure(RuntimeError):
+    """Raised when Stage 7 blocks persistence of an assessment."""
+
+    def __init__(
+        self,
+        findings: Optional[List[ConstitutionalFinding]] = None,
+        message: Optional[str] = None,
+    ):
+        self.findings = findings or []
+        if message:
+            super().__init__(message)
+            return
+        n_errors = sum(1 for f in self.findings if f.severity == "error")
+        noun = "finding" if n_errors == 1 else "findings"
+        super().__init__(
+            f"constitutional check failed with {n_errors} error {noun}"
+        )
+
+
+class Stage9ParseError(RuntimeError):
+    """Raised when Stage 9 fails to emit valid structured JSON."""
+
+
 # ===========================================================================
 # Stage 0 — load context
 # ===========================================================================
@@ -306,6 +335,23 @@ def stage_0_load(client: SupabaseClient, asset_id: str) -> Dict[str, Any]:
         "asset_doc_links": asset_docs,
         "reference_class_anchor": None,  # populated by stage_4_anchor
     }
+
+
+def require_tier1_evidence_packet(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Fail closed before Tier-1 synthesis when source grounding is incomplete."""
+    packet = validate_evidence_packet(
+        asset=ctx.get("asset") or {},
+        extracted_facts=ctx.get("facts") or [],
+        asset_documents=ctx.get("asset_doc_links") or [],
+        tier=1,
+    )
+    ctx["evidence_packet"] = packet
+    if not packet.get("ok"):
+        raise EvidencePacketError(
+            "Tier-1 evidence packet incomplete: "
+            + ", ".join(packet.get("errors") or ["unknown_error"])
+        )
+    return packet
 
 
 # ===========================================================================
@@ -492,6 +538,109 @@ contradicting evidence
   <30: should be 'neutral' — don't force a direction"""
 
 
+# v4 (Phase 2a): FDA + commercial dual-mandate Stage 1 prompt. Activated when
+# ORCH_V4=1 env var is set. Keeps the same cited-prose contract as v3 but adds
+# a required "Commercial opportunity" section covering TAM, standard of care,
+# unmet need, side-effect profile of current therapies, regulatory incentives,
+# and competitive landscape. Phase 2c will inline hypothesis enumeration +
+# adversarial premortem here (deleting the separate Stage 2/3 calls).
+STAGE_1_V4_SYSTEM = """You are a biotech investment analyst producing a complete \
+thesis on one tracked drug asset. You evaluate two parallel dimensions:
+
+1. REGULATORY — approval probability anchored in trial-data forensics, AdCom \
+risk, label risk, sponsor track record, class precedents.
+2. COMMERCIAL — total addressable market (TAM), market-cap vs opportunity \
+ratio, standard of care for the indication, severity of unmet medical need, \
+side-effect profile of current therapies, regulatory incentives derived from \
+therapeutic gaps, competitive landscape.
+
+You synthesize from a structured fact layer + raw document excerpts + (when \
+available) prior assessment memory.
+
+Your output is CITED PROSE — every material claim about the drug, the trial, \
+or the sponsor MUST reference a fact_id from the structured layer (in \
+[F:<fact_id_short>] notation, e.g. [F:abc123]) or a document_id (in \
+[D:<doc_id_short>]).
+
+Commercial-dimension claims (TAM, standard of care, unmet need severity, \
+current-therapy side effects) may not have direct fact_id support in the \
+document set. For those, you MAY draw on widely-known clinical and market \
+baselines, but you MUST mark such claims with [INF] (inferred) and keep them \
+conservative. Speculative commercial estimates without grounding will reduce \
+evidence_quality.
+
+Uncited claims about regulatory facts will be rejected by the constitutional \
+check.
+
+Required output structure (verbatim section headers, in this order):
+
+## Asset summary
+2-3 sentences identifying the asset, indication, and current regulatory state.
+
+## Catalyst landscape
+The pending catalyst (PDUFA date, AdComm, readout, etc.) and what's known \
+about it. Cite specific facts.
+
+## Regulatory evidence for approval / positive direction
+Bullet list. Each bullet cites the specific fact(s) that support it.
+
+## Regulatory evidence for CRL / negative direction
+Bullet list. Each bullet cites contradicting facts. If you cannot find \
+contrary evidence, say "no contrary evidence found in the document set" \
+explicitly.
+
+## Commercial opportunity
+A required section with the following sub-bullets (address each, even if briefly):
+- **TAM**: estimated total addressable market in USD; provide low/high range; \
+cite facts where available, otherwise mark [INF].
+- **Market-cap vs opportunity**: ratio of current company market cap to \
+estimated peak revenue; brief assessment of whether the stock looks mispriced.
+- **Standard of care**: what's currently used for this indication.
+- **SoC limitations & side effects**: where current therapies fall short — \
+efficacy ceiling, durability, treatment-emergent adverse events, \
+contraindications.
+- **Unmet need severity (1-5)**: 5 = no adequate therapy exists / \
+mortality-driving unmet need; 4 = poor existing options with major \
+side-effect burden; 3 = adequate options exist but improvement clearly \
+valuable; 2 = mild incremental need; 1 = crowded category with strong \
+existing options.
+- **Regulatory incentives**: Breakthrough / Fast Track / Orphan Drug / \
+Priority Review designations and how they relate to therapeutic gap.
+- **Competitive landscape**: programs in the same indication at comparable \
+phases; who else is approaching the same patient population.
+
+## Key uncertainties
+Bullet list of open questions where the evidence is ambiguous. Each \
+uncertainty: what's unknown, why it matters, what would resolve it.
+
+## Reasoning trace
+3-5 sentences walking through how you weighted regulatory + commercial \
+evidence to reach your direction + conviction. Be explicit about how the \
+commercial picture modulated (amplified, dampened, or did not affect) the \
+pure regulatory thesis.
+
+## Conclusion
+- thesis_direction: long | short | neutral | straddle
+- conviction_pct: 0-100 (probability your direction is correct)
+- evidence_quality: 0.0-1.0 (how confident are you in the underlying \
+evidence base — separate from direction)
+
+Direction calibration:
+  long: expect approval and/or positive market move
+  short: expect CRL and/or negative market move
+  neutral: outcome is too uncertain to take directional position
+  straddle: expect large move but cannot determine direction; bet on \
+volatility
+
+Conviction calibration:
+  90+: strong consensus across multiple primary sources, no material \
+contradicting evidence
+  70-89: clear lean, minor uncertainties manageable
+  50-69: meaningful uncertainty, lean is plausible but contestable
+  30-49: highly uncertain, lean is weak
+  <30: should be 'neutral' — don't force a direction"""
+
+
 def stage_1_synthesize(
     a_client: OrchestratorClient,
     ctx: Dict[str, Any],
@@ -499,6 +648,7 @@ def stage_1_synthesize(
     *,
     enable_sub_agents: bool = ENABLE_SUB_AGENTS_DEFAULT,
     assessment_id: Optional[str] = None,
+    system_prompt: str = STAGE_1_SYSTEM,
 ) -> tuple[str, StageMetric]:
     """Stage 1 synthesis. Single-shot by default.
 
@@ -508,12 +658,16 @@ def stage_1_synthesize(
     options_microstructure within one assistant turn; results land back as
     tool_result blocks and Claude continues until it produces final cited
     prose.
+
+    Phase 2a: `system_prompt` defaults to the v3 STAGE_1_SYSTEM. The v4
+    codepath (`_run_one_inner` with `ORCH_V4=1`) passes STAGE_1_V4_SYSTEM
+    here, which adds the required Commercial opportunity section.
     """
     user_content = _build_stage_1_user_content(ctx)
     facts = ctx["facts"]
     docs = ctx["documents"]
     system_blocks = build_system_blocks(
-        build_shared_system_prefix(ctx), STAGE_1_SYSTEM,
+        build_shared_system_prefix(ctx), system_prompt,
         static_prefix=build_static_prefix(ctx),
     )
 
@@ -719,14 +873,85 @@ regulatory or event outcome.
 - Output ONLY the JSON object — no markdown fences, no commentary"""
 
 
+# v4 (Phase 2a): Stage 9 schema extended with `commercial_dimensions` so the
+# new Commercial opportunity section of the v4 Stage 1 prose lands in
+# convergence_assessments.commercial_dimensions (jsonb column added by the
+# Phase 1 migration). Everything else is identical to STAGE_9_SYSTEM.
+STAGE_9_V4_SYSTEM = """You convert a cited-prose investment thesis into a strict \
+JSON object matching the schema below. Do not add commentary; emit JSON only.
+
+Schema:
+{
+  "thesis_direction": "long" | "short" | "neutral" | "straddle",
+  "conviction_pct": <number 0-100>,
+  "prediction_target": {
+    "target_type": "price_move" | "regulatory_outcome" | "event_outcome",
+    "horizon_days": <integer or null>,
+    "event_anchor": "<event id/name or null>",
+    "label_rule": "forward_return_t30_calendar" | "approval_decision" | "adcom_recommendation"
+  },
+  "evidence_quality": <number 0.0-1.0>,
+  "thesis_summary": "<1-3 sentence summary>",
+  "key_facts": [
+    {"text": "<short claim>", "fact_id_short": "<8-char id from [F:...] cite>"}
+  ],
+  "uncertainties": [
+    {"question": "<what's unknown>", "why_matters": "<short>", "how_to_resolve": "<short>"}
+  ],
+  "cited_prose_blocks": [
+    {"section": "<section header>", "text": "<paragraph>", "fact_citations": ["<8-char id>"], "doc_citations": ["<8-char id>"]}
+  ],
+  "reasoning_summary": "<2-3 sentence reasoning trace>",
+  "commercial_dimensions": {
+    "tam_estimate": {
+      "low_usd": <number or null>,
+      "high_usd": <number or null>,
+      "is_inferred": <bool>
+    },
+    "mcap_to_peak_revenue_ratio": <number or null>,
+    "standard_of_care": "<short>",
+    "soc_limitations": ["<short>", "..."],
+    "soc_side_effects": ["<short>", "..."],
+    "unmet_need_severity_1_5": <integer 1-5>,
+    "regulatory_incentives": ["breakthrough" | "fast_track" | "orphan_drug" | "priority_review" | "none", "..."],
+    "competitive_landscape_summary": "<short>"
+  }
+}
+
+Rules:
+- thesis_direction MUST be one of the four values
+- conviction_pct + evidence_quality MUST be numeric (no strings)
+- prediction_target is required. Use price_move + horizon_days=30 + \
+label_rule=forward_return_t30_calendar unless the prose explicitly predicts a \
+regulatory or event outcome.
+- key_facts: 5-15 items, each grounded in a [F:...] cite from the prose
+- uncertainties: 2-5 items
+- cited_prose_blocks: one per section header in the prose; preserve all \
+[F:...] / [D:...] cites you find
+- commercial_dimensions: REQUIRED. Pull values from the "Commercial \
+opportunity" section of the prose. tam_estimate.is_inferred must be true \
+when any TAM number is marked [INF] in the prose. \
+unmet_need_severity_1_5 MUST be an integer 1-5. regulatory_incentives is \
+an array — use ["none"] if no designations apply.
+- Output ONLY the JSON object — no markdown fences, no commentary"""
+
+
 def stage_9_extract(
     a_client: OrchestratorClient,
     cited_prose: str,
     model: str,
+    *,
+    system_prompt: str = STAGE_9_SYSTEM,
 ) -> tuple[Optional[Dict[str, Any]], StageMetric]:
+    """Stage 9 structured extraction.
+
+    Phase 2a: `system_prompt` defaults to STAGE_9_SYSTEM. The v4 codepath
+    passes STAGE_9_V4_SYSTEM here, which extends the schema with
+    `commercial_dimensions`.
+    """
     user_content = f"Cited prose to extract:\n\n{cited_prose}"
     result = a_client.call(
-        system=STAGE_9_SYSTEM,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
         model=model,
         max_tokens=8192,
@@ -837,6 +1062,78 @@ def compute_convergence_signature(
         "document_ids": sorted(document_ids),
     }
     return hashlib.md5(_normalize_json_for_hash(payload).encode("utf-8")).hexdigest()
+
+
+def build_claim_ledger(
+    *,
+    cited_prose_blocks: List[Dict[str, Any]],
+    key_facts: List[Dict[str, Any]],
+    hypothesis_result: Optional[HypothesisResult],
+) -> List[Dict[str, Any]]:
+    """Normalize alertable model claims into a compact evidence ledger.
+
+    This is intentionally derived from already-hydrated Stage 9 / Stage 2
+    structures so it cannot introduce new claims. Downstream alert gates can
+    require at least one supported claim without reparsing free-form prose.
+    """
+    claims: List[Dict[str, Any]] = []
+    for idx, block in enumerate(cited_prose_blocks or []):
+        text = str(block.get("text") or "").strip()
+        fact_ids = [f for f in (block.get("fact_citations") or []) if f]
+        doc_ids = [d for d in (block.get("doc_citations") or []) if d]
+        if not text:
+            continue
+        claims.append({
+            "claim_id": f"C{len(claims) + 1}",
+            "claim_type": "cited_prose_block",
+            "section": block.get("section") or f"block_{idx + 1}",
+            "claim_text": text[:1200],
+            "supporting_fact_ids": fact_ids,
+            "contradicting_fact_ids": [],
+            "document_ids": doc_ids,
+            "verifier_status": (
+                "supported" if fact_ids or doc_ids else "unsupported"
+            ),
+            "model_origin": "stage_9_extraction",
+        })
+
+    for idx, fact in enumerate(key_facts or []):
+        text = str(fact.get("text") or "").strip()
+        fact_id = fact.get("fact_id")
+        if not text:
+            continue
+        claims.append({
+            "claim_id": f"C{len(claims) + 1}",
+            "claim_type": "key_fact",
+            "section": "key_facts",
+            "claim_text": text[:600],
+            "supporting_fact_ids": [fact_id] if fact_id else [],
+            "contradicting_fact_ids": [],
+            "document_ids": [],
+            "verifier_status": "supported" if fact_id else "unsupported",
+            "model_origin": "stage_9_extraction",
+            "source_index": idx,
+        })
+
+    if hypothesis_result is not None:
+        for h in hypothesis_result.hypotheses:
+            claims.append({
+                "claim_id": f"C{len(claims) + 1}",
+                "claim_type": f"hypothesis_{h.label}",
+                "section": "hypotheses",
+                "claim_text": h.claim[:800],
+                "supporting_fact_ids": h.supporting_fact_ids,
+                "contradicting_fact_ids": h.contradicting_fact_ids,
+                "document_ids": [],
+                "kill_conditions": h.kill_conditions,
+                "verifier_status": (
+                    "supported"
+                    if h.supporting_fact_ids or h.contradicting_fact_ids
+                    else "unsupported"
+                ),
+                "model_origin": "stage_2_hypothesis_enumeration",
+            })
+    return claims
 
 
 def _find_existing_convergence_signature(
@@ -1185,7 +1482,23 @@ def stage_10_persist(
     constitutional_result: Optional[ConstitutionalResult] = None,
     hypothesis_result: Optional[HypothesisResult] = None,
     premortem_result: Optional[PreMortemResult] = None,
+    *,
+    is_v4: bool = False,
+    signal_category: Optional[str] = None,
+    commercial_dimensions: Optional[Dict[str, Any]] = None,
 ) -> str:
+    """Persist one convergence_assessment row.
+
+    Phase 2a v4 kwargs (keyword-only so v3 callers are unaffected):
+      is_v4: stamps `orchestrator_version_v4=true` on the row for A/B
+             partitioning during the Phase 6 flag-flip observation window.
+      signal_category: stamps `signal_category` column; Phase 7 groups
+             accuracy metrics by this. v4 default is the trigger_type;
+             Phase 4 scanners will pass real category strings.
+      commercial_dimensions: stamps `commercial_dimensions` jsonb column
+             with the v4 Stage 9 commercial output (TAM, SoC, unmet need,
+             etc.). NULL for v3 rows.
+    """
     fact_ids = [f["id"] for f in ctx["facts"]]
     document_ids = [d["id"] for d in ctx["documents"]]
 
@@ -1252,9 +1565,13 @@ def stage_10_persist(
         calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
 
     band = derive_band(calibrated)
+    raw_prediction_target = parsed.get("prediction_target")
+    prediction_target_explicit = isinstance(raw_prediction_target, dict)
     prediction_target = _coerce_prediction_target(
-        parsed.get("prediction_target")
+        raw_prediction_target
     )
+    if not prediction_target_explicit:
+        ctx["prediction_target_defaulted"] = True
 
     # Dispersion-based abstain. When the ensemble actively disagrees on
     # direction or convictions diverge wildly, downgrade an immediate band
@@ -1380,9 +1697,49 @@ def stage_10_persist(
         "fact_types_covered": sorted(set(f["fact_type"] for f in ctx["facts"])),
         "conviction_capped_by_premortem": bool(
             ctx.get("conviction_capped_by_premortem", False)),
+        "evidence_packet": ctx.get("evidence_packet"),
+        "prediction_target_explicit": prediction_target_explicit,
     }
     if market_context:
         evidence_ledger["market_side_gate"] = market_context
+
+    claim_ledger = build_claim_ledger(
+        cited_prose_blocks=hydrated_blocks,
+        key_facts=hydrated_key_facts,
+        hypothesis_result=hypothesis_result,
+    )
+    unsupported_claim_count = sum(
+        1 for claim in claim_ledger
+        if claim.get("verifier_status") != "supported"
+    )
+    alert_gate_reasons: List[str] = []
+    if constitutional_result is not None and not constitutional_result.pass_:
+        alert_gate_reasons.append("constitutional_failed")
+    if evidence_quality is None or evidence_quality < 0.45:
+        alert_gate_reasons.append("low_evidence_quality")
+    if not prediction_target_explicit:
+        alert_gate_reasons.append("prediction_target_defaulted")
+    if unsupported_claim_count > 0:
+        alert_gate_reasons.append("unsupported_claims_present")
+    if (market_context.get("expected_value_bps") is None or
+            float(market_context.get("expected_value_bps") or 0.0) <= 0.0):
+        alert_gate_reasons.append("non_positive_expected_value")
+    top_model_review = {
+        "eligible": (
+            band == "immediate"
+            and not alert_gate_reasons
+            and float(market_context.get("expected_value_bps") or 0.0) > 0.0
+        ),
+        "status": (
+            "not_requested_eval_gate_required"
+            if os.environ.get("ORCH_ENABLE_TOP_MODEL_FINAL_REVIEW") != "1"
+            else "enabled_but_not_implemented"
+        ),
+        "policy": (
+            "Top-model review is reserved for high-EV, alert-eligible Tier-1 "
+            "cases and remains off until calibration/eval gates are live."
+        ),
+    }
 
     row = {
         "asset_id": asset_id,
@@ -1395,6 +1752,10 @@ def stage_10_persist(
         "document_ids": document_ids,
         "fact_ids": fact_ids,
         "evidence_ledger": evidence_ledger,
+        "claim_ledger": claim_ledger,
+        "alert_gate_status": "pass" if not alert_gate_reasons else "suppress",
+        "alert_gate_reasons": alert_gate_reasons,
+        "top_model_review": top_model_review,
         "reasoning_trace": cited_prose,
         "cited_prose_blocks": hydrated_blocks,
         "key_facts": hydrated_key_facts,
@@ -1460,6 +1821,12 @@ def stage_10_persist(
         # set is unchanged from the last completed synthesis.
         "document_set_hash": compute_document_set_hash(sb, asset_id),
         "convergence_signature": convergence_signature,
+        # v4 (Phase 2a) — A/B partition flag + category + commercial payload.
+        # Columns added by 20260613000000_v4_foundation_assessment_schema.sql.
+        # v3 rows persist defaults (false / NULL / NULL).
+        "orchestrator_version_v4": is_v4,
+        "signal_category": signal_category,
+        "commercial_dimensions": commercial_dimensions,
     }
 
     secondaries = _build_stage_10_secondaries(
@@ -1880,15 +2247,29 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    enable_premortem: bool,
                    dry_run: bool,
                    parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    # v4 (Phase 2a): env-driven flag. When set, Stage 1 uses STAGE_1_V4_SYSTEM
+    # (FDA + commercial dual mandate) and Stage 9 uses STAGE_9_V4_SYSTEM
+    # (schema extended with commercial_dimensions). The resulting
+    # convergence_assessments row stamps orchestrator_version_v4=true +
+    # signal_category + commercial_dimensions. Phase 2c will additionally
+    # short-circuit Stages 2/3/6/7 on this branch.
+    is_v4 = os.environ.get("ORCH_V4") == "1"
+    stage_1_prompt = STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM
+    stage_9_prompt = STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM
+    if is_v4:
+        logger.info("v4 path active (ORCH_V4=1): commercial dual-mandate prompts")
+
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
     logger.info("=== Stage 0: load context ===")
     ctx = stage_0_load(sb, asset_id)
+    evidence_packet = require_tier1_evidence_packet(ctx)
     asset = ctx["asset"]
     logger.info("Asset: %s / %s (%s, %s); facts=%d, docs=%d",
                 asset.get("ticker"), asset.get("drug_name"),
                 asset.get("indication"), asset.get("application_number") or "no_app#",
                 len(ctx["facts"]), len(ctx["documents"]))
+    logger.info("Evidence packet ok: %s", evidence_packet.get("counts"))
 
     logger.info("=== Stage 4: reference-class anchor ===")
     anchor, m4 = stage_4_anchor(sb, ctx)
@@ -1923,7 +2304,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     shared_prefix = build_shared_system_prefix(ctx)
     static_prefix = build_static_prefix(ctx)
     stage_1_system_blocks = build_system_blocks(
-        shared_prefix, STAGE_1_SYSTEM, static_prefix=static_prefix,
+        shared_prefix, stage_1_prompt, static_prefix=static_prefix,
     )
 
     if ensemble_n > 1:
@@ -1933,7 +2314,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 a_client,
                 stage_1_system=stage_1_system_blocks,
                 stage_1_user_content=user_content,
-                stage_9_system=STAGE_9_SYSTEM,
+                stage_9_system=stage_9_prompt,
                 model=model,
                 extractor_model=extractor_model,
             )
@@ -1942,7 +2323,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 a_client,
                 stage_1_system=stage_1_system_blocks,
                 stage_1_user_content=user_content,
-                stage_9_system=STAGE_9_SYSTEM,
+                stage_9_system=stage_9_prompt,
                 n=ensemble_n,
                 model=model,
                 extractor_model=extractor_model,
@@ -1952,7 +2333,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 a_client,
                 stage_1_system=stage_1_system_blocks,
                 stage_1_user_content=user_content,
-                stage_9_system=STAGE_9_SYSTEM,
+                stage_9_system=stage_9_prompt,
                 n=ensemble_n,
                 model=model,
                 extractor_model=extractor_model,
@@ -2015,17 +2396,22 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         }
     else:
         logger.info("=== Stage 1: synthesis (%s) ===", model)
-        cited_prose, m1 = stage_1_synthesize(a_client, ctx, model)
+        cited_prose, m1 = stage_1_synthesize(
+            a_client, ctx, model, system_prompt=stage_1_prompt,
+        )
         run.stage_metrics.append(m1)
         logger.info("Stage 1: %dms / %d in / %d out / $%.3f",
                     m1.latency_ms, m1.input_tokens, m1.output_tokens, m1.cost_usd)
 
         logger.info("=== Stage 9: structured extraction (%s) ===", extractor_model)
-        parsed, m9 = stage_9_extract(a_client, cited_prose, extractor_model)
+        parsed, m9 = stage_9_extract(
+            a_client, cited_prose, extractor_model,
+            system_prompt=stage_9_prompt,
+        )
         run.stage_metrics.append(m9)
         if not parsed:
             logger.error("Stage 9 failed to parse JSON; aborting")
-            return None
+            raise Stage9ParseError("Stage 9 failed to parse JSON")
         logger.info("Stage 9: %dms / %d in / %d out / $%.3f / direction=%s conviction=%s",
                     m9.latency_ms, m9.input_tokens, m9.output_tokens, m9.cost_usd,
                     parsed.get("thesis_direction"), parsed.get("conviction_pct"))
@@ -2067,6 +2453,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             model=model,
             input_tokens=hypothesis_result.input_tokens,
             output_tokens=hypothesis_result.output_tokens,
+            cache_read_tokens=hypothesis_result.cache_read_tokens,
+            cache_creation_tokens=hypothesis_result.cache_creation_tokens,
             cost_usd=hypothesis_result.cost_usd,
             latency_ms=hypothesis_result.latency_ms,
             status="completed" if hypothesis_result.pass_ else "failed",
@@ -2111,6 +2499,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                 model=model,
                 input_tokens=premortem_result.input_tokens,
                 output_tokens=premortem_result.output_tokens,
+                cache_read_tokens=premortem_result.cache_read_tokens,
+                cache_creation_tokens=premortem_result.cache_creation_tokens,
                 cost_usd=premortem_result.cost_usd,
                 latency_ms=premortem_result.latency_ms,
                 status="completed" if premortem_result.pass_ else "failed",
@@ -2208,6 +2598,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                     constitutional_result.n_citations_resolved,
                     constitutional_result.n_citations_checked,
                     constitutional_result.semantic_cost_usd)
+        if not constitutional_result.pass_:
+            raise ConstitutionalFailure(constitutional_result.findings)
 
     # Phase 4A (D-127): expose parsed payload to the replay harness before
     # the persistence gate. dict.update() preserves the caller's reference
@@ -2236,12 +2628,21 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         return None
 
     logger.info("=== Stage 10: persist ===")
+    # v4 metadata for the new convergence_assessments columns. Phase 4 will
+    # refine signal_category to use the actual scanner emitter category; until
+    # then we use trigger_type as a coarse fallback (better than NULL for
+    # Phase 7 per-category aggregation).
+    v4_commercial = parsed.get("commercial_dimensions") if is_v4 else None
+    v4_signal_category = run.trigger_type if is_v4 else None
     assessment_id = stage_10_persist(
         sb, asset_id, run, cited_prose, parsed, ctx, model, extractor_model,
         ensemble_payload=run_ensemble_payload,
         constitutional_result=constitutional_result,
         hypothesis_result=hypothesis_result,
         premortem_result=premortem_result,
+        is_v4=is_v4,
+        signal_category=v4_signal_category,
+        commercial_dimensions=v4_commercial,
     )
     logger.info("Persisted assessment: %s", assessment_id)
     return assessment_id

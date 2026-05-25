@@ -109,6 +109,59 @@ class ExtractStats:
     output_tokens: int = 0
     cost_usd: float = 0.0
     errors: int = 0
+    quote_verification_failed: int = 0
+
+
+def verify_fact_quote(
+    *,
+    shown_text: str,
+    evidence_quote: str,
+    citation_span: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Deterministically verify the model's quote against the exact text shown.
+
+    The extractor prompt asks for character offsets, but the model can drift.
+    We accept a quote if it appears verbatim anywhere in the shown text, and we
+    repair span offsets to the first exact match. If no exact match exists, the
+    caller must drop the fact rather than persisting unsupported evidence.
+    """
+    quote = (evidence_quote or "").strip()
+    if not shown_text or not quote:
+        return {
+            "verified": False,
+            "status": "missing_text_or_quote",
+            "span": citation_span or {},
+        }
+
+    span = citation_span if isinstance(citation_span, dict) else {}
+    start = span.get("start")
+    end = span.get("end")
+    try:
+        start_i = int(start)
+        end_i = int(end)
+    except (TypeError, ValueError):
+        start_i = -1
+        end_i = -1
+
+    if 0 <= start_i <= end_i <= len(shown_text):
+        if shown_text[start_i:end_i] == quote:
+            repaired = dict(span)
+            repaired["start"] = start_i
+            repaired["end"] = end_i
+            return {"verified": True, "status": "span_exact", "span": repaired}
+
+    idx = shown_text.find(quote)
+    if idx >= 0:
+        repaired = dict(span)
+        repaired["start"] = idx
+        repaired["end"] = idx + len(quote)
+        return {"verified": True, "status": "quote_exact_span_repaired", "span": repaired}
+
+    return {
+        "verified": False,
+        "status": "quote_not_found_in_shown_text",
+        "span": span,
+    }
 
 
 def record_fact_extractor_run_summary(
@@ -426,6 +479,18 @@ separated by […trim…]):
         citation_span = f.get("citation_span") or {}
         if not isinstance(citation_span, dict):
             citation_span = {}
+        verification = verify_fact_quote(
+            shown_text=trimmed,
+            evidence_quote=evidence_quote,
+            citation_span=citation_span,
+        )
+        if not verification["verified"]:
+            logger.info(
+                "Dropping fact with unverified quote for doc %s type=%s status=%s",
+                doc.get("id"), fact_type, verification["status"],
+            )
+            continue
+        citation_span = verification["span"]
         confidence = f.get("confidence")
         try:
             confidence = float(confidence) if confidence is not None else None
@@ -438,6 +503,8 @@ separated by […trim…]):
             "fact_text": fact_text[:2000],
             "evidence_quote": evidence_quote,
             "citation_span": citation_span,
+            "quote_verified": True,
+            "quote_verification_status": verification["status"],
             "confidence": confidence,
         })
     return out, in_tokens, out_tokens
@@ -460,6 +527,9 @@ def insert_facts(client: SupabaseClient, asset_id: str, document_id: str,
             "fact_text": f["fact_text"],
             "evidence_quote": f["evidence_quote"],
             "citation_span": f["citation_span"],
+            "quote_verified": f.get("quote_verified", True),
+            "quote_verification_status": f.get("quote_verification_status", "legacy_unchecked"),
+            "quote_verified_at": datetime.now(timezone.utc).isoformat(),
             "confidence": round(f["confidence"], 2) if f["confidence"] is not None else None,
             "extraction_model": MODEL,
         })
@@ -579,6 +649,8 @@ def main(argv: List[str] | None = None) -> int:
         record_fact_extractor_run_summary(sb, stats, started_at, status=status, notes=notes)
     except Exception as exc:  # noqa: BLE001
         logger.warning("fact_extractor_runs summary insert failed: %s", exc)
+    if stats.docs_seen > 0 and stats.errors >= stats.docs_seen and stats.facts_inserted == 0:
+        return 3
     return 0
 
 

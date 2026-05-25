@@ -72,6 +72,8 @@ class PreMortemResult:
     raw_response: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     cost_usd: float = 0.0
     latency_ms: int = 0
 
@@ -378,6 +380,8 @@ def run_premortem(
         raw_response=result.text,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        cache_creation_tokens=result.cache_creation_tokens,
         cost_usd=result.cost_usd,
         latency_ms=latency_ms,
     )
