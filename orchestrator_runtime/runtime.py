@@ -2247,17 +2247,32 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    enable_premortem: bool,
                    dry_run: bool,
                    parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    # v4 (Phase 2a): env-driven flag. When set, Stage 1 uses STAGE_1_V4_SYSTEM
-    # (FDA + commercial dual mandate) and Stage 9 uses STAGE_9_V4_SYSTEM
-    # (schema extended with commercial_dimensions). The resulting
-    # convergence_assessments row stamps orchestrator_version_v4=true +
-    # signal_category + commercial_dimensions. Phase 2c will additionally
-    # short-circuit Stages 2/3/6/7 on this branch.
+    # v4 (Phase 2a + 2c): env-driven flag. When set:
+    #   - Stage 1 uses STAGE_1_V4_SYSTEM (FDA + commercial dual mandate; the
+    #     prompt absorbs hypothesis enumeration + adversarial premortem inline
+    #     and self-caps conviction_pct ≤30 if all hypotheses falsify).
+    #   - Stage 9 uses STAGE_9_V4_SYSTEM (schema extended with
+    #     commercial_dimensions).
+    #   - Stage 2 (hypothesis), Stage 3 (premortem), and Stage 7 semantic
+    #     adversarial pass are SKIPPED — their concerns are inlined into the
+    #     Stage 1 prompt. Stage 7 deterministic citation-resolution still
+    #     runs via constitutional_skip_semantic=True.
+    #   - Stage 6 ensemble is forced to single-shot (ensemble_n=1). Variance
+    #     reduction is no longer the default; opt-in for backtest cohorts.
+    # Persist stamps orchestrator_version_v4=true + signal_category +
+    # commercial_dimensions. Phase 6 deletes this whole branch + the bypassed
+    # Stage 2/3/6/7 code paths once the flag flip stabilizes.
     is_v4 = os.environ.get("ORCH_V4") == "1"
     stage_1_prompt = STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM
     stage_9_prompt = STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM
     if is_v4:
-        logger.info("v4 path active (ORCH_V4=1): commercial dual-mandate prompts")
+        logger.info(
+            "v4 path active (ORCH_V4=1): commercial dual-mandate prompts; "
+            "stages 2/3/6/semantic-7 collapsed",
+        )
+        ensemble_n = 1
+        enable_premortem = False
+        constitutional_skip_semantic = True
 
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
