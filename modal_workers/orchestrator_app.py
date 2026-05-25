@@ -51,6 +51,20 @@ image = (
         "cohere>=5.10",
         "mcp[cli]>=1.20",
         "jsonschema>=4.0",
+        # Phase 3a — earnings_calendar fetcher uses yfinance as the primary
+        # source for earnings dates (Polygon is the fallback). Smoke test on
+        # 2026-05-25 hit a silent ImportError; pinning at >=0.2.40 since
+        # that's the first release with the working get_earnings_dates()
+        # signature we depend on.
+        #
+        # lxml is required because yfinance.Ticker.get_earnings_dates()
+        # parses Yahoo's HTML via lxml under the hood — without it the call
+        # raises 'Import lxml failed' and the fetcher returns 0 rows.
+        # curl_cffi is also pinned to bypass Yahoo's anti-bot detection
+        # which started rejecting plain `requests` in mid-2024.
+        "yfinance>=0.2.40",
+        "lxml>=5.0",
+        "curl_cffi>=0.6",
     )
     .add_local_python_source("modal_workers", "orchestrator_runtime")
     # Sub-agent JSON schemas live in the sibling conan-cowork-skills repo and
@@ -651,6 +665,140 @@ def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
 
 
 # ============================================================================
+# Phase 3a / 3b / 4 — calendar + audit + harvest workers.
+#
+# These are plain @app.function workers (no fastapi_endpoint) that
+# compute_v3_dispatch spawns fire-and-forget so the multiplex endpoint
+# returns in <1s while the actual job runs up to its own timeout. Pattern
+# mirrors orchestrator_drain_queue / feedback_loop_kickoff.
+#
+# The pg_cron jobs in 20260605000050 (earnings), 20260605000060 (FOMC),
+# and 20260612000020 (harvest) POST to compute_v3_dispatch with the
+# corresponding action — that's the only entrypoint operators need.
+# ============================================================================
+
+
+@app.function(
+    image=image,
+    timeout=900,  # 15min: ~400 tickers × ~100ms/ticker + 2s/batch-of-50
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def phase3a_earnings_calendar_fetch_worker(
+    window_days: int = 7,
+    forward_days: int = 90,
+    tickers: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Daily refresh of public.earnings_calendar via yfinance (primary) +
+    Polygon (fallback). Targets the tradeable-filter-passed universe by
+    default. Phase 3a — Q1 audit feeder."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.fetchers.universe.earnings_calendar import (
+        fetch, load_tradeable_tickers,
+    )
+
+    sb = SupabaseClient()
+    targets = tickers if tickers else load_tradeable_tickers(sb)
+    return fetch(
+        sb,
+        tickers=targets,
+        lookback_days=window_days,
+        forward_days=forward_days,
+        dry_run=False,
+    )
+
+
+@app.function(
+    image=image,
+    timeout=60,  # single HTTP fetch + parse
+    secrets=[supabase_secrets],
+)
+def phase3a_fomc_calendar_refresh_worker(year: Optional[int] = None) -> Dict[str, Any]:
+    """Monthly refresh of public.fomc_calendar via federalreserve.gov
+    scrape. Phase 3a — Q1 audit feeder."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.fetchers.universe.fomc_calendar import fetch
+
+    return fetch(SupabaseClient(), year=year, dry_run=False)
+
+
+@app.function(
+    image=image,
+    timeout=600,  # 10min: bounded by Polygon SPY pulls per event
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def q1_audit_run_worker(re_audit: bool = False) -> Dict[str, int]:
+    """WI-5 Q1 confounder + coverage audit across eval_harness rows.
+    Re-audits in place when re_audit=True."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_event_data_quality import _audit_all
+
+    return _audit_all(SupabaseClient(), re_audit=re_audit, apply=True)
+
+
+@app.function(
+    image=image,
+    timeout=120,  # single cohort aggregation
+    secrets=[supabase_secrets],
+)
+def q2_audit_run_worker(profile: str = "binary_catalyst") -> Dict[str, Any]:
+    """WI-6 Q2 sample-balance audit for the q1_verdict='clean' cohort.
+    Persists a row in eval_sample_balance_audits and returns the verdict
+    + axes summary."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_sample_balance import (
+        audit_cohort, persist_q2_verdict,
+    )
+
+    sb = SupabaseClient()
+    verdict = audit_cohort(sb, profile=profile)
+    persist_q2_verdict(sb, verdict)
+    return {
+        "verdict": verdict.verdict,
+        "cohort_hash": verdict.cohort_hash,
+        "cohort_size": verdict.cohort_size,
+        "phase5_triggers": verdict.phase5_triggers,
+        "axes": {k: v.as_dict() for k, v in verdict.axes.items()},
+    }
+
+
+@app.function(
+    image=image,
+    timeout=900,  # 15min: openFDA paging over a daily window
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def fda_event_harvest_daily_worker(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """WI-7 M1 FDA-only ongoing harvest. Defaults to (latest_checkpoint+1d
+    ... today). After harvest, sweeps fda_assets.next_catalyst_date from
+    the new fda_regulatory_events rows."""
+    from datetime import date, timedelta
+    from dataclasses import asdict
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.harvest_fda_events import (
+        harvest, latest_checkpoint,
+    )
+
+    sb = SupabaseClient()
+    today = date.today()
+    if end_date:
+        end = date.fromisoformat(end_date)
+    else:
+        end = today
+    if start_date:
+        start = date.fromisoformat(start_date)
+    else:
+        last = latest_checkpoint(sb, "openfda")
+        start = (last + timedelta(days=1)) if last else (today - timedelta(days=7))
+
+    result = harvest(sb, start_date=start, end_date=end,
+                    sources=("openfda",), dry_run=False)
+    return asdict(result)
+
+
+# ============================================================================
 # compute_v3_dispatch — multiplex FastAPI endpoint
 #
 # One Modal endpoint slot, N logical compute operations. Cowork-side skills
@@ -691,7 +839,27 @@ COMPUTE_V3_ACTIONS = frozenset({
     "feedback_loop_kickoff",
     "orchestrator_drain_queue",
     "seed_fda_asset_aliases_refresh",
+    # Phase 3a/3b/4 — calendar + audit + harvest workers (all spawned).
+    "earnings_calendar_fetch_daily",
+    "fomc_calendar_refresh",
+    "q1_audit_run",
+    "q2_audit_run",
+    "fda_event_harvest_daily",
 })
+
+# Spawn-only actions: dispatch fires the worker and returns immediately. Used
+# for any work that exceeds the multiplex endpoint's 120s timeout or that we
+# explicitly want async so pg_cron's HTTP POST doesn't sit on a long task.
+_SPAWN_ONLY_ACTIONS: Dict[str, str] = {
+    "feedback_loop_kickoff": "daily_feedback_loop",
+    "orchestrator_drain_queue": "orchestrator_drain_queue",
+    "seed_fda_asset_aliases_refresh": "seed_fda_asset_aliases_refresh",
+    "earnings_calendar_fetch_daily": "phase3a_earnings_calendar_fetch_worker",
+    "fomc_calendar_refresh": "phase3a_fomc_calendar_refresh_worker",
+    "q1_audit_run": "q1_audit_run_worker",
+    "q2_audit_run": "q2_audit_run_worker",
+    "fda_event_harvest_daily": "fda_event_harvest_daily_worker",
+}
 
 
 def _verify_compute_secret(provided: Optional[str]) -> None:
@@ -773,6 +941,61 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         kwargs: Dict[str, Any] = {}
         if "sources" in args:
             kwargs["sources"] = args["sources"]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    # Phase 3a/3b/4 spawn actions — all wire pg_cron → multiplex → worker.
+    # Each accepts a small kwargs whitelist so pg_cron jobs can pass tuning
+    # knobs (window_days, year, profile) without exposing the full worker API.
+    if action == "earnings_calendar_fetch_daily":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "phase3a_earnings_calendar_fetch_worker",
+        )
+        kwargs: Dict[str, Any] = {}
+        for k in ("window_days", "forward_days", "tickers"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "fomc_calendar_refresh":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "phase3a_fomc_calendar_refresh_worker",
+        )
+        kwargs = {}
+        if "year" in args:
+            kwargs["year"] = args["year"]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "q1_audit_run":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "q1_audit_run_worker",
+        )
+        kwargs = {}
+        if "re_audit" in args:
+            kwargs["re_audit"] = bool(args["re_audit"])
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "q2_audit_run":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "q2_audit_run_worker",
+        )
+        kwargs = {}
+        if "profile" in args:
+            kwargs["profile"] = args["profile"]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "fda_event_harvest_daily":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "fda_event_harvest_daily_worker",
+        )
+        kwargs = {}
+        for k in ("start_date", "end_date"):
+            if k in args:
+                kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 

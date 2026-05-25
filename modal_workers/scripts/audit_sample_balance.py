@@ -308,20 +308,20 @@ def _load_clean_eval_harness_rows(
 ) -> List[Dict[str, Any]]:
     """Pull q1_verdict='clean' rows joined to fda_assets for sector/sponsor.
 
-    Profile filter applied via realized_outcome_data->>'profile' since the
-    eval_harness schema doesn't carry a top-level profile column.
+    Profile filter applied client-side via realized_outcome_data->>'profile'
+    since the eval_harness schema doesn't carry a top-level profile column.
     """
-    query = (
-        sb.from_("eval_harness")
-        .select(
-            "id, asset_id, reference_assessment_date, "
-            "realized_outcome_data, issuer_status, "
-            "fda_assets!inner(indication, sponsor_name)"
-        )
-        .eq("q1_verdict", "clean")
-    )
-    result = query.execute()
-    rows = result.data or []
+    rows = sb._rest_with_retry(
+        "GET",
+        "eval_harness",
+        params={
+            "select": (
+                "id,asset_id,reference_assessment_date,realized_outcome_data,"
+                "issuer_status,fda_assets!inner(indication,sponsor_name)"
+            ),
+            "q1_verdict": "eq.clean",
+        },
+    ) or []
     return [r for r in rows if _row_matches_profile(r, profile)]
 
 
@@ -335,24 +335,24 @@ def _row_matches_profile(r: Dict[str, Any], profile: str) -> bool:
 def persist_q2_verdict(sb: SupabaseClient, verdict: Q2Verdict) -> None:
     """ON CONFLICT (cohort_hash, audit_date) DO UPDATE — re-runs on the same
     day overwrite the prior verdict so dashboards always see the latest."""
-    sb.from_("eval_sample_balance_audits").upsert(
-        verdict.as_db_row(),
-        on_conflict="cohort_hash,audit_date",
-    ).execute()
+    sb._rest_with_retry(
+        "POST",
+        "eval_sample_balance_audits?on_conflict=cohort_hash,audit_date",
+        json_body=[verdict.as_db_row()],
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
 
 
 def read_q2_gate_mode(sb: SupabaseClient) -> str:
     """Read internal_config.q2_gate_mode. Returns 'warn' on missing config
     (matches the post-migration default).
     """
-    result = (
-        sb.from_("internal_config")
-        .select("value")
-        .eq("key", "q2_gate_mode")
-        .maybe_single()
-        .execute()
-    )
-    value = (result.data or {}).get("value") or "warn"
+    rows = sb._rest_with_retry(
+        "GET",
+        "internal_config",
+        params={"select": "value", "key": "eq.q2_gate_mode", "limit": "1"},
+    ) or []
+    value = (rows[0].get("value") if rows else None) or "warn"
     value = value.strip().lower()
     if value not in ("off", "warn", "required"):
         return "warn"

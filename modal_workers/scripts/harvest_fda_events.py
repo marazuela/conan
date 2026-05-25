@@ -311,28 +311,31 @@ def _resolve_or_create_fda_asset(
     sponsor_name = (hints.get("sponsor_name") or "").strip()
 
     if drug_name and application_number:
-        result = (
-            sb.from_("fda_assets")
-            .select("id")
-            .ilike("drug_name", drug_name)
-            .eq("application_number", application_number)
-            .limit(1)
-            .execute()
-        )
-        rows = result.data or []
+        rows = sb._rest_with_retry(
+            "GET",
+            "fda_assets",
+            params={
+                "select": "id",
+                "drug_name": f"ilike.{drug_name}",
+                "application_number": f"eq.{application_number}",
+                "limit": "1",
+            },
+        ) or []
         if rows:
             return rows[0]["id"]
 
     if drug_name and sponsor_name:
-        result = (
-            sb.from_("fda_assets")
-            .select("id")
-            .ilike("drug_name", drug_name)
-            .ilike("sponsor_name", f"%{sponsor_name.split(',')[0]}%")
-            .limit(1)
-            .execute()
-        )
-        rows = result.data or []
+        sponsor_root = sponsor_name.split(",")[0]
+        rows = sb._rest_with_retry(
+            "GET",
+            "fda_assets",
+            params={
+                "select": "id",
+                "drug_name": f"ilike.{drug_name}",
+                "sponsor_name": f"ilike.%{sponsor_root}%",
+                "limit": "1",
+            },
+        ) or []
         if rows:
             return rows[0]["id"]
 
@@ -345,8 +348,10 @@ def _resolve_or_create_fda_asset(
 
 
 def _upsert_event_row(sb: SupabaseClient, *, asset_id: str, row: Dict[str, Any]) -> None:
-    sb.from_("fda_regulatory_events").upsert(
-        {
+    sb._rest_with_retry(
+        "POST",
+        "fda_regulatory_events?on_conflict=asset_id,event_type,event_date,source_content_hash",
+        json_body=[{
             "asset_id": asset_id,
             "event_type": row["event_type"],
             "event_date": row["event_date"],
@@ -354,25 +359,30 @@ def _upsert_event_row(sb: SupabaseClient, *, asset_id: str, row: Dict[str, Any])
             "source_content_hash": row["source_content_hash"],
             "notes": row.get("notes"),
             "extensions": row.get("extensions") or {},
-        },
-        on_conflict="asset_id,event_type,event_date,source_content_hash",
-    ).execute()
+        }],
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
 
 
 def advance_checkpoint(
     sb: SupabaseClient, *, source: str, cursor_date: date, rows_processed: int,
     notes: Optional[str] = None,
 ) -> None:
-    sb.from_("harvest_checkpoint").upsert(
-        {
+    """Idempotent checkpoint advance — uses the shared client's
+    `_rest_with_retry` (PostgREST). SupabaseClient is a thin requests
+    wrapper here, NOT supabase-py."""
+    sb._rest_with_retry(
+        "POST",
+        "harvest_checkpoint?on_conflict=source,cursor_date",
+        json_body=[{
             "source": source,
             "cursor_date": cursor_date.isoformat(),
             "rows_processed": int(rows_processed),
             "last_run_at": datetime.now(timezone.utc).isoformat(),
             "notes": notes,
-        },
-        on_conflict="source,cursor_date",
-    ).execute()
+        }],
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
 
 
 def populate_next_catalyst_date(sb: SupabaseClient) -> None:
@@ -409,15 +419,16 @@ def _d(d: date) -> str:
 
 def latest_checkpoint(sb: SupabaseClient, source: str) -> Optional[date]:
     """Return the latest cursor_date persisted for `source`, or None."""
-    result = (
-        sb.from_("harvest_checkpoint")
-        .select("cursor_date")
-        .eq("source", source)
-        .order("cursor_date", desc=True)
-        .limit(1)
-        .execute()
-    )
-    rows = result.data or []
+    rows = sb._rest_with_retry(
+        "GET",
+        "harvest_checkpoint",
+        params={
+            "select": "cursor_date",
+            "source": f"eq.{source}",
+            "order": "cursor_date.desc",
+            "limit": "1",
+        },
+    ) or []
     if not rows:
         return None
     try:

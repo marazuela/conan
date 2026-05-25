@@ -254,6 +254,12 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "feedback_loop_kickoff",
         "orchestrator_drain_queue",
         "seed_fda_asset_aliases_refresh",
+        # Phase 3a/3b/4 (added 2026-06-04)
+        "earnings_calendar_fetch_daily",
+        "fomc_calendar_refresh",
+        "q1_audit_run",
+        "q2_audit_run",
+        "fda_event_harvest_daily",
     })
 
 
@@ -479,3 +485,171 @@ def test_dispatch_seed_alias_refresh_passes_sources_arg(monkeypatch):
     assert out["spawned"] is True
     assert spawned["kwargs"] == {"sources": "openfda_label"}
     assert "should_be_dropped" not in spawned["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a/3b/4 — spawn actions added 2026-06-04
+#
+# Each new action wires pg_cron → compute_v3_dispatch → worker via
+# modal.Function.from_name + spawn. Tests follow the same fake-from-name
+# pattern as the existing spawn-action tests (drain_queue, seed_alias_refresh).
+# ---------------------------------------------------------------------------
+
+
+def _patched_spawn(monkeypatch) -> Dict[str, Any]:
+    """Returns a dict that test bodies inspect; monkeypatches
+    modal.Function.from_name so any action that spawns is captured."""
+    captured: Dict[str, Any] = {}
+
+    class _Handle:
+        object_id = "fc-test-handle"
+
+    class _FakeFn:
+        def spawn(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return _Handle()
+
+    def fake_from_name(app_name, fn_name):
+        captured["app"] = app_name
+        captured["fn"] = fn_name
+        return _FakeFn()
+
+    import modal as _modal
+    monkeypatch.setattr(_modal.Function, "from_name", staticmethod(fake_from_name))
+    return captured
+
+
+def test_dispatch_earnings_calendar_fetch_daily_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("earnings_calendar_fetch_daily", {})
+    assert out == {"spawned": True, "function_call_id": "fc-test-handle"}
+    assert captured["app"] == "conan-v3-orchestrator"
+    assert captured["fn"] == "phase3a_earnings_calendar_fetch_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_earnings_calendar_passes_through_window_and_tickers(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("earnings_calendar_fetch_daily", {
+        "window_days": 14,
+        "forward_days": 30,
+        "tickers": ["AXSM", "VRDN"],
+        "unknown_key": "dropped",
+    })
+    assert captured["kwargs"] == {
+        "window_days": 14, "forward_days": 30, "tickers": ["AXSM", "VRDN"],
+    }
+
+
+def test_dispatch_fomc_calendar_refresh_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("fomc_calendar_refresh", {})
+    assert out["spawned"] is True
+    assert captured["fn"] == "phase3a_fomc_calendar_refresh_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_fomc_calendar_refresh_passes_year_arg(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("fomc_calendar_refresh", {
+        "year": 2026, "ignored": True,
+    })
+    assert captured["kwargs"] == {"year": 2026}
+
+
+def test_dispatch_q1_audit_run_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("q1_audit_run", {})
+    assert out["spawned"] is True
+    assert captured["fn"] == "q1_audit_run_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_q1_audit_run_passes_re_audit_flag(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("q1_audit_run", {
+        "re_audit": True, "noise": "discarded",
+    })
+    assert captured["kwargs"] == {"re_audit": True}
+
+
+def test_dispatch_q1_audit_run_coerces_re_audit_to_bool(monkeypatch):
+    """re_audit is bool-coerced so callers can pass '1' / 'true' / 0
+    without exploding the worker signature."""
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("q1_audit_run", {"re_audit": 1})
+    assert captured["kwargs"] == {"re_audit": True}
+
+
+def test_dispatch_q2_audit_run_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("q2_audit_run", {})
+    assert out["spawned"] is True
+    assert captured["fn"] == "q2_audit_run_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_q2_audit_run_passes_profile_arg(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("q2_audit_run", {
+        "profile": "binary_catalyst", "extra": "dropped",
+    })
+    assert captured["kwargs"] == {"profile": "binary_catalyst"}
+
+
+def test_dispatch_fda_event_harvest_daily_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("fda_event_harvest_daily", {})
+    assert out["spawned"] is True
+    assert captured["fn"] == "fda_event_harvest_daily_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_fda_event_harvest_passes_date_range_args(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("fda_event_harvest_daily", {
+        "start_date": "2026-05-01",
+        "end_date": "2026-06-01",
+        "ignored": True,
+    })
+    assert captured["kwargs"] == {
+        "start_date": "2026-05-01", "end_date": "2026-06-01",
+    }
+
+
+def test_spawn_only_actions_set_is_documented():
+    """The _SPAWN_ONLY_ACTIONS map must list every spawn action so the
+    multiplex can't develop two ways to spawn (one via if-chain, one via
+    map) without intent. Defensive."""
+    from modal_workers.orchestrator_app import (
+        _SPAWN_ONLY_ACTIONS, COMPUTE_V3_ACTIONS,
+    )
+    assert set(_SPAWN_ONLY_ACTIONS).issubset(COMPUTE_V3_ACTIONS)
+    # The Phase 3a/3b/4 additions should all be in the spawn map.
+    for action in (
+        "earnings_calendar_fetch_daily", "fomc_calendar_refresh",
+        "q1_audit_run", "q2_audit_run", "fda_event_harvest_daily",
+    ):
+        assert action in _SPAWN_ONLY_ACTIONS

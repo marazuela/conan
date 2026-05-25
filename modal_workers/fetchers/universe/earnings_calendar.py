@@ -269,9 +269,12 @@ def _polygon_earnings_for_ticker(
 def _upsert_earnings_row(client: SupabaseClient, row: Dict[str, Any]) -> None:
     """ON CONFLICT (ticker, earnings_date, source) DO UPDATE — multi-source
     rows coexist; we always overwrite the same-source row to track confidence
-    drift over time."""
-    client.from_("earnings_calendar").upsert(
-        {
+    drift over time. Uses the shared client's `_rest_with_retry` (NOT
+    supabase-py; this repo's SupabaseClient is a thin requests wrapper)."""
+    client._rest_with_retry(
+        "POST",
+        "earnings_calendar?on_conflict=ticker,earnings_date,source",
+        json_body=[{
             "ticker": row["ticker"],
             "earnings_date": row["earnings_date"],
             "session": row.get("session", "unknown"),
@@ -280,9 +283,9 @@ def _upsert_earnings_row(client: SupabaseClient, row: Dict[str, Any]) -> None:
             "confidence": row.get("confidence"),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "raw_payload": row.get("raw_payload") or {},
-        },
-        on_conflict="ticker,earnings_date,source",
-    ).execute()
+        }],
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -310,15 +313,16 @@ def load_tradeable_tickers(client: SupabaseClient) -> List[str]:
     helper that runs once a day — Supabase's REST API can serve this fine.
     """
     # eval_harness has asset_id + tradeable_filter_pass; fda_assets carries
-    # the ticker. The inner select on fda_assets.id keeps the predicate on
-    # the indexed asset_id column.
-    result = (
-        client.from_("eval_harness")
-        .select("asset_id, fda_assets!inner(ticker)")
-        .eq("tradeable_filter_pass", True)
-        .execute()
-    )
-    rows = result.data or []
+    # the ticker. PostgREST resource-embedding syntax brings the joined
+    # ticker into the response under the fda_assets key.
+    rows = client._rest_with_retry(
+        "GET",
+        "eval_harness",
+        params={
+            "select": "asset_id,fda_assets!inner(ticker)",
+            "tradeable_filter_pass": "eq.true",
+        },
+    ) or []
     tickers: set[str] = set()
     for row in rows:
         ticker = (row.get("fda_assets") or {}).get("ticker")

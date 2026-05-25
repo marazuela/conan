@@ -365,34 +365,35 @@ def audit_event(
 
 
 def _load_eval_harness_row(sb: SupabaseClient, eval_harness_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch the eval_harness row + ticker (joined from fda_assets)."""
-    result = (
-        sb.from_("eval_harness")
-        .select(
-            "id, reference_assessment_date, realized_outcome_data, "
-            "tradeable_filter_pass, issuer_status, "
-            "fda_assets!inner(ticker)"
-        )
-        .eq("id", eval_harness_id)
-        .maybe_single()
-        .execute()
-    )
-    data = result.data or {}
-    if not data:
+    """Fetch the eval_harness row + ticker (joined from fda_assets) via the
+    shared `_rest_with_retry` (PostgREST). Note: SupabaseClient in this repo
+    is a thin requests wrapper, not supabase-py."""
+    rows = sb._rest_with_retry(
+        "GET",
+        "eval_harness",
+        params={
+            "select": (
+                "id,reference_assessment_date,realized_outcome_data,"
+                "tradeable_filter_pass,issuer_status,fda_assets!inner(ticker)"
+            ),
+            "id": f"eq.{eval_harness_id}",
+            "limit": "1",
+        },
+    ) or []
+    if not rows:
         return None
+    data = rows[0]
     ticker = (data.get("fda_assets") or {}).get("ticker")
     data["ticker"] = ticker
     return data
 
 
 def _load_earnings_dates_for_ticker(sb: SupabaseClient, ticker: str) -> List[date]:
-    result = (
-        sb.from_("earnings_calendar")
-        .select("earnings_date")
-        .eq("ticker", ticker)
-        .execute()
-    )
-    rows = result.data or []
+    rows = sb._rest_with_retry(
+        "GET",
+        "earnings_calendar",
+        params={"select": "earnings_date", "ticker": f"eq.{ticker}"},
+    ) or []
     out: List[date] = []
     for r in rows:
         d = _parse_iso_date(r.get("earnings_date"))
@@ -405,13 +406,14 @@ def _load_fomc_dates(sb: SupabaseClient) -> List[date]:
     """All FOMC scheduled + emergency dates. Minutes-release dates are
     excluded — they don't move markets enough to count as confounders.
     """
-    result = (
-        sb.from_("fomc_calendar")
-        .select("fomc_date, meeting_type")
-        .in_("meeting_type", ["scheduled", "emergency"])
-        .execute()
-    )
-    rows = result.data or []
+    rows = sb._rest_with_retry(
+        "GET",
+        "fomc_calendar",
+        params={
+            "select": "fomc_date,meeting_type",
+            "meeting_type": "in.(scheduled,emergency)",
+        },
+    ) or []
     out: List[date] = []
     for r in rows:
         d = _parse_iso_date(r.get("fomc_date"))
@@ -463,16 +465,22 @@ def _parse_iso_date(s: Any) -> Optional[date]:
 
 
 def _persist_verdict(sb: SupabaseClient, *, eval_harness_id: str, verdict: Q1Verdict) -> None:
-    sb.from_("eval_harness").update(verdict.as_db_row()).eq("id", eval_harness_id).execute()
+    sb._rest_with_retry(
+        "PATCH",
+        "eval_harness",
+        params={"id": f"eq.{eval_harness_id}"},
+        json_body=verdict.as_db_row(),
+        prefer="return=minimal",
+    )
 
 
 def _audit_all(sb: SupabaseClient, *, re_audit: bool, apply: bool) -> Dict[str, int]:
     """Audit every eval_harness row that hasn't been audited yet (unless
     --re-audit is set)."""
-    query = sb.from_("eval_harness").select("id")
+    params = {"select": "id"}
     if not re_audit:
-        query = query.is_("q1_audited_at", "null")
-    rows = (query.execute().data) or []
+        params["q1_audited_at"] = "is.null"
+    rows = sb._rest_with_retry("GET", "eval_harness", params=params) or []
     counts = {"clean": 0, "confounded": 0, "discard": 0, "errors": 0}
     for row in rows:
         try:

@@ -118,10 +118,11 @@ def fetch(
 def parse_fomc_html(html: str, *, year_filter: Optional[int] = None) -> List[Dict[str, Any]]:
     """Scan the calendar HTML and return rows ready for upsert.
 
-    Strategy: find every <div class="panel panel-default"> block (one per
-    year), pull the year from the header, then extract month + day(s) from
-    the inner <div class="row fomc-meeting"> rows. Minutes appear as siblings
-    labeled "Minutes" — captured separately as meeting_type='minutes'.
+    Strategy: strip HTML tags first so date ranges like "January 27-28" stay
+    contiguous (the raw HTML wraps the month and day(s) in separate spans,
+    breaking the meeting-regex). Then split on the "YYYY FOMC Meetings"
+    section headers and classify each (month, day, optional_end_day) match
+    by structure — two-day ranges = scheduled meetings, single days = minutes.
 
     The parser is intentionally conservative: anything that doesn't match the
     expected regex is silently skipped. The Fed has rearranged the HTML
@@ -130,13 +131,21 @@ def parse_fomc_html(html: str, *, year_filter: Optional[int] = None) -> List[Dic
     """
     rows: List[Dict[str, Any]] = []
 
+    # Tag-stripping is load-bearing: without it the meeting-regex misses
+    # "January 27-28" because <span>January</span> <span>27-28</span> has
+    # tags between the month and the day range. We also normalise &nbsp;
+    # and runs of whitespace so the regex character classes match cleanly.
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
     # Split on year-panel headers. Each panel typically begins with
     # "<h4 class="panel-heading">YYYY FOMC Meetings</h4>" or similar — we
     # match liberally to survive style tweaks.
     panel_re = re.compile(
         r"(\d{4})\s+FOMC\s+Meetings", re.IGNORECASE,
     )
-    panels = panel_re.split(html)
+    panels = panel_re.split(text)
     # split() returns [pre, year1, body1, year2, body2, ...].
     for i in range(1, len(panels), 2):
         try:
@@ -152,57 +161,42 @@ def parse_fomc_html(html: str, *, year_filter: Optional[int] = None) -> List[Dic
 
 
 def _extract_meetings_from_panel(year: int, body: str) -> List[Dict[str, Any]]:
-    """Pull meeting + minutes rows out of one year's panel body."""
-    out: List[Dict[str, Any]] = []
-    # Each meeting block tends to live inside a row tagged with the month.
-    # We don't rely on the DOM — just walk the text for month+day matches and
-    # assume the first match per "row" is the meeting itself, subsequent
-    # matches inside a "Minutes" context are minutes-release dates.
-    #
-    # The panel separator is heuristic; we split on "Minutes" and look at
-    # whether the match preceded or followed.
-    block = body
-    minutes_marker = re.search(r"Minutes", block, re.IGNORECASE)
+    """Pull meeting + minutes rows out of one year's panel body.
 
-    # Pass 1: meeting dates (everything before "Minutes" header or anywhere
-    # if no minutes marker exists).
-    meeting_scope = block[:minutes_marker.start()] if minutes_marker else block
-    for m in _MEETING_RE.finditer(meeting_scope):
-        d = _date_from_match(year, m, prefer_end_day=True)
+    Classification by date-range STRUCTURE, not by document position:
+      - "January 27-28" (two-day range, group(3) non-None)  → scheduled meeting
+      - "February 18"   (single day,    group(3) None)      → minutes release
+
+    Rationale: the live federalreserve.gov HTML has "Minutes" appearing as
+    a column header very early in each year-panel, so the prior
+    split-on-Minutes approach put EVERY date into the minutes scope. The
+    structural classifier is robust to the exact DOM/text layout.
+
+    Limitation: rare single-day scheduled meetings (e.g. emergency rate
+    actions like 2020-03-15) get misclassified as 'minutes'. The Q1
+    confounder lookup filters on meeting_type IN ('scheduled','emergency'),
+    so emergency meetings should be backfilled manually with
+    meeting_type='emergency' — covered by the table's CHECK constraint.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: List[Dict[str, Any]] = []
+    for m in _MEETING_RE.finditer(body):
+        is_two_day = m.group(3) is not None
+        d = _date_from_match(year, m, prefer_end_day=is_two_day)
         if d is None:
             continue
-        out.append({
-            "fomc_date": d.isoformat(),
-            "meeting_type": "scheduled",
-            "source": SOURCE,
-            "source_url": FOMC_URL,
-        })
-
-    # Pass 2: minutes-release dates (after the "Minutes" header).
-    if minutes_marker is not None:
-        minutes_scope = block[minutes_marker.start():]
-        for m in _MEETING_RE.finditer(minutes_scope):
-            d = _date_from_match(year, m, prefer_end_day=False)
-            if d is None:
-                continue
-            out.append({
-                "fomc_date": d.isoformat(),
-                "meeting_type": "minutes",
-                "source": SOURCE,
-                "source_url": FOMC_URL,
-            })
-
-    # Dedupe — the regex may grab the same meeting twice if it appears in
-    # both "press conference" and "statement release" contexts.
-    seen: set[tuple[str, str]] = set()
-    dedup: List[Dict[str, Any]] = []
-    for row in out:
-        key = (row["fomc_date"], row["meeting_type"])
+        meeting_type = "scheduled" if is_two_day else "minutes"
+        key = (d.isoformat(), meeting_type)
         if key in seen:
             continue
         seen.add(key)
-        dedup.append(row)
-    return dedup
+        out.append({
+            "fomc_date": d.isoformat(),
+            "meeting_type": meeting_type,
+            "source": SOURCE,
+            "source_url": FOMC_URL,
+        })
+    return out
 
 
 def _date_from_match(year: int, m: re.Match, *, prefer_end_day: bool) -> Optional[date]:
@@ -224,16 +218,21 @@ def _date_from_match(year: int, m: re.Match, *, prefer_end_day: bool) -> Optiona
 
 
 def _upsert_fomc_row(client: SupabaseClient, row: Dict[str, Any]) -> None:
-    client.from_("fomc_calendar").upsert(
-        {
+    """PostgREST upsert via the shared client's `_rest_with_retry` (the
+    SupabaseClient in this repo is a thin requests wrapper, not supabase-py;
+    `.from_().upsert().execute()` doesn't exist here)."""
+    client._rest_with_retry(
+        "POST",
+        "fomc_calendar?on_conflict=fomc_date,meeting_type",
+        json_body=[{
             "fomc_date": row["fomc_date"],
             "meeting_type": row.get("meeting_type", "scheduled"),
             "source": row["source"],
             "source_url": row.get("source_url"),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-        },
-        on_conflict="fomc_date,meeting_type",
-    ).execute()
+        }],
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
 
 
 # ---------------------------------------------------------------------------
