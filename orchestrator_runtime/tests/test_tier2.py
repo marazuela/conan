@@ -9,6 +9,7 @@ Run: python3 -m pytest orchestrator_runtime/tests/test_tier2.py -v
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +35,10 @@ def _valid_payload(**overrides: Any) -> Dict[str, Any]:
         "tier": 2,
         "orchestrator_version": tier2.TIER2_ORCHESTRATOR_VERSION,
         "thesis_direction": "long",
+        "target_type": "price_move",
+        "horizon_days": 30,
+        "event_anchor": None,
+        "label_rule": "forward_return_t30_calendar",
         "raw_conviction_pct": 55.0,
         "conviction_pct_calibrated": 52.0,
         "conviction_pct": 52.0,
@@ -67,6 +72,24 @@ def _stub_client(rest_handler):
 # ---------------------------------------------------------------------------
 # build_tier2_input_blob
 # ---------------------------------------------------------------------------
+
+def test_compute_document_set_hash_sorts_material_primary_docs(monkeypatch):
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        assert method == "GET"
+        assert path == "asset_documents"
+        assert params["link_type"] == "eq.primary"
+        assert params["is_material"] == "is.true"
+        return [{"document_id": "d2"}, {"document_id": "d1"}]
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    assert tier2.compute_document_set_hash(sb, "asset-uuid-1") == hashlib.md5(
+        b"d1,d2"
+    ).hexdigest()
+
 
 def test_build_tier2_input_blob_assembles_all_fields(monkeypatch):
     captured: List[Dict[str, Any]] = []
@@ -545,6 +568,85 @@ def test_check_tier1_escalation_compounds_reasons():
 
 
 # ---------------------------------------------------------------------------
+# check_tier1_escalation — stable-high-conviction suppression
+# ---------------------------------------------------------------------------
+
+def test_check_tier1_escalation_suppresses_stable_high_conviction(monkeypatch):
+    """Steady-state high-conviction (prior=70, current=72) must NOT re-escalate
+    every Tier-2 cycle. Without this gate, a watch_priority=1 asset that's
+    been LONG-conviction 72 for two weeks triggers a fresh $10-15 Tier-1
+    + email every single day."""
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", True)
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA", 5.0)
+
+    decision = tier2.check_tier1_escalation(
+        prior={"thesis_direction": "long", "conviction_pct": 70.0},
+        current=_valid_payload(conviction_pct=72.0, thesis_direction="long"),
+    )
+    assert not decision.escalate, f"expected no escalation, got {decision.reasons}"
+
+
+def test_check_tier1_escalation_fires_on_first_high_conviction(monkeypatch):
+    """First time crossing the threshold MUST still escalate — the asset
+    just became material to the IC."""
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", True)
+
+    decision = tier2.check_tier1_escalation(
+        prior={"thesis_direction": "long", "conviction_pct": 48.0},
+        current=_valid_payload(conviction_pct=72.0, thesis_direction="long"),
+    )
+    assert decision.escalate
+    assert any("high_conviction" in r for r in decision.reasons)
+
+
+def test_check_tier1_escalation_fires_on_material_delta_within_high_band(monkeypatch):
+    """Even when both prior and current are above threshold, a 5pp+ move
+    still escalates — that's a real change, not a steady state."""
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", True)
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA", 5.0)
+
+    decision = tier2.check_tier1_escalation(
+        prior={"thesis_direction": "long", "conviction_pct": 65.0},
+        current=_valid_payload(conviction_pct=78.0, thesis_direction="long"),
+    )
+    assert decision.escalate
+    assert any("high_conviction" in r for r in decision.reasons)
+
+
+def test_check_tier1_escalation_legacy_mode_always_fires_above_threshold(monkeypatch):
+    """Env-flag revert path: setting the suppress flag to False restores the
+    pre-PR behavior — any conviction at-or-above threshold escalates."""
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", False)
+
+    decision = tier2.check_tier1_escalation(
+        prior={"thesis_direction": "long", "conviction_pct": 70.0},
+        current=_valid_payload(conviction_pct=72.0, thesis_direction="long"),
+    )
+    assert decision.escalate
+    assert any("high_conviction" in r for r in decision.reasons)
+
+
+def test_check_tier1_escalation_suppressed_high_conviction_still_escalates_on_direction_change(
+    monkeypatch,
+):
+    """Stable-high-conviction suppression must NOT mask a direction flip.
+    Direction-change is the highest-information event the IC sees; gating
+    on it is independent of conviction-stability."""
+    monkeypatch.setattr(tier2, "TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", True)
+
+    decision = tier2.check_tier1_escalation(
+        prior={"thesis_direction": "long", "conviction_pct": 70.0},
+        current=_valid_payload(conviction_pct=72.0, thesis_direction="short"),
+    )
+    assert decision.escalate
+    assert any("direction_change" in r for r in decision.reasons)
+    assert not any("high_conviction" in r for r in decision.reasons), (
+        "stable high-conviction reason should still be suppressed even when "
+        "direction_change fires the escalation"
+    )
+
+
+# ---------------------------------------------------------------------------
 # enqueue_tier1_escalation
 # ---------------------------------------------------------------------------
 
@@ -554,6 +656,10 @@ def test_enqueue_tier1_escalation_inserts_orchestrator_run(monkeypatch):
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
         captured.append({"method": method, "path": path,
                          "json_body": json_body})
+        if method == "GET" and path == "asset_documents":
+            return [{"document_id": "d2"}, {"document_id": "d1"}]
+        if method == "POST" and path == "rpc/orchestrator_enqueue_guard":
+            return {"skip": False, "reason": "ok"}
         if method == "POST" and path == "orchestrator_runs":
             return [{"id": "run-1"}]
         return []
@@ -570,16 +676,61 @@ def test_enqueue_tier1_escalation_inserts_orchestrator_run(monkeypatch):
     )
     assert run_id == "run-1"
 
-    posts = [c for c in captured if c["method"] == "POST"]
-    assert len(posts) == 1
-    body = posts[0]["json_body"]
+    inserts = [c for c in captured
+               if c["method"] == "POST" and c["path"] == "orchestrator_runs"]
+    assert len(inserts) == 1
+    body = inserts[0]["json_body"]
     assert body["asset_id"] == "asset-uuid-1"
     assert body["trigger_type"] == "tier2_escalation"
     assert body["tier"] == 1
     assert body["status"] == "pending"
     assert body["scheduled_at"]
+    assert body["document_set_hash"] == hashlib.md5(b"d1,d2").hexdigest()
     assert body["notes"]["triggering_assessment_id"] == "assess-1"
     assert "high_conviction" in body["notes"]["escalation_reasons"][0]
+
+    # Guard was consulted before the insert.
+    guard_calls = [c for c in captured
+                   if c["method"] == "POST" and c["path"] == "rpc/orchestrator_enqueue_guard"]
+    assert len(guard_calls) == 1
+    guard_body = guard_calls[0]["json_body"]
+    assert guard_body["p_asset_id"] == "asset-uuid-1"
+    assert guard_body["p_trigger_type"] == "tier2_escalation"
+    assert guard_body["p_hash"] == hashlib.md5(b"d1,d2").hexdigest()
+
+
+def test_enqueue_tier1_escalation_skips_when_guard_says_skip(monkeypatch):
+    captured: List[Dict[str, Any]] = []
+
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        captured.append({"method": method, "path": path, "json_body": json_body})
+        if method == "GET" and path == "asset_documents":
+            return [{"document_id": "d1"}]
+        if method == "POST" and path == "rpc/orchestrator_enqueue_guard":
+            return {"skip": True, "reason": "same_hash_within_cooldown",
+                    "cooldown_hours": 6}
+        if method == "POST" and path == "orchestrator_runs":
+            return [{"id": "run-should-not-exist"}]
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    reasons = ["high_conviction"]
+    run_id = tier2.enqueue_tier1_escalation(
+        sb, "asset-uuid-1",
+        triggering_assessment_id="assess-1",
+        reasons=reasons,
+    )
+    assert run_id is None, "guard skip must short-circuit the INSERT"
+    assert any("same_hash_within_cooldown" in r for r in reasons), \
+        "skip reason must be appended to caller's reasons list"
+
+    inserts = [c for c in captured
+               if c["method"] == "POST" and c["path"] == "orchestrator_runs"]
+    assert len(inserts) == 0, "no orchestrator_runs INSERT on guard skip"
 
 
 def test_enqueue_tier1_escalation_rejects_empty_reasons():
@@ -625,9 +776,14 @@ def test_tier2_input_blob_to_json_is_serializable():
 def _make_rest_recorder(*, fda_assets=None, facts=None, asset_documents=None,
                        prior_convergence=None, doc_types=None,
                        run_row=None, insert_run_id=None,
-                       insert_assessment_id=None, insert_escalation_id=None):
+                       insert_assessment_id=None, insert_escalation_id=None,
+                       guard_response=None):
     """Build a fake _rest implementation with canned responses keyed on
-    (method, path, params filter). Returns (rest_fn, captured_calls)."""
+    (method, path, params filter). Returns (rest_fn, captured_calls).
+
+    `guard_response` (dict) overrides the default {skip: False} returned by
+    rpc/orchestrator_enqueue_guard — pass {'skip': True, 'reason': ...} to
+    exercise the dedup path."""
     captured: List[Dict[str, Any]] = []
 
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
@@ -649,6 +805,8 @@ def _make_rest_recorder(*, fda_assets=None, facts=None, asset_documents=None,
             return doc_types if doc_types is not None else []
         if method == "GET" and path == "orchestrator_runs":
             return [run_row] if run_row else []
+        if method == "POST" and path == "rpc/orchestrator_enqueue_guard":
+            return guard_response or {"skip": False, "reason": "ok"}
         if method == "POST" and path == "orchestrator_runs":
             body = json_body or {}
             if body.get("trigger_type") == "tier2_escalation":
@@ -692,6 +850,7 @@ def test_enqueue_tier2_bulk_inserts_per_asset(monkeypatch):
     assert len(inserts) == 1
     assert inserts[0]["json_body"]["tier"] == 2
     assert inserts[0]["json_body"]["status"] == "pending"
+    assert inserts[0]["json_body"]["document_set_hash"] == hashlib.md5(b"d1").hexdigest()
     assert inserts[0]["json_body"]["notes"]["source"] == "tier2_bulk_enqueue"
 
 
@@ -701,6 +860,8 @@ def test_enqueue_tier2_bulk_isolates_per_asset_failures(monkeypatch):
     call_count = {"n": 0}
 
     def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        if method == "POST" and path == "rpc/orchestrator_enqueue_guard":
+            return {"skip": False, "reason": "ok"}
         if method == "POST" and path == "orchestrator_runs":
             call_count["n"] += 1
             return [{"id": f"run-{call_count['n']}"}]
@@ -723,6 +884,58 @@ def test_enqueue_tier2_bulk_isolates_per_asset_failures(monkeypatch):
     assert result["failed_count"] == 1
     assert result["enqueued"][0]["asset_id"] == "good"
     assert result["failed"][0]["asset_id"] == "bad"
+
+
+def test_enqueue_tier2_bulk_records_guard_skips(monkeypatch):
+    """Guard-skipped assets land in `skipped`, NOT `failed`."""
+    fake_rest, captured = _make_rest_recorder(
+        fda_assets=[{
+            "id": "a1", "ticker": "AXSM", "drug_name": "AXS-05",
+            "indication": "MDD", "indication_normalized": "mdd",
+        }],
+        facts=[{"id": "f1"}],
+        asset_documents=[{"document_id": "d1", "link_type": "primary", "is_material": True}],
+        prior_convergence=[],
+        guard_response={"skip": True, "reason": "same_hash_within_cooldown",
+                        "cooldown_hours": 6},
+    )
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    result = tier2.enqueue_tier2_bulk(sb, ["a1"])
+
+    assert result["enqueued_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["failed_count"] == 0
+    assert result["skipped"][0]["asset_id"] == "a1"
+    assert result["skipped"][0]["reason"] == "same_hash_within_cooldown"
+
+    inserts = [c for c in captured
+               if c["method"] == "POST" and c["path"] == "orchestrator_runs"]
+    assert len(inserts) == 0, "no INSERT on guard skip"
+
+
+def test_check_orchestrator_enqueue_guard_fail_open(monkeypatch):
+    """RPC errors fail OPEN — a failed guard call must NOT silently suppress
+    a legitimate enqueue (we'd rather over-fire than miss assessments)."""
+    def fake_rest(self, method, path, *, params=None, json_body=None, prefer=None):
+        if method == "POST" and path == "rpc/orchestrator_enqueue_guard":
+            raise RuntimeError("simulated RPC failure")
+        return []
+
+    monkeypatch.setattr(SupabaseClient, "_rest", fake_rest)
+    sb = SupabaseClient.__new__(SupabaseClient)
+    sb.url = "https://fake"
+    sb.service_key = "fake"
+
+    result = tier2.check_orchestrator_enqueue_guard(
+        sb, asset_id="a1", trigger_type="scheduled",
+        document_set_hash="abc",
+    )
+    assert result["skip"] is False
+    assert "guard_rpc_error" in result["reason"]
 
 
 def test_complete_tier2_run_happy_path(monkeypatch):

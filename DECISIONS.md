@@ -688,3 +688,69 @@ Implementation:
 Operator step after deploy: `UPDATE internal_config SET value=<deployed compute-v3 URL> WHERE key='modal_url_compute_v3'` — the migration seeds an unreachable placeholder so accidental pre-seed RPC calls fail loudly with a pg_net transport error rather than routing somewhere unintended. With this in place, the Cowork `bulk_orchestrator_run` skill can retire its direct-insert fallback once the operator has run `modal deploy modal_workers/app.py` (releases the v2 `health` slot) + `modal deploy modal_workers/orchestrator_app.py` (claims the slot for compute-v3) + the secret-update step.
 
 **Deployed live 2026-05-08:** Both Modal apps redeployed (conan-v2 7 endpoints, conan-v3-orchestrator 1 endpoint = 8/8). All three Phase 4B migrations applied to project xvwvwbnxdsjpnealarkh (`v3_phase_4b_convergence_assessments_tier`, `v3_phase_4b_sub_agent_calls_ic_memo_role`, `v3_phase_4b_compute_rpcs`). The compute-v3 URL `https://marazuela--compute-v3.modal.run` is wired into `internal_config.modal_url_compute_v3`. End-to-end smoke verified: `select rpc_tier2_bulk_enqueue(ARRAY[]::text[])` returned request_id 8580; `select rpc_compute_collect(8580, 60000)` returned `{"failed":[],"enqueued":[],"failed_count":0,"enqueued_count":0}` — the empty-list happy path through SQL → pg_net → Modal auth → dispatch → `enqueue_tier2_bulk(sb, [])` → response. Phase 4B is functionally live; the only remaining piece is Cowork scheduling the `bulk_orchestrator_run` cron entry against priority=1 and priority=2 cadences.
+
+---
+
+## D-129 — Adopt positive v2_skills export edits (8 work items, FDA-only scope) (2026-05-25)
+
+**Context.** The 2026-05-05 `v2_skills` export at `~/Downloads/_EXPORT_skills_scoring_methodology/skills/v2_skills/` contains 18 research/analysis skills designed for a multi-profile pipeline. A skill-by-skill contrast against the live FDA-pivoted Conan repo found 2 already-landed verbatim (P1 `analyze-fda-approval-prospects`, U3 `compare-to-historical-precedents`), 5 partially-landed with v2 having a cleaner version, 3 in-scope but missing (M1 harvest, Q1 confounder/coverage, Q2 sample-balance), and 8 out-of-scope per the FDA pivot (activist / financial / litigation). The plan to adopt the positive edits lives at `~/.claude/plans/plan-it-thoroughly-unified-scroll.md`.
+
+**Decision.** Adopt 8 work items across 5 phases. Out-of-scope explicitly: activist/governance/financial/litigation profiles (sunset per strategic FDA pivot), the CourtListener bucket of M1, the generic `monitor-kill-conditions` portfolio sweeper (orthogonal to intra-assessment `premortem.py`), and the generic `extract-event-features` ETL (orthogonal to the inline `fda_event_features` builder). Each WI ships as logic + tests + (where applicable) migration. Shadow-mode flags default to off so the gates compute but don't change routing until operator flips a single `internal_config` row per gate.
+
+**Consequences.**
+
+- **WI-1 thesis discipline gate** — port of `compose-thesis-with-discipline`. Pure helper `assess_discipline_v2()` in `modal_workers/shared/candidate_gate.py` validates 6 v2 fields (`variant_perception`, `preconditions`, `kill_criteria` [derived from `structured_kill_conditions`], `return_distribution`, `time_horizon`, `sizing_inputs`). Skill orchestration lives in `conan-cowork-skills/skills/thesis_writer.md` §6.7 (post-draft, pre-challenger). Shadow toggle: `internal_config.discipline_gate_enabled` (default `'false'`). 17 Python tests.
+- **WI-2 BC convergence pre-gate** — port of `detect-binary-catalyst-convergence`. `supabase/functions/reactor/bc-pregate.ts` scorer (Breakthrough +6, first-time sponsor +4, class_precedent stubbed +0 in v1 → max 10, threshold ≥6). Wired into `processAssetDocument()` in `index.ts` before `enqueueOrchestratorRun()`. Declined runs land as `orchestrator_runs.status='declined'` with `routine_declined=true`, `decline_reasons text[]`, `bc_pregate_score numeric`, `bc_pregate_inputs jsonb`. Shadow toggle: `internal_config.bc_pregate_enabled` (default `'false'`), threshold `bc_pregate_threshold` (default `'6'`). 16 Deno tests. Class-precedent refresher table is follow-up work — when it lands, max climbs to 15 and threshold lifts to 9.
+- **WI-3 PDUFA strength rubric port** — `_assess_strength_v2(entry, client)` in `modal_workers/scanners/fda_pdufa_pipeline.py` with explicit weights (Breakthrough +6, Priority +3, class precedent +2, first-time sponsor +3). Max 14, clipped to 0–10 on `signals.strength_estimate` for downstream compatibility. Env flag: `PDUFA_STRENGTH_RUBRIC` (default `'v1'`). New helpers `_count_class_peer_approvals` (deterministic from existing enrichment) and `_count_sponsor_prior_p3` (cached 7d under `scanner-caches/fda/sponsor_history/<slug>.json`). 11 new Python tests.
+- **WI-4 M2 binary_catalyst HIT/MISS extension** — `label_forward_returns.py` now recognises T+30 short-side HIT (≤ -30%), T+90 wrong-side MISS (long thesis: T+90 < -5%; short thesis: T+90 > +5%), and corporate-action UNRESOLVABLE (delisting before T+30 → `hit=None`). New `thesis_direction` optional field on `ForwardReturnLabel` (defaults `'long'` so legacy callers stay byte-identical). 12 tests.
+- **Phase 3a calendars** — `public.earnings_calendar` (yfinance primary, Polygon fallback; multi-source rows coexist under UNIQUE `(ticker, earnings_date, source)`; daily pg_cron `earnings-calendar-daily` at 06:10 UTC) + `public.fomc_calendar` (federalreserve.gov scrape; monthly pg_cron `fomc-calendar-monthly`). Both jobs short-circuit when the corresponding `internal_config.modal_url_*` is empty, so the migrations are safe to apply before the Modal endpoints exist. `modal_workers/fetchers/universe/earnings_calendar.py` + `modal_workers/fetchers/universe/fomc_calendar.py` + `modal_workers/scripts/phase3a_backfill_earnings_calendar.py`. 26 tests (12 earnings + 11 FOMC + 3 parser-robustness).
+- **WI-5 Q1 confounder + coverage audit** — `modal_workers/scripts/audit_event_data_quality.py` writes `q1_verdict/q1_reasons/q1_confounders/q1_coverage/q1_audited_at` on each `eval_harness` row. Verdict ladder: tradeable filter fails → `discard`; coverage gap → `discard`; confounder triggered → `confounded`; else `clean`. Confounder checks (earnings ±5td, FOMC ±1d, SPY 3σ in window, in-window 8-K) and coverage checks (yfinance gap, low-volume %, pre-window delisting) are pure helpers with no DB coupling — `audit_event(sb, eval_harness_id=...)` orchestrates the fetches. Low-volume and SPY-3σ are wired to return `triggered=False` in v1 (Polygon volume / SPY-history queries are follow-up). 26 tests.
+- **WI-6 Q2 sample-balance audit + gate** — `modal_workers/scripts/audit_sample_balance.py` computes Herfindahl-based concentration on 5 axes (HIT/MISS ratio, time, sector, sponsor, survivorship). `eval_sample_balance_audits` table (UNIQUE `(cohort_hash, audit_date)` so re-runs same-day overwrite). `nightly_calibration_refit.GateEvaluation` gains `q2_audit_verdict` + `q2_gate_mode`; `evaluate_q2_gate(sb)` is called after the existing D-103 gate and flips `passed=False, gate_reason='q2_failed'` when `internal_config.q2_gate_mode='required'` and verdict is `'fail'`. Default mode `'warn'` for 30 days shadows the audit without blocking promotion. `eval_runs.q2_audit_verdict` column. 17 tests + 25 existing `test_calibration_refit` tests still pass.
+- **WI-7 M1 FDA-only ongoing harvest** — `modal_workers/scripts/harvest_fda_events.py` (resumable openFDA AP/CR scan → `fda_regulatory_events`; EDGAR 8-K path is stubbed for follow-up). `harvest_checkpoint` table tracks `(source, cursor_date)` cursors so daily pg_cron `fda-event-harvest-daily` advances by one day per run. Idempotency via `fda_regulatory_events.UNIQUE (asset_id, event_type, event_date, source_content_hash)`. `populate_next_catalyst_date()` is a no-op stub in v1 — the rebuild RPC + bridge to `fda_assets.next_catalyst_date` (closing the `fda_assets_next_catalyst_date_no_writer` memory gap) is the next follow-up. 12 tests.
+
+**Migrations shipped** (11 files):
+
+| # | Filename | Notes |
+|---|---|---|
+| 1 | `20260603000010_internal_config_discipline_gate_flag.sql` | WI-1 shadow flag |
+| 2 | `20260603000020_orchestrator_runs_bc_pregate_columns.sql` | WI-2 columns + `'declined'` status enum + threshold/flag rows |
+| 3 | `20260603000040_orchestrator_runs_pregate_audit_indexes.sql` | WI-2 forensic indexes (partial on `routine_declined`/`bc_pregate_score`) |
+| 4 | `20260605000010_earnings_calendar_table.sql` | Phase 3a |
+| 5 | `20260605000020_fomc_calendar_table.sql` | Phase 3a |
+| 6 | `20260605000030_eval_harness_q1_columns.sql` | WI-5 (q1_verdict + 4 sidecar columns + partial index) |
+| 7 | `20260605000040_eval_sample_balance_audits_table.sql` | WI-6 (table + `eval_runs.q2_audit_verdict` + `internal_config.q2_gate_mode='warn'`) |
+| 8 | `20260605000050_earnings_calendar_pg_cron.sql` | Daily 06:10 UTC, empty-URL guard |
+| 9 | `20260605000060_fomc_calendar_pg_cron.sql` | Monthly 1st 06:15 UTC, empty-URL guard |
+| 10 | `20260605000070_internal_config_modal_urls_q1_q2.sql` | 4 placeholder URL rows |
+| 11 | `20260612000010_harvest_checkpoint_table.sql` + `20260612000020_harvest_fda_events_pg_cron.sql` | WI-7 |
+
+**Test totals across the arc:** 200+ new Python tests, 16 new Deno tests, zero regressions across the pre-existing `modal_workers/tests` and `supabase/functions/reactor` suites. Type-checks clean on the reactor edge function.
+
+**Shadow-mode rollout discipline (load-bearing).** No gate flips routing by default. The deploy sequence is migration-first (safe — additive columns + empty pg_cron guards + default-off flags), then code (logic exists but doesn't block), then Modal-endpoint URLs (start the pg_cron jobs that don't fire today), then individual flag flips after each gate's 7–30 day shadow window proves an acceptable false-positive rate. The exact flag→verdict mapping is documented inline in each migration's COMMENT.
+
+**Out of scope follow-ups (queued):**
+
+- `bc_class_precedent_refresher.py` + `fda_class_precedent_base_rates` table → lifts WI-2 max composite to 15, threshold to 9.
+- `_count_sponsor_prior_p3` denormalisation onto `fda_assets` → lets the reactor pre-gate read sponsor history without per-call openFDA lookups.
+- Polygon SPY history wiring → `audit_event_data_quality.check_spx_three_sigma` becomes live.
+- 8-K materiality classifier (Items 1.01 / 2.02 / 8.01) → tightens `material_8k_in_window`.
+- `populate_next_catalyst_date()` rebuild RPC → closes the `fda_assets_next_catalyst_date_no_writer` memory gap.
+- EDGAR 8-K harvest path inside `harvest_fda_events.py` (currently stubbed) → second source bridges into `fda_regulatory_events`.
+- D-130 below — eval-gated v0→v1 promotion of `sub_agent_regulatory_history`.
+
+---
+
+## D-130 — sub_agent_regulatory_history v0 → v1 promotion gate (deferred; criteria locked) (2026-05-25)
+
+**Context.** WI-8 of the v2_skills adoption arc (D-129) is the eval-gated promotion of `sub_agent_regulatory_history.md` (the v3 sub-agent port of v2_skills P2 `research-clinical-class-precedent`). Per the original v0 design, promotion to v1 is conditional on the post-D-129 pipeline being observably stable, not on a calendar date. Documenting the gate now — with the flip itself queued — so the future promotion is mechanical (operator updates a header) rather than re-litigating criteria.
+
+**Decision.** Promote `conan-fda-orchestrator-plugin/skills/sub_agent_regulatory_history.md` from v0 to v1 ONLY when ALL of the following hold simultaneously:
+
+1. **D-129 phases 1–3 stable ≥30 consecutive calendar days** — no hot-fix reverts, no operator_flag with source ∈ {`v3_pipeline_watchdog`, `tier2_quality`} resolving against any of the new gates.
+2. **≥30 `convergence_assessments` rows** with `sub_agent_calls` carrying `role='regulatory_history'` and no schema-validation failures (no `failed_reactor_events` rows mentioning the role + no validator drift).
+3. **Sparse-class warning fires correctly** on ≥1 real assessment where the underlying class had `n_precedents < 5` — verified by inspecting the `regulatory_history_v1.json` payload's `sparse_class_warning` field rather than just code-path coverage.
+4. **Q1 + Q2 audits land cleanly** — every nightly_calibration_refit run since D-129 deploy carries `q2_audit_verdict ∈ {'pass', 'pass_with_warnings'}` (i.e. no `'fail'` gating curve promotion), AND `eval_harness.q1_verdict` distribution is roughly `{clean: ≥40%, confounded: ≤30%, discard: ≤30%}` over the same window (looser bounds than Q2's Herfindahl thresholds because Q1 is per-event rather than cohort-level).
+
+**Promotion action.** Single header edit in `conan-fda-orchestrator-plugin/skills/sub_agent_regulatory_history.md` changing the `version:` frontmatter from v0 to v1. No code change in the orchestrator runtime; no schema migration; no DECISIONS entry beyond the cross-reference back to this D-130 with the verification timestamp.
+
+**Consequences.** Until the gate clears, the sub-agent remains v0 — fully functional and called from the orchestrator, but flagged in the dashboard as "pre-promotion (D-130 gate open)". This keeps the v0/v1 distinction load-bearing: v1 means "passed live-traffic eval", v0 means "lifted methodology from v2 export but unverified at scale". A future PR that flips the version header should reference D-130 in its commit message and add a single-line entry to this DECISIONS log noting the date the criteria were verified.

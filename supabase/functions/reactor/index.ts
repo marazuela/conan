@@ -54,8 +54,16 @@ import {
 } from "./convergence-window.ts";
 import {
   buildOrchestratorRunInsert,
+  CONTENT_DEDUP_BYPASS_TRIGGERS,
   type EnqueueArgs,
 } from "./orchestrator-enqueue.ts";
+import {
+  type BcPregateInputs,
+  configFlagBool,
+  configThreshold,
+  inputsFromRawPayload,
+  scoreBcPregate,
+} from "./bc-pregate.ts";
 import { fetchWithRetry } from "./fetch-retry.ts";
 
 type Direction = "long" | "short" | "neutral" | null | undefined;
@@ -519,39 +527,97 @@ async function processAssetDocument(link: AssetDocumentRow) {
   const triggerType: "cross_source" | "new_doc" =
     (priorLinks?.length ?? 0) > 0 ? "cross_source" : "new_doc";
 
-  // PR-2 content-aware dedup: compute md5 over the asset's current material
-  // primary document_id set and compare against the last non-superseded
-  // convergence_assessments row. If unchanged, skip the enqueue — running
-  // synthesis again can't produce new information.
+  // PR-B content-aware dedup: hand off to public.orchestrator_enqueue_guard
+  // so the dedup policy lives in ONE place (callable from pg_cron, Python,
+  // and Deno). Migration 20260612000050. The guard returns skip=true when:
+  //   - same-hash assessment <6h old and not superseded, OR
+  //   - same-hash pending orchestrator_runs row already queued.
+  // Bypass set (manual / operator_refresh / backtest) is enforced inside
+  // the guard. Reactor only emits new_doc / cross_source, so we always call.
   const docSetHash = await computeDocSetHash(link.asset_id);
-  if (docSetHash !== null && !CONTENT_DEDUP_BYPASS_TRIGGERS.has(triggerType)) {
-    const { data: lastAssessment, error: lastErr } = await sb
-      .from("convergence_assessments")
-      .select("document_set_hash")
-      .eq("asset_id", link.asset_id)
-      .is("superseded_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastErr) throw lastErr;
-    if (lastAssessment?.document_set_hash === docSetHash) {
-      return {
-        processed: true,
-        asset_id: link.asset_id,
-        document_id: link.document_id,
-        trigger_type: triggerType,
-        enqueued: false,
-        orchestrator_run_id: null,
-        coalesce_dedupe: true,
-        dedupe_reason: "doc_set_unchanged",
-      };
-    }
+  const { data: guardData, error: guardErr } = await sb.rpc(
+    "orchestrator_enqueue_guard",
+    {
+      p_asset_id: link.asset_id,
+      p_trigger_type: triggerType,
+      p_hash: docSetHash,
+    },
+  );
+  if (guardErr) throw guardErr;
+  // PostgREST returns the jsonb body directly.
+  const guard = (guardData ?? { skip: false, reason: "guard_no_payload" }) as {
+    skip?: boolean;
+    reason?: string;
+  };
+  if (guard.skip === true) {
+    return {
+      processed: true,
+      asset_id: link.asset_id,
+      document_id: link.document_id,
+      trigger_type: triggerType,
+      enqueued: false,
+      orchestrator_run_id: null,
+      coalesce_dedupe: true,
+      dedupe_reason: guard.reason ?? "enqueue_guard_skip",
+    };
   }
 
+  // WI-2: BC convergence pre-gate. Scores the asset against three structural
+  // signals (Breakthrough designation, first-time sponsor, class precedent —
+  // class_precedent stubbed to 0 in v1). When active and below threshold,
+  // writes a status='declined' audit row INSTEAD of enqueuing pending. When
+  // shadow (default), persists the score on the pending row for offline
+  // measurement and lets dispatch proceed. See plan WI-2.
+  const pregate = await evaluateBcPreGate(link.document_id);
+
+  if (pregate.enabled && !pregate.passed) {
+    // Active mode + below threshold → write declined audit row, skip dispatch.
+    const declinedInsert = buildOrchestratorRunInsert({
+      asset_id: link.asset_id,
+      trigger_type: triggerType,
+      trigger_doc_id: link.document_id,
+      document_set_hash: docSetHash,
+      bc_pregate_score: pregate.score,
+      bc_pregate_inputs: pregate.inputs as unknown as Record<string, unknown>,
+      routine_declined: true,
+      decline_reasons: pregate.reasons,
+      status_override: "declined",
+    });
+    const { data: declinedData, error: declinedErr } = await sb
+      .from("orchestrator_runs")
+      .insert(declinedInsert)
+      .select("id");
+    if (declinedErr) throw declinedErr;
+    return {
+      processed: true,
+      asset_id: link.asset_id,
+      document_id: link.document_id,
+      trigger_type: triggerType,
+      enqueued: false,
+      orchestrator_run_id: declinedData?.[0]?.id ?? null,
+      routine_declined: true,
+      bc_pregate_score: pregate.score,
+      decline_reasons: pregate.reasons,
+    };
+  }
+
+  // Pass docSetHash so the partial unique index
+  // orchestrator_runs_pending_content_dedup_idx (asset_id, document_set_hash)
+  // — restricted to non-null hashes — can race-block duplicate webhook fires.
+  // Without this, the in-memory check above protects cross-run dedup but two
+  // simultaneous reactor invocations could still both insert pending rows.
+  //
+  // Pre-gate score + inputs flow through on every dispatch (shadow mode
+  // included) so operators can mine the distribution before flipping
+  // bc_pregate_enabled='true'.
   const enqueue = await enqueueOrchestratorRun({
     asset_id: link.asset_id,
     trigger_type: triggerType,
     trigger_doc_id: link.document_id,
+    document_set_hash: docSetHash,
+    bc_pregate_score: pregate.score,
+    bc_pregate_inputs: pregate.inputs as unknown as Record<string, unknown>,
+    routine_declined: false,
   });
   return {
     processed: true,
@@ -561,7 +627,108 @@ async function processAssetDocument(link: AssetDocumentRow) {
     enqueued: enqueue.enqueued,
     orchestrator_run_id: enqueue.run_id,
     coalesce_dedupe: enqueue.coalesce_dedupe,
+    bc_pregate_score: pregate.score,
+    bc_pregate_shadow: !pregate.enabled,
   };
+}
+
+// ----------------------------------------------------------------------
+// WI-2 — Binary-catalyst convergence pre-gate.
+// ----------------------------------------------------------------------
+// Reads internal_config flags, resolves the triggering document back to its
+// source FDA signal payload, and returns the score + decision. This must stay
+// document-scoped: entity-wide "latest FDA signal" lookup can bleed one asset's
+// designation flags into another asset for multi-program issuers.
+
+function _recordOrNull(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+async function evaluateBcPreGate(document_id: string): Promise<{
+  enabled: boolean;
+  passed: boolean;
+  score: number;
+  inputs: BcPregateInputs;
+  reasons: string[];
+}> {
+  // 1. Config: shadow vs active + threshold.
+  const { data: cfgRows, error: cfgErr } = await sb
+    .from("internal_config")
+    .select("key, value")
+    .in("key", ["bc_pregate_enabled", "bc_pregate_threshold"]);
+  if (cfgErr) throw cfgErr;
+  const cfg = new Map<string, string | null>(
+    (cfgRows ?? []).map((r: { key: string; value: string | null }) => [r.key, r.value]),
+  );
+  const enabled = configFlagBool(cfg.get("bc_pregate_enabled") ?? null);
+  const threshold = configThreshold(cfg.get("bc_pregate_threshold") ?? null);
+
+  // 2. Resolve the triggering asset_document's document. Bridge-generated
+  // signal documents carry the same source_content_hash as signals, and also
+  // embed raw_payload in documents.extensions for forensic fallback.
+  const { data: docRow, error: docErr } = await sb
+    .from("documents")
+    .select("source_content_hash, extensions")
+    .eq("id", document_id)
+    .maybeSingle();
+  if (docErr) throw docErr;
+  if (!docRow) {
+    // Broken FK or deleted document. Auto-declines in active mode.
+    const r = scoreBcPregate({
+      breakthrough_designation: false,
+      first_time_sponsor: false,
+      class_precedent: 0,
+      enrichment_state: "unavailable",
+    }, threshold);
+    return { enabled, ...r };
+  }
+
+  const doc = docRow as {
+    source_content_hash?: string | null;
+    extensions?: Record<string, unknown> | null;
+  };
+  const sourceHash = typeof doc.source_content_hash === "string" && doc.source_content_hash
+    ? doc.source_content_hash
+    : null;
+
+  let rawPayload: Record<string, unknown> | null = null;
+  if (sourceHash) {
+    const { data: sigRow, error: sigErr } = await sb
+      .from("signals")
+      .select("raw_payload, created_at")
+      .eq("source_content_hash", sourceHash)
+      .in("scoring_profile", ["binary_catalyst", "fda_event"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (sigErr) throw sigErr;
+    rawPayload = _recordOrNull((sigRow as { raw_payload?: unknown } | null)?.raw_payload);
+  }
+
+  if (!rawPayload) {
+    const extensions = _recordOrNull(doc.extensions);
+    rawPayload = _recordOrNull(extensions?.raw_payload);
+  }
+
+  if (!rawPayload) {
+    // Document exists but has no FDA signal payload. Auto-declines with
+    // 'enrichment_pending' in active mode; shadow mode persists the missing
+    // input so operators can see which document classes need enrichment.
+    const r = scoreBcPregate({
+      breakthrough_designation: false,
+      first_time_sponsor: false,
+      class_precedent: 0,
+      enrichment_state: "stub",
+    }, threshold);
+    return { enabled, ...r };
+  }
+
+  const inputs = inputsFromRawPayload(rawPayload);
+  const r = scoreBcPregate(inputs, threshold);
+  return { enabled, ...r };
 }
 
 // Compute md5 over the asset's material primary asset_documents.document_id set,

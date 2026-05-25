@@ -12,10 +12,11 @@ import pytest
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "x")
 
-from orchestrator_runtime.client import CallResult  # noqa: E402
+from orchestrator_runtime.client import CallResult, OrchestratorClient  # noqa: E402
 from orchestrator_runtime.ensemble import (  # noqa: E402
     _run_one_streaming,
     _stage_1_request_params,
+    run_role_diverse_ensemble,
     run_batch_ensemble,
 )
 
@@ -196,17 +197,21 @@ def test_batch_ensemble_omits_rejected_temperature_from_stage_1_requests():
             ),
         ]
 
+    # Stage 9 now goes through OrchestratorClient.call (PR routing batch
+    # ensemble through the wrapper for budget + retry). The batches API
+    # itself has no wrapper, so we still mock that surface on _client.
+    stage_9_call_result = _call_result(_stage_9_json())
     client = SimpleNamespace(
+        call=MagicMock(return_value=stage_9_call_result),
         _client=SimpleNamespace(
             messages=SimpleNamespace(
-                create=MagicMock(return_value=_message(_stage_9_json())),
                 batches=SimpleNamespace(
                     create=MagicMock(side_effect=fake_batch_create),
                     retrieve=MagicMock(),
                     results=MagicMock(side_effect=fake_results),
                 ),
             )
-        )
+        ),
     )
 
     result = run_batch_ensemble(
@@ -225,3 +230,77 @@ def test_batch_ensemble_omits_rejected_temperature_from_stage_1_requests():
     assert result.n == 2
     assert len(captured["requests"]) == 2
     assert all("temperature" not in req["params"] for req in captured["requests"])
+
+
+def test_orchestrator_client_omits_rejected_temperature_at_final_boundary():
+    client = OrchestratorClient(api_key="test-key")
+    message = _message("ok", input_tokens=12, output_tokens=4)
+    client._client.messages.create = MagicMock(return_value=message)
+
+    client.call(
+        system="system",
+        messages=[{"role": "user", "content": "user"}],
+        model="claude-sonnet-4-5-20250929",
+        temperature=0.8,
+    )
+
+    kwargs = client._client.messages.create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-4-5-20250929"
+    assert "temperature" not in kwargs
+
+
+def test_orchestrator_client_keeps_temperature_for_legacy_models():
+    client = OrchestratorClient(api_key="test-key")
+    message = _message("ok", input_tokens=12, output_tokens=4)
+    client._client.messages.create = MagicMock(return_value=message)
+
+    client.call(
+        system="system",
+        messages=[{"role": "user", "content": "user"}],
+        model="claude-3-5-sonnet-20241022",
+        temperature=0.8,
+    )
+
+    kwargs = client._client.messages.create.call_args.kwargs
+    assert kwargs["temperature"] == 0.8
+
+
+def test_role_diverse_ensemble_uses_model_profiles(monkeypatch):
+    import orchestrator_runtime.ensemble as ensemble_mod
+
+    profiles = (
+        ("opus_synthesis", "opus-test", None),
+        ("sonnet_adversary", "sonnet-test", None),
+        ("haiku_extractor", None, "haiku-test"),
+    )
+    monkeypatch.setattr(ensemble_mod, "ROLE_DIVERSE_PROFILES", profiles)
+
+    seen = []
+    client = MagicMock()
+
+    def fake_call(*, system, messages, model, max_tokens, temperature=None):
+        seen.append(model)
+        if len(seen) % 2 == 1:
+            return _call_result("cited synthesis prose")
+        return _call_result(_stage_9_json(conviction=70 + len(seen)))
+
+    client.call.side_effect = fake_call
+
+    result = run_role_diverse_ensemble(
+        client,
+        stage_1_system="stage 1 system",
+        stage_1_user_content="stage 1 user",
+        stage_9_system="stage 9 system",
+        model="default-sonnet",
+        extractor_model="default-extractor",
+    )
+
+    assert result.mode == "role_diverse"
+    assert [r.role for r in result.runs] == [
+        "opus_synthesis", "sonnet_adversary", "haiku_extractor",
+    ]
+    assert seen == [
+        "opus-test", "default-extractor",
+        "sonnet-test", "default-extractor",
+        "default-sonnet", "haiku-test",
+    ]

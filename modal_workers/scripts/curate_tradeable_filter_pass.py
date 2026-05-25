@@ -50,7 +50,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -168,7 +168,7 @@ def pick_close_on_or_before(
         ts_ms = c.get("t")
         if ts_ms is None:
             continue
-        d = datetime.utcfromtimestamp(int(ts_ms) / 1000.0).date()
+        d = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc).date()
         if d <= target:
             candidates.append((d, float(c.get("c") or 0.0)))
     if not candidates:
@@ -276,7 +276,7 @@ def curate_row(
         c for c in fetch_history(
             ticker, window_start=adv_window_start, window_end=ref_d,
         )
-        if datetime.utcfromtimestamp(int(c.get("t") or 0) / 1000.0).date() <= ref_d
+        if datetime.fromtimestamp(int(c.get("t") or 0) / 1000.0, tz=timezone.utc).date() <= ref_d
     ]
     # Trim to the trailing 90 trading days.
     closes_for_adv = closes_for_adv[-ADV_WINDOW_TRADING_DAYS:]
@@ -344,9 +344,15 @@ def run(
     stats.rows_seen = len(rows)
     logger.info("inspecting %d eval_harness rows", len(rows))
 
+    # Resolve fetchers via module globals so monkeypatch-friendly tests can
+    # swap them at runtime (curate_row's default args bind these at
+    # function-definition time, which freezes the reference).
+    _fh = globals()["fetch_history_window"]
+    _fi = globals()["_fetch_yf_info"]
+
     for r in rows:
         try:
-            decision = curate_row(r)
+            decision = curate_row(r, fetch_history=_fh, fetch_info=_fi)
         except Exception as exc:  # noqa: BLE001
             logger.warning("curate failed for %s: %s", r.get("id"), exc)
             stats.rows_error += 1

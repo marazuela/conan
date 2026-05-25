@@ -34,6 +34,22 @@ DEFAULT_MODEL = os.environ.get(
 DEFAULT_EXTRACTOR_MODEL = os.environ.get(
     "ORCHESTRATOR_EXTRACTOR_MODEL", "claude-sonnet-4-5-20250929")
 
+# Anthropic's current Claude 4.5+ / 4.7 models reject explicit temperature
+# with "temperature is deprecated for this model". Keep temperature for older
+# models where it is still accepted, but omit it for the production family so
+# callers cannot accidentally brick live runs by passing a stale diversity knob.
+_MODELS_REJECTING_TEMPERATURE = (
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-opus-4-7",
+)
+
+
+def model_accepts_temperature(model: str) -> bool:
+    normalized = model.lower()
+    return not any(marker in normalized for marker in _MODELS_REJECTING_TEMPERATURE)
+
 
 class BudgetExceededError(RuntimeError):
     """Raised by OrchestratorClient.call() when the per-run cost ceiling is
@@ -141,10 +157,13 @@ class OrchestratorClient:
             "system": system,
             "messages": messages,
         }
-        # Ensemble diversity can pass temperature through this wrapper, but
-        # extended-thinking calls reject non-default temperature.
-        if temperature is not None and not (
-            (thinking_budget_tokens or thinking_effort) and "opus" in model
+        # Ensemble diversity can pass temperature through this wrapper for
+        # legacy models. Current Claude 4.5+ / 4.7 models reject the parameter,
+        # so enforce the provider contract here as the final boundary.
+        if (
+            temperature is not None
+            and model_accepts_temperature(model)
+            and not ((thinking_budget_tokens or thinking_effort) and "opus" in model)
         ):
             kwargs["temperature"] = temperature
         if thinking_budget_tokens and "opus" in model:

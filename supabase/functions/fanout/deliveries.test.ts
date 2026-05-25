@@ -1,4 +1,9 @@
-import { deliveryRowFor } from "./deliveries.ts";
+import {
+  assessmentConvictionValue,
+  assessmentSubjectTag,
+  deliveryRowFor,
+  shouldSendAssessmentImmediateEmail,
+} from "./deliveries.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -95,4 +100,177 @@ Deno.test("channel override flows through to the row", () => {
     "realtime",
   );
   assert(row.channel === "realtime", "explicit channel arg must override default");
+});
+
+Deno.test("assessmentConvictionValue prefers calibrated conviction", () => {
+  const value = assessmentConvictionValue({
+    asset_id: "asset-1",
+    conviction_pct: 92,
+    conviction_pct_calibrated: 81,
+  });
+  assert(value === 81, "calibrated conviction must win when present");
+});
+
+Deno.test("assessment email gate sends first immediate assessment", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    document_set_hash: "hash-1",
+    created_at: "2026-05-23T10:00:00Z",
+  }, null);
+  assert(decision.send === true, "first assessment should send");
+  assert(decision.reason === "first_assessment_for_recipient_asset", "reason should explain first-send path");
+});
+
+Deno.test("assessment email gate suppresses unchanged evidence without material change", () => {
+  const prior = {
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    document_set_hash: "same-hash",
+    created_at: "2026-05-22T10:00:00Z",
+  };
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 84,
+    document_set_hash: "same-hash",
+    created_at: "2026-05-23T10:00:00Z",
+  }, prior, new Date("2026-05-24T10:00:00Z"));
+  assert(decision.send === false, "same evidence and small conviction drift should not re-email");
+  assert(decision.reason === "unchanged_evidence_no_material_change", "reason should identify unchanged evidence");
+});
+
+Deno.test("assessment email gate sends on material conviction change despite same evidence", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 88,
+    document_set_hash: "same-hash",
+  }, {
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    document_set_hash: "same-hash",
+    created_at: "2026-05-23T10:00:00Z",
+  });
+  assert(decision.send === true, "5pp+ conviction move should send");
+  assert(decision.reason === "conviction_changed", "reason should identify conviction change");
+});
+
+Deno.test("assessment email gate sends on thesis direction change despite same evidence", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "short",
+    conviction_pct_calibrated: 82,
+    document_set_hash: "same-hash",
+  }, {
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    document_set_hash: "same-hash",
+    created_at: "2026-05-23T10:00:00Z",
+  });
+  assert(decision.send === true, "direction change should send");
+  assert(decision.reason === "direction_changed", "reason should identify direction change");
+});
+
+Deno.test("assessment email gate suppresses no-hash churn inside cooldown", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    created_at: "2026-05-23T12:00:00Z",
+  }, {
+    asset_id: "asset-1",
+    band: "immediate",
+    thesis_direction: "long",
+    conviction_pct_calibrated: 84,
+    created_at: "2026-05-23T10:00:00Z",
+  }, new Date("2026-05-23T12:00:00Z"));
+  assert(decision.send === false, "missing hashes should still cooldown non-material repeats");
+  assert(decision.reason === "cooldown_no_material_change", "reason should identify cooldown");
+});
+
+// ---------------------------------------------------------------------------
+// assessmentSubjectTag — per-recipient subject prefix based on gate.reason.
+// Lets recipients distinguish [NEW] / [DIRECTION CHANGE] / [Δ+12pp] / [REFRESH]
+// at a glance instead of seeing the same [IMMEDIATE] · LONG · cross_source
+// line every day.
+// ---------------------------------------------------------------------------
+
+const _baseCurrent = {
+  asset_id: "asset-1",
+  band: "immediate",
+  thesis_direction: "long",
+  conviction_pct_calibrated: 72,
+};
+
+Deno.test("assessmentSubjectTag returns NEW on first-time recipient", () => {
+  const tag = assessmentSubjectTag(_baseCurrent, null, "first_assessment_for_recipient_asset");
+  assert(tag === "NEW", `expected NEW, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns DIRECTION CHANGE on direction flip", () => {
+  const tag = assessmentSubjectTag(
+    _baseCurrent,
+    { ..._baseCurrent, thesis_direction: "short" },
+    "direction_changed",
+  );
+  assert(tag === "DIRECTION CHANGE", `expected DIRECTION CHANGE, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns signed Δpp on positive conviction change", () => {
+  const tag = assessmentSubjectTag(
+    { ..._baseCurrent, conviction_pct_calibrated: 84 },
+    { ..._baseCurrent, conviction_pct_calibrated: 72 },
+    "conviction_changed",
+  );
+  assert(tag === "Δ+12pp", `expected Δ+12pp, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns signed Δpp on negative conviction change", () => {
+  const tag = assessmentSubjectTag(
+    { ..._baseCurrent, conviction_pct_calibrated: 60 },
+    { ..._baseCurrent, conviction_pct_calibrated: 72 },
+    "conviction_changed",
+  );
+  assert(tag === "Δ-12pp", `expected Δ-12pp, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns NEW EVIDENCE on document set hash flip", () => {
+  const tag = assessmentSubjectTag(
+    { ..._baseCurrent, document_set_hash: "hash-b" },
+    { ..._baseCurrent, document_set_hash: "hash-a" },
+    "evidence_changed",
+  );
+  assert(tag === "NEW EVIDENCE", `expected NEW EVIDENCE, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns REFRESH after cooldown with no material change", () => {
+  const tag = assessmentSubjectTag(_baseCurrent, _baseCurrent, "cooldown_elapsed_or_unknown_evidence");
+  assert(tag === "REFRESH", `expected REFRESH, got ${tag}`);
+});
+
+Deno.test("assessmentSubjectTag returns null on suppress-reasons (defensive)", () => {
+  // Caller should not invoke the helper when send=false. Returning null
+  // prevents producing a bare "[IMMEDIATE]" without context if they do.
+  assert(assessmentSubjectTag(_baseCurrent, null, "not_immediate") === null, "not_immediate returns null");
+  assert(
+    assessmentSubjectTag(_baseCurrent, _baseCurrent, "unchanged_evidence_no_material_change") === null,
+    "unchanged_evidence_no_material_change returns null",
+  );
+  assert(
+    assessmentSubjectTag(_baseCurrent, _baseCurrent, "cooldown_no_material_change") === null,
+    "cooldown_no_material_change returns null",
+  );
 });

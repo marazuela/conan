@@ -22,6 +22,7 @@ from modal_workers.scripts.nightly_calibration_refit import (
     _direction_aligned_outcome,
     _per_asset_brier_contribution,
     evaluate_gate,
+    fetch_training_pair_snapshot,
     paired_bootstrap_p_value,
     ranking_auc,
 )
@@ -249,3 +250,41 @@ def test_evaluate_gate_input_length_mismatch_raises():
             pred_prod=[0.5, 0.5], pred_new=[0.5, 0.5],
             min_n=2, bootstrap_resamples=10, rng_seed=0,
         )
+
+
+def test_training_pair_snapshot_reports_source_and_skips():
+    class StubSb:
+        def _rest(self, method, path, *, params=None):
+            if path == "post_mortem_queue":
+                return [
+                    {
+                        "assessment_id": "a1",
+                        "asset_id": "asset-1",
+                        "realized_outcome": {"hit": True},
+                        "predicted_direction": "long",
+                    },
+                    {
+                        "assessment_id": "missing",
+                        "asset_id": "asset-2",
+                        "realized_outcome": {"hit": False},
+                        "predicted_direction": "short",
+                    },
+                    {
+                        "assessment_id": "a3",
+                        "asset_id": "asset-3",
+                        "realized_outcome": {},
+                        "predicted_direction": "long",
+                    },
+                ]
+            if path == "convergence_assessments":
+                return [{"id": "a1", "raw_conviction_pct": 70.0}]
+            return []
+
+    snapshot = fetch_training_pair_snapshot(StubSb(), source="post_mortem_queue")
+
+    assert snapshot.source == "post_mortem_queue"
+    assert snapshot.n_rows_seen == 3
+    assert snapshot.n_pairs == 1
+    assert snapshot.n_positive == 1
+    assert snapshot.skipped["missing_assessment"] == 1
+    assert snapshot.skipped["missing_hit"] == 1

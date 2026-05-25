@@ -38,7 +38,12 @@
 // Recipients mechanism is shared across B + C + D (notifications_prefs.email_on_immediate).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { deliveryRowFor } from "./deliveries.ts";
+import {
+  type AssessmentEmailState,
+  assessmentSubjectTag,
+  deliveryRowFor,
+  shouldSendAssessmentImmediateEmail,
+} from "./deliveries.ts";
 import { formatError } from "../_shared/errors.ts";
 
 interface AlertRow {
@@ -78,6 +83,7 @@ interface ConvergenceAssessmentRow {
   market_implied_move: number | null;
   options_iv: number | null;
   superseded_by: string | null;
+  document_set_hash: string | null;
   created_at: string;
 }
 
@@ -900,7 +906,24 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
   const resend_message_ids: string[] = [];
   const sent_to: string[] = [];
   let dedupe_skipped = 0;
+  let asset_dedupe_skipped = 0;
   for (const to of recipients) {
+    const prior = await loadPriorAssessmentEmailState(row.asset_id, to, row.id);
+    const currentState = assessmentEmailStateFromRow(row);
+    const gate = shouldSendAssessmentImmediateEmail(currentState, prior);
+    if (!gate.send) {
+      asset_dedupe_skipped += 1;
+      continue;
+    }
+
+    // Per-recipient subject prefix. The gate.reason already tells us WHY
+    // we're sending this email; surface it in the subject so the recipient
+    // can distinguish [NEW] / [DIRECTION CHANGE] / [Δ+12pp] / [REFRESH]
+    // at a glance instead of seeing the same [IMMEDIATE] · LONG · cross_source
+    // line every day.
+    const tag = assessmentSubjectTag(currentState, prior, gate.reason);
+    const taggedSubject = tag ? `[IMMEDIATE] [${tag}] ${subjectBody(subject)}` : subject;
+
     // Dedupe: insert (assessment_id, channel, target, day) — partial unique
     // index throws 23505 on a same-day duplicate.
     const { data: deliveryRows, error: insErr } = await sb
@@ -930,7 +953,7 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: FROM_ADDRESS, to: [to], subject, html, text }),
+      body: JSON.stringify({ from: FROM_ADDRESS, to: [to], subject: taggedSubject, html, text }),
     });
     const body = await r.json().catch(() => ({}));
     if (r.ok) {
@@ -971,9 +994,82 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
     asset_id: row.asset_id,
     email_recipients: sent_to.length,
     dedupe_skipped,
+    asset_dedupe_skipped,
     realtime_channels,
     resend_message_ids,
     storage_path: storagePath,
+  };
+}
+
+function assessmentEmailStateFromRow(row: ConvergenceAssessmentRow): AssessmentEmailState {
+  return {
+    asset_id: row.asset_id,
+    band: row.band,
+    document_set_hash: row.document_set_hash,
+    thesis_direction: row.thesis_direction,
+    conviction_pct: row.conviction_pct,
+    conviction_pct_calibrated: row.conviction_pct_calibrated,
+    created_at: row.created_at,
+  };
+}
+
+async function loadPriorAssessmentEmailState(
+  assetId: string,
+  target: string,
+  excludeAssessmentId: string,
+): Promise<AssessmentEmailState | null> {
+  // Query same-asset assessments first. Scanning the recipient's latest N
+  // deliveries globally can miss the last email for a quiet asset when the
+  // recipient has received many unrelated asset emails since then.
+  const { data: assessmentRows, error: assessmentErr } = await sb
+    .from("convergence_assessments")
+    .select(
+      "id,asset_id,band,document_set_hash,thesis_direction,conviction_pct,conviction_pct_calibrated,created_at",
+    )
+    .eq("asset_id", assetId)
+    .neq("id", excludeAssessmentId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (assessmentErr) throw assessmentErr;
+
+  const assessmentIds = (assessmentRows ?? [])
+    .map((r: { id: string | null }) => r.id)
+    .filter((id: string | null): id is string => Boolean(id));
+  if (assessmentIds.length === 0) return null;
+
+  const { data: deliveryRows, error: deliveryErr } = await sb
+    .from("alert_deliveries")
+    .select("assessment_id,created_at")
+    .eq("channel", "email")
+    .eq("target", target)
+    .in("status", ["queued", "sent"])
+    .in("assessment_id", assessmentIds)
+    .order("created_at", { ascending: false });
+  if (deliveryErr) throw deliveryErr;
+
+  const deliveredAtByAssessmentId = new Map<string, string>();
+  for (const row of deliveryRows ?? []) {
+    const assessmentId = (row as { assessment_id: string | null }).assessment_id;
+    const deliveredAt = (row as { created_at: string | null }).created_at;
+    if (assessmentId && deliveredAt && !deliveredAtByAssessmentId.has(assessmentId)) {
+      deliveredAtByAssessmentId.set(assessmentId, deliveredAt);
+    }
+  }
+
+  const prior = (assessmentRows ?? []).find((row: { id: string | null }) =>
+    Boolean(row.id && deliveredAtByAssessmentId.has(row.id))
+  );
+  if (!prior) return null;
+
+  const priorRecord = prior as AssessmentEmailState & { id: string };
+  return {
+    asset_id: priorRecord.asset_id,
+    band: priorRecord.band,
+    document_set_hash: priorRecord.document_set_hash,
+    thesis_direction: priorRecord.thesis_direction,
+    conviction_pct: priorRecord.conviction_pct,
+    conviction_pct_calibrated: priorRecord.conviction_pct_calibrated,
+    created_at: deliveredAtByAssessmentId.get(priorRecord.id) ?? priorRecord.created_at,
   };
 }
 
@@ -1010,6 +1106,14 @@ function renderAssessmentSubject(
     ? row.thesis_direction.toUpperCase()
     : "—";
   return `[IMMEDIATE] ${label} · ${direction} ${conviction} · ${row.trigger_type}`;
+}
+
+// Strip the leading "[IMMEDIATE] " prefix so callers can splice in a
+// per-recipient semantic tag and reassemble: "[IMMEDIATE] [NEW] <body>".
+// Defensive: if the prefix isn't there for any reason, return as-is.
+function subjectBody(subject: string): string {
+  const PREFIX = "[IMMEDIATE] ";
+  return subject.startsWith(PREFIX) ? subject.slice(PREFIX.length) : subject;
 }
 
 interface CitedBlock {

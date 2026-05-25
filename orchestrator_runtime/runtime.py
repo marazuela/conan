@@ -44,10 +44,9 @@ import logging
 import os
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from modal_workers.shared.compute import (
     Stage4Anchor,
@@ -66,6 +65,7 @@ from orchestrator_runtime.client import (
 )
 from orchestrator_runtime.ensemble import (
     EnsembleResult,
+    run_role_diverse_ensemble,
     run_batch_ensemble,
     run_streaming_ensemble,
 )
@@ -107,6 +107,7 @@ ENABLE_SUB_AGENTS_DEFAULT = os.environ.get("ORCH_ENABLE_SUB_AGENTS") == "1"
 # once the RAG backfill (Phase 1A) is run against live data.
 ENABLE_STAGE_1_RAG_DEFAULT = os.environ.get("ORCH_ENABLE_STAGE_1_RAG") == "1"
 STAGE_1_RAG_K = int(os.environ.get("ORCH_STAGE_1_RAG_K", "8"))
+STAGE_1_RAG_CORPORA_OVERRIDE = os.environ.get("ORCH_STAGE_1_RAG_CORPORA")
 # Raised 4 → 8 (2026-05-23, audit/sub_agent_schema_drift_2026-05-23.md §S-1):
 # 4 turns proved too tight on VRDN dry-run — Stage 1 used 3 turns dispatching 3
 # of 4 sub-agents and ran out on the 4th turn before producing final JSON. 8
@@ -146,6 +147,41 @@ BAND_THRESHOLDS = [
     (0.0, "discard"),
 ]
 
+DEFAULT_PREDICTION_TARGET = {
+    "target_type": "price_move",
+    "horizon_days": 30,
+    "event_anchor": None,
+    "label_rule": "forward_return_t30_calendar",
+}
+PREDICTION_TARGET_TYPES = {
+    "price_move",
+    "regulatory_outcome",
+    "event_outcome",
+}
+PREDICTION_LABEL_RULES = {
+    "forward_return_t30_calendar",
+    "forward_return",
+    "approval_decision",
+    "adcom_recommendation",
+}
+
+MARKET_SIDE_GATE_ENABLED = os.environ.get("ORCH_ENABLE_MARKET_SIDE_GATE") == "1"
+MARKET_SIDE_GATE_EV_THRESHOLD_BPS = float(
+    os.environ.get("ORCH_MARKET_GATE_EV_THRESHOLD_BPS", "0.0")
+)
+ROLE_DIVERSE_ENSEMBLE_ENABLED = (
+    os.environ.get("ORCH_ENABLE_ROLE_DIVERSE_ENSEMBLE") == "1"
+)
+DEFAULT_POST_MORTEM_WINDOW_DAYS = int(
+    os.environ.get("ORCH_POST_MORTEM_WINDOW_DAYS", "60")
+)
+CATALYST_EVENT_TYPES = (
+    "pdufa",
+    "advisory_committee",
+    "eop2",
+    "readout",
+)
+
 
 @dataclass
 class StageMetric:
@@ -167,6 +203,7 @@ class AssessmentRun:
     asset_id: str
     trigger_type: str
     trigger_doc_id: Optional[str] = None
+    orchestrator_run_id: Optional[str] = None
     document_window_start: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc) - timedelta(days=180))
     document_window_end: datetime = field(
@@ -353,14 +390,27 @@ def stage_1_rag_retrieve(
         )
 
     t0 = time.time()
+    corpora = recommend_stage_1_rag_corpora(ctx)
     try:
         from orchestrator_runtime import rag_handle
-        chunks = rag_handle.hybrid_search(
-            sb, query,
-            corpus="all",
-            k=k,
-            asset_id=asset.get("id") if asset_scoped else None,
-        )
+        if corpora == ["all"]:
+            chunks = rag_handle.hybrid_search(
+                sb, query,
+                corpus="all",
+                k=k,
+                asset_id=asset.get("id") if asset_scoped else None,
+            )
+        else:
+            per_corpus_k = max(2, (k + len(corpora) - 1) // len(corpora))
+            all_hits: List[Any] = []
+            for corpus in corpora:
+                all_hits.extend(rag_handle.hybrid_search(
+                    sb, query,
+                    corpus=corpus,
+                    k=per_corpus_k,
+                    asset_id=asset.get("id") if asset_scoped else None,
+                ))
+            chunks = _merge_rag_hits(all_hits, k=k)
     except Exception as exc:  # noqa: BLE001
         # RAG is best-effort. If the corpus or RPCs aren't ready, log and
         # emit an empty list so Stage 1 falls through to the legacy path.
@@ -377,6 +427,7 @@ def stage_1_rag_retrieve(
         notes={
             "n_chunks": len(chunks), "k": k,
             "asset_scoped": asset_scoped, "query": query[:200],
+            "corpora": corpora,
         },
     )
 
@@ -635,6 +686,12 @@ Schema:
 {
   "thesis_direction": "long" | "short" | "neutral" | "straddle",
   "conviction_pct": <number 0-100>,
+  "prediction_target": {
+    "target_type": "price_move" | "regulatory_outcome" | "event_outcome",
+    "horizon_days": <integer or null>,
+    "event_anchor": "<event id/name or null>",
+    "label_rule": "forward_return_t30_calendar" | "approval_decision" | "adcom_recommendation"
+  },
   "evidence_quality": <number 0.0-1.0>,
   "thesis_summary": "<1-3 sentence summary>",
   "key_facts": [
@@ -652,6 +709,9 @@ Schema:
 Rules:
 - thesis_direction MUST be one of the four values
 - conviction_pct + evidence_quality MUST be numeric (no strings)
+- prediction_target is required. Use price_move + horizon_days=30 + \
+label_rule=forward_return_t30_calendar unless the prose explicitly predicts a \
+regulatory or event outcome.
 - key_facts: 5-15 items, each grounded in a [F:...] cite from the prose
 - uncertainties: 2-5 items
 - cited_prose_blocks: one per section header in the prose; preserve all \
@@ -724,6 +784,394 @@ def compute_document_set_hash(
     return hashlib.md5(payload).hexdigest()
 
 
+def _coerce_prediction_target(value: Any) -> Dict[str, Any]:
+    """Normalize Stage 9's prediction_target object to DB columns."""
+    out = dict(DEFAULT_PREDICTION_TARGET)
+    if isinstance(value, dict):
+        target_type = value.get("target_type")
+        if target_type in PREDICTION_TARGET_TYPES:
+            out["target_type"] = target_type
+
+        label_rule = value.get("label_rule")
+        if label_rule in PREDICTION_LABEL_RULES:
+            out["label_rule"] = label_rule
+
+        event_anchor = value.get("event_anchor")
+        out["event_anchor"] = str(event_anchor) if event_anchor else None
+
+        horizon = value.get("horizon_days")
+        if horizon is None and out["target_type"] != "price_move":
+            out["horizon_days"] = None
+        else:
+            try:
+                out["horizon_days"] = int(horizon)
+            except (TypeError, ValueError):
+                pass
+
+    if out["target_type"] == "price_move" and out.get("horizon_days") is None:
+        out["horizon_days"] = DEFAULT_PREDICTION_TARGET["horizon_days"]
+    return out
+
+
+def _normalize_json_for_hash(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def compute_convergence_signature(
+    *,
+    direction: str,
+    calibrated_conviction_pct: float,
+    cited_prose_blocks: List[Dict[str, Any]],
+    key_facts: List[Dict[str, Any]],
+    fact_ids: List[str],
+    document_ids: List[str],
+) -> str:
+    """Stable signature for duplicate Stage 9 outputs over the same asset."""
+    bucketed_conviction = int(round(float(calibrated_conviction_pct) / 5.0) * 5)
+    payload = {
+        "direction": direction,
+        "bucketed_conviction": max(0, min(100, bucketed_conviction)),
+        "cited_prose_blocks": cited_prose_blocks,
+        "key_facts": key_facts,
+        "fact_ids": sorted(fact_ids),
+        "document_ids": sorted(document_ids),
+    }
+    return hashlib.md5(_normalize_json_for_hash(payload).encode("utf-8")).hexdigest()
+
+
+def _find_existing_convergence_signature(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    convergence_signature: Optional[str],
+) -> Optional[str]:
+    if not convergence_signature:
+        return None
+    try:
+        rows = sb._rest(
+            "GET", "convergence_assessments",
+            params={
+                "select": "id",
+                "asset_id": f"eq.{asset_id}",
+                "convergence_signature": f"eq.{convergence_signature}",
+                "superseded_by": "is.null",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        ) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "convergence_signature precheck unavailable; continuing insert: %s",
+            exc,
+        )
+        return None
+    return rows[0].get("id") if rows else None
+
+
+def recommend_stage_1_rag_corpora(ctx: Dict[str, Any]) -> List[str]:
+    """Choose the minimum useful RAG corpus set for Stage 1."""
+    if STAGE_1_RAG_CORPORA_OVERRIDE:
+        requested = [
+            c.strip() for c in STAGE_1_RAG_CORPORA_OVERRIDE.split(",")
+            if c.strip()
+        ]
+        return requested or ["all"]
+
+    asset = ctx.get("asset") or {}
+    haystack = " ".join(
+        str(asset.get(k) or "")
+        for k in (
+            "reference_class_signature",
+            "program_status",
+            "indication",
+            "indication_normalized",
+            "application_type",
+        )
+    ).lower()
+
+    if any(tok in haystack for tok in ("phase3", "phase 3", "trial", "readout", "endpoint")):
+        return ["literature", "filings"]
+    if any(tok in haystack for tok in ("pdufa", "adcom", "advisory", "crl", "nda", "bla")):
+        return ["filings", "news", "labels_aes"]
+    if any(tok in haystack for tok in ("safety", "cmc", "manufacturing", "warning", "483")):
+        return ["filings", "labels_aes", "news"]
+    return ["all"]
+
+
+def _chunk_identifier(hit: Any) -> Optional[str]:
+    if isinstance(hit, dict):
+        return hit.get("chunk_id") or hit.get("id")
+    return getattr(hit, "chunk_id", None) or getattr(hit, "id", None)
+
+
+def _chunk_score(hit: Any) -> float:
+    if isinstance(hit, dict):
+        value = hit.get("rerank_score", hit.get("score", 0.0))
+    else:
+        value = getattr(hit, "rerank_score", getattr(hit, "score", 0.0))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _merge_rag_hits(hits: List[Any], *, k: int) -> List[Any]:
+    seen: Dict[str, Any] = {}
+    anonymous: List[Any] = []
+    for hit in hits:
+        key = _chunk_identifier(hit)
+        if not key:
+            anonymous.append(hit)
+            continue
+        if key not in seen or _chunk_score(hit) > _chunk_score(seen[key]):
+            seen[key] = hit
+    merged = list(seen.values()) + anonymous
+    return sorted(merged, key=_chunk_score, reverse=True)[:k]
+
+
+def _resolve_market_event_date(
+    sb: SupabaseClient,
+    asset_id: str,
+    fallback: datetime,
+) -> Tuple[date, Optional[str]]:
+    rows = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id,event_date,event_type,event_status",
+            "asset_id": f"eq.{asset_id}",
+            "event_type": "in.(pdufa,advisory_committee,eop2,readout)",
+            "event_status": "in.(pending,resolved)",
+            "order": "event_date.asc.nullslast",
+            "limit": "1",
+        },
+    ) or []
+    if rows and rows[0].get("event_date"):
+        try:
+            event_day = date.fromisoformat(str(rows[0]["event_date"])[:10])
+            marker = f"{rows[0].get('event_type')}:{rows[0].get('id')}"
+            return event_day, marker
+        except ValueError:
+            pass
+    return (fallback + timedelta(days=30)).date(), None
+
+
+def compute_market_side_context(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    asset: Dict[str, Any],
+    calibrated_conviction_pct: float,
+    direction: str,
+    current_band: str,
+    run: AssessmentRun,
+) -> Tuple[Dict[str, Any], str, Optional[str]]:
+    """Fetch options context and optionally downgrade low-EV immediate alerts."""
+    if not MARKET_SIDE_GATE_ENABLED:
+        return {}, current_band, None
+    ticker = asset.get("ticker")
+    if not ticker or direction not in {"long", "short"}:
+        return {}, current_band, None
+    try:
+        from modal_workers.providers.polygon.base import PolygonClient
+        from modal_workers.providers.polygon.options_data import PolygonOptionsData
+        provider = PolygonOptionsData(client=PolygonClient())
+        event_date, marker = _resolve_market_event_date(
+            sb, asset_id, run.document_window_end,
+        )
+        straddle = provider.get_straddle_implied_move(str(ticker), event_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("market-side gate skipped for %s: %s", ticker, exc)
+        return {
+            "market_gate_status": "skipped",
+            "market_gate_reason": str(exc)[:160],
+        }, current_band, None
+
+    if not straddle:
+        return {"market_gate_status": "no_options_context"}, current_band, None
+
+    implied_move = (
+        straddle.get("implied_move_pct")
+        or straddle.get("straddle_implied_move_pct")
+    )
+    try:
+        implied_move_f = float(implied_move)
+    except (TypeError, ValueError):
+        return {"market_gate_status": "bad_options_context"}, current_band, None
+
+    iv_values = [
+        float(v) for v in (straddle.get("call_iv"), straddle.get("put_iv"))
+        if isinstance(v, (int, float))
+    ]
+    options_iv = (sum(iv_values) / len(iv_values)) if iv_values else None
+    if options_iv is not None and options_iv <= 5:
+        options_iv *= 100.0
+
+    directional_edge = max(0.0, calibrated_conviction_pct / 100.0 - 0.5)
+    expected_value_bps = directional_edge * implied_move_f * 100.0
+    context = {
+        "market_gate_status": "computed",
+        "market_event_marker": marker,
+        "market_implied_move": round(implied_move_f, 2),
+        "expected_value_bps": round(expected_value_bps, 2),
+        "options_iv": round(options_iv, 2) if options_iv is not None else None,
+    }
+
+    reason = None
+    band = current_band
+    if (
+        current_band == "immediate"
+        and expected_value_bps < MARKET_SIDE_GATE_EV_THRESHOLD_BPS
+    ):
+        band = "watchlist"
+        reason = (
+            f"low_ev_vs_market(expected_value_bps={expected_value_bps:.1f} "
+            f"< {MARKET_SIDE_GATE_EV_THRESHOLD_BPS:.1f})"
+        )
+        context["market_gate_reason"] = reason
+    return context, band, reason
+
+
+def _resolve_catalyst_window(
+    sb: SupabaseClient,
+    asset_id: str,
+) -> Tuple[datetime, str]:
+    rows = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id,event_date,event_type,event_status",
+            "asset_id": f"eq.{asset_id}",
+            "event_type": f"in.({','.join(CATALYST_EVENT_TYPES)})",
+            "event_status": "in.(pending,resolved)",
+            "order": "event_date.asc.nullslast",
+            "limit": "1",
+        },
+    ) or []
+    if rows and rows[0].get("event_date"):
+        try:
+            event_date = datetime.fromisoformat(
+                str(rows[0]["event_date"])[:10],
+            ).replace(tzinfo=timezone.utc)
+            marker = f"{rows[0].get('event_type')}:{rows[0].get('id')}"
+            return event_date + timedelta(days=2), marker
+        except ValueError:
+            pass
+    return (
+        datetime.now(timezone.utc) + timedelta(days=DEFAULT_POST_MORTEM_WINDOW_DAYS),
+        f"default_{DEFAULT_POST_MORTEM_WINDOW_DAYS}d_fallback",
+    )
+
+
+def _build_stage_10_secondaries(
+    run: AssessmentRun,
+    ctx: Dict[str, Any],
+    parsed: Dict[str, Any],
+    *,
+    hypothesis_result: Optional[HypothesisResult],
+    premortem_result: Optional[PreMortemResult],
+    short_to_full: Dict[str, str],
+    short_to_full_doc: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    stage_metrics = [
+        {
+            "stage_name": m.stage_name,
+            "model": m.model,
+            "input_tokens": m.input_tokens,
+            "output_tokens": m.output_tokens,
+            "thinking_tokens": m.thinking_tokens,
+            "cache_read_tokens": m.cache_read_tokens,
+            "cache_creation_tokens": m.cache_creation_tokens,
+            "cost_usd": round(m.cost_usd, 4),
+            "latency_ms": m.latency_ms,
+            "status": m.status,
+            "notes": m.notes,
+        }
+        for m in run.stage_metrics
+    ]
+
+    hypotheses: List[Dict[str, Any]] = []
+    if hypothesis_result is not None and hypothesis_result.hypotheses:
+        for h in hypothesis_result.hypotheses:
+            hypotheses.append({
+                "hypothesis_id": h.hypothesis_id,
+                "label": h.label,
+                "claim": h.claim,
+                "mechanism": h.mechanism,
+                "direction": h.direction,
+                "supporting_fact_ids": [
+                    short_to_full[s.lower()]
+                    for s in h.supporting_fact_ids
+                    if s.lower() in short_to_full
+                ],
+                "contradicting_fact_ids": [
+                    short_to_full[s.lower()]
+                    for s in h.contradicting_fact_ids
+                    if s.lower() in short_to_full
+                ],
+                "kill_conditions": h.kill_conditions,
+                "prior_estimate_pct": h.prior_estimate_pct,
+                "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
+            })
+
+    premortem_verdicts: List[Dict[str, Any]] = []
+    if premortem_result is not None and premortem_result.verdicts:
+        for v in premortem_result.verdicts:
+            premortem_verdicts.append({
+                "hypothesis_id": v.hypothesis_id,
+                "verdict": v.verdict,
+                "failure_modes": [
+                    {
+                        "description": fm.description,
+                        "severity": fm.severity,
+                        "evidence_fact_ids": fm.evidence_fact_ids,
+                        "speculative": fm.speculative,
+                    }
+                    for fm in v.failure_modes
+                ],
+                "disconfirming_searches": v.disconfirming_searches,
+                "update_triggers": v.update_triggers,
+            })
+
+    direction = parsed.get("thesis_direction") or "neutral"
+    try:
+        predicted_pct = float(parsed.get("conviction_pct") or 50.0)
+    except (TypeError, ValueError):
+        predicted_pct = 50.0
+
+    return {
+        "stage_metrics": stage_metrics,
+        "hypotheses": hypotheses,
+        "premortem_verdicts": premortem_verdicts,
+        "post_mortem_stub": {
+            "asset_id": run.asset_id,
+            "predicted_outcome": _direction_to_outcome(direction),
+            "predicted_conviction_pct": max(0.0, min(100.0, predicted_pct)),
+            "predicted_direction": direction,
+        },
+    }
+
+
+def _unwrap_persist_assessment_response(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, list) and response:
+        return _unwrap_persist_assessment_response(response[0])
+    if isinstance(response, dict):
+        for key in ("persist_assessment_v3", "id"):
+            if response.get(key):
+                return str(response[key])
+    raise RuntimeError(f"persist_assessment_v3 returned unexpected shape: {response!r}")
+
+
+def _supersede_prior_ic_memo_best_effort(*_args: Any, **_kwargs: Any) -> None:
+    """Compatibility hook for tests/older IC memo orchestration paths."""
+    return None
+
+
+def _maybe_trigger_ic_memo_best_effort(*_args: Any, **_kwargs: Any) -> None:
+    """Compatibility hook for tests/older IC memo orchestration paths."""
+    return None
+
+
 def stage_10_persist(
     sb: SupabaseClient,
     asset_id: str,
@@ -794,14 +1242,49 @@ def stage_10_persist(
     active_curve = get_active_calibration_curve(sb)
     if active_curve and active_curve.get("curve_data"):
         calibrated = apply_isotonic_calibration(
-            conviction / 100.0, active_curve["curve_data"]) * 100.0
+            raw_conviction / 100.0, active_curve["curve_data"]) * 100.0
         calibrated = max(0.0, min(100.0, calibrated))
         calibration_curve_version: Optional[str] = active_curve.get("version")
     else:
-        calibrated = conviction
+        calibrated = raw_conviction
         calibration_curve_version = None
+    if ctx.get("conviction_capped_by_premortem"):
+        calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
 
     band = derive_band(calibrated)
+    prediction_target = _coerce_prediction_target(
+        parsed.get("prediction_target")
+    )
+
+    # Dispersion-based abstain. When the ensemble actively disagrees on
+    # direction or convictions diverge wildly, downgrade an immediate band
+    # to watchlist so we don't email a noisy signal. Records the abstain
+    # reason in ensemble_payload so downstream observability can attribute
+    # the downgrade. Only meaningful when N≥2; at N=1 the call is a no-op.
+    from orchestrator_runtime.ensemble import compute_dispersion_abstain
+    band, dispersion_abstain_reason = compute_dispersion_abstain(
+        ensemble_payload, band
+    )
+    if dispersion_abstain_reason is not None and ensemble_payload is not None:
+        ensemble_payload = dict(ensemble_payload)
+        ensemble_payload["dispersion_abstain_reason"] = dispersion_abstain_reason
+        logger.info(
+            "Dispersion abstain: band downgraded to %s — %s",
+            band, dispersion_abstain_reason,
+        )
+
+    market_context, band, market_gate_reason = compute_market_side_context(
+        sb,
+        asset_id=asset_id,
+        asset=ctx.get("asset") or {},
+        calibrated_conviction_pct=calibrated,
+        direction=direction,
+        current_band=band,
+        run=run,
+    )
+    if market_gate_reason:
+        logger.info("Market-side gate: band downgraded to %s — %s",
+                    band, market_gate_reason)
 
     # Stage 4 anchor (populated upstream; safe-degrade to Nones if absent)
     anchor: Optional[Stage4Anchor] = ctx.get("reference_class_anchor")
@@ -871,6 +1354,36 @@ def stage_10_persist(
     elif hypothesis_result is not None:
         pre_mortem_verdict_value = "skipped"
 
+    convergence_signature = compute_convergence_signature(
+        direction=direction,
+        calibrated_conviction_pct=calibrated,
+        cited_prose_blocks=hydrated_blocks,
+        key_facts=hydrated_key_facts,
+        fact_ids=fact_ids,
+        document_ids=document_ids,
+    )
+    duplicate_assessment_id = _find_existing_convergence_signature(
+        sb,
+        asset_id=asset_id,
+        convergence_signature=convergence_signature,
+    )
+    if duplicate_assessment_id:
+        logger.info(
+            "Skipping duplicate convergence_signature for asset=%s existing=%s",
+            asset_id, duplicate_assessment_id,
+        )
+        return duplicate_assessment_id
+
+    evidence_ledger = {
+        "n_facts": len(fact_ids),
+        "n_documents": len(document_ids),
+        "fact_types_covered": sorted(set(f["fact_type"] for f in ctx["facts"])),
+        "conviction_capped_by_premortem": bool(
+            ctx.get("conviction_capped_by_premortem", False)),
+    }
+    if market_context:
+        evidence_ledger["market_side_gate"] = market_context
+
     row = {
         "asset_id": asset_id,
         "orchestrator_version": ORCHESTRATOR_VERSION,
@@ -881,13 +1394,7 @@ def stage_10_persist(
         "document_window_end": run.document_window_end.isoformat(),
         "document_ids": document_ids,
         "fact_ids": fact_ids,
-        "evidence_ledger": {
-            "n_facts": len(fact_ids),
-            "n_documents": len(document_ids),
-            "fact_types_covered": sorted(set(f["fact_type"] for f in ctx["facts"])),
-            "conviction_capped_by_premortem": bool(
-                ctx.get("conviction_capped_by_premortem", False)),
-        },
+        "evidence_ledger": evidence_ledger,
         "reasoning_trace": cited_prose,
         "cited_prose_blocks": hydrated_blocks,
         "key_facts": hydrated_key_facts,
@@ -895,6 +1402,10 @@ def stage_10_persist(
         "raw_conviction_pct": raw_conviction,
         "thesis_direction": direction,
         "thesis_summary": parsed.get("thesis_summary") or "",
+        "target_type": prediction_target["target_type"],
+        "horizon_days": prediction_target["horizon_days"],
+        "event_anchor": prediction_target["event_anchor"],
+        "label_rule": prediction_target["label_rule"],
         "ensemble_n": (ensemble_payload or {}).get("n", 1),
         "ensemble_runs": (ensemble_payload or {}).get("runs"),
         "ensemble_mean": (ensemble_payload or {}).get("raw_mean", conviction),
@@ -928,9 +1439,15 @@ def stage_10_persist(
         "similar_resolved_case_ids": similar_case_ids or None,
         "conviction_pct_calibrated": round(calibrated, 2),
         "calibration_curve_version": calibration_curve_version,
+        "calibration_status": (
+            "applied" if calibration_curve_version else "no_active_curve"
+        ),
         "conviction_pct": round(calibrated, 2),
         "evidence_quality": evidence_quality,
         "band": band,
+        "market_implied_move": market_context.get("market_implied_move"),
+        "expected_value_bps": market_context.get("expected_value_bps"),
+        "options_iv": market_context.get("options_iv"),
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,
         "total_thinking_tokens": total_thinking,
@@ -942,128 +1459,34 @@ def stage_10_persist(
         # document set hash so the reactor can suppress re-enqueues whose evidence
         # set is unchanged from the last completed synthesis.
         "document_set_hash": compute_document_set_hash(sb, asset_id),
+        "convergence_signature": convergence_signature,
     }
 
-    rows = sb._rest(
-        "POST", "convergence_assessments",
-        json_body=row,
-        prefer="return=representation",
+    secondaries = _build_stage_10_secondaries(
+        run,
+        ctx,
+        {**parsed, "conviction_pct": calibrated, "thesis_direction": direction},
+        hypothesis_result=hypothesis_result,
+        premortem_result=premortem_result,
+        short_to_full=short_to_full,
+        short_to_full_doc=short_to_full_doc,
     )
-    if not rows:
-        raise RuntimeError("Failed to insert convergence_assessments row")
-    assessment_id = rows[0]["id"]
+    outcome_window_end, catalyst_marker = _resolve_catalyst_window(sb, asset_id)
+    secondaries["post_mortem_stub"]["predicted_conviction_pct"] = calibrated
+    secondaries["post_mortem_stub"]["outcome_window_end"] = outcome_window_end.isoformat()
+    secondaries["post_mortem_stub"]["catalyst_resolution_marker"] = catalyst_marker
 
-    # Per-stage metrics rows
-    for m in run.stage_metrics:
+    rpc_payload = {
+        "orchestrator_run_id": run.orchestrator_run_id,
+        "assessment": row,
+        **secondaries,
+    }
+    assessment_id = _unwrap_persist_assessment_response(
         sb._rest(
-            "POST", "assessment_stage_metrics",
-            json_body={
-                "assessment_id": assessment_id,
-                "stage_name": m.stage_name,
-                "model": m.model,
-                "input_tokens": m.input_tokens,
-                "output_tokens": m.output_tokens,
-                "thinking_tokens": m.thinking_tokens,
-                "cache_read_tokens": m.cache_read_tokens,
-                "cache_creation_tokens": m.cache_creation_tokens,
-                "cost_usd": round(m.cost_usd, 4),
-                "latency_ms": m.latency_ms,
-                "status": m.status,
-                "notes": m.notes,
-            },
-            prefer="return=minimal",
+            "POST", "rpc/persist_assessment_v3",
+            json_body={"payload": rpc_payload},
+            prefer="return=representation",
         )
-
-    # Stage 2: hypothesis_enumeration rows (one per hypothesis). The model
-    # cites by 8-char short id; resolve to full UUIDs for the uuid[] columns.
-    if hypothesis_result is not None and hypothesis_result.hypotheses:
-        for h in hypothesis_result.hypotheses:
-            supporting_uuids = [
-                short_to_full[s.lower()]
-                for s in h.supporting_fact_ids
-                if s.lower() in short_to_full
-            ]
-            contradicting_uuids = [
-                short_to_full[s.lower()]
-                for s in h.contradicting_fact_ids
-                if s.lower() in short_to_full
-            ]
-            sb._rest(
-                "POST", "hypothesis_enumeration",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": h.hypothesis_id,
-                    "label": h.label,
-                    "claim": h.claim,
-                    "mechanism": h.mechanism,
-                    "direction": h.direction,
-                    "supporting_fact_ids": supporting_uuids,
-                    "contradicting_fact_ids": contradicting_uuids,
-                    "kill_conditions": h.kill_conditions,
-                    "prior_estimate_pct": h.prior_estimate_pct,
-                    "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
-                },
-                prefer="return=minimal",
-            )
-
-    # Stage 3: premortem_assessments rows (one per hypothesis verdict).
-    if premortem_result is not None and premortem_result.verdicts:
-        for v in premortem_result.verdicts:
-            failure_modes_jsonb = [
-                {
-                    "description": fm.description,
-                    "severity": fm.severity,
-                    "evidence_fact_ids": fm.evidence_fact_ids,
-                    "speculative": fm.speculative,
-                }
-                for fm in v.failure_modes
-            ]
-            sb._rest(
-                "POST", "premortem_assessments",
-                json_body={
-                    "assessment_id": assessment_id,
-                    "hypothesis_id": v.hypothesis_id,
-                    "verdict": v.verdict,
-                    "failure_modes": failure_modes_jsonb,
-                    "disconfirming_searches": v.disconfirming_searches,
-                    "update_triggers": v.update_triggers,
-                },
-                prefer="return=minimal",
-            )
-
-    # Post-mortem queue stub — outcome resolves at PDUFA date.
-    # For VRDN MVP, PDUFA is 2026-06-30. We pull from the asset's pending FDA
-    # event row if available; otherwise default to +60d.
-    pdufa_rows = sb._rest(
-        "GET", "fda_regulatory_events",
-        params={
-            "select": "event_date",
-            "asset_id": f"eq.{asset_id}",
-            "event_type": "eq.pdufa",
-            "event_status": "eq.pending",
-            "order": "event_date.asc.nullslast",
-            "limit": "1",
-        },
-    ) or []
-    if pdufa_rows and pdufa_rows[0].get("event_date"):
-        outcome_window_end = (
-            datetime.fromisoformat(pdufa_rows[0]["event_date"]).replace(tzinfo=timezone.utc)
-            + timedelta(days=2)
-        )
-    else:
-        outcome_window_end = datetime.now(timezone.utc) + timedelta(days=60)
-
-    sb._rest(
-        "POST", "post_mortem_queue",
-        json_body={
-            "assessment_id": assessment_id,
-            "asset_id": asset_id,
-            "predicted_outcome": _direction_to_outcome(direction),
-            "predicted_conviction_pct": conviction,
-            "predicted_direction": direction,
-            "outcome_window_end": outcome_window_end.isoformat(),
-        },
-        prefer="return=minimal",
     )
 
     # Stream 3.4: write a distilled asset-scope memory blob so the next
@@ -1505,7 +1928,16 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
 
     if ensemble_n > 1:
         logger.info("=== Stage 1+9 ensemble (%s, n=%d) ===", ensemble_mode, ensemble_n)
-        if ensemble_mode == "batch":
+        if ROLE_DIVERSE_ENSEMBLE_ENABLED:
+            ensemble = run_role_diverse_ensemble(
+                a_client,
+                stage_1_system=stage_1_system_blocks,
+                stage_1_user_content=user_content,
+                stage_9_system=STAGE_9_SYSTEM,
+                model=model,
+                extractor_model=extractor_model,
+            )
+        elif ensemble_mode == "batch":
             ensemble = run_batch_ensemble(
                 a_client,
                 stage_1_system=stage_1_system_blocks,
@@ -1552,6 +1984,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             notes={
                 "ensemble_n": ensemble.n,
                 "ensemble_mode": ensemble.mode,
+                "role_diverse": ROLE_DIVERSE_ENSEMBLE_ENABLED,
                 "direction_distribution": ensemble.direction_distribution,
                 "raw_mean_conviction": ensemble.raw_mean_conviction,
                 "dispersion": ensemble.dispersion,
@@ -1575,7 +2008,8 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
             "runs": [
                 {"run_idx": r.run_idx, "direction": r.direction,
                  "conviction_pct": r.conviction_pct,
-                 "evidence_quality": r.evidence_quality}
+                 "evidence_quality": r.evidence_quality,
+                 "role": getattr(r, "role", None)}
                 for r in ensemble.runs
             ],
         }

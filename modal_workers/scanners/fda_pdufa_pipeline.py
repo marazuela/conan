@@ -55,6 +55,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 
@@ -91,6 +92,19 @@ WINDOW_WATCHLIST = 90   # tracked-only threshold
 
 # Approval cache TTL — openFDA data rarely changes minute-to-minute; 7d is plenty.
 APPROVAL_CACHE_TTL_S = 7 * 24 * 3600
+
+# WI-3: sponsor-history cache for the v2 strength rubric's first-time-sponsor
+# proxy. Same 7d TTL as the approval cache — sponsor NDA counts move on quarter+
+# timescales, not minutes. Keyed on slugified sponsor name.
+SPONSOR_HISTORY_CACHE_TTL_S = 7 * 24 * 3600
+
+# WI-3: feature flag that selects v1 (current heuristic) vs v2 (port of
+# v2_skills screen-pdufa-pipeline-forward). Read once at import time from env;
+# Modal config or pg_cron-side wrapper can flip it. The internal_config
+# 'pdufa_strength_rubric' row is the canonical source of truth for operators
+# but is not queried per-call (reactor-side Supabase reads were rejected for
+# this scanner — see plan WI-3).
+PDUFA_STRENGTH_RUBRIC = os.environ.get("PDUFA_STRENGTH_RUBRIC", "v1").lower()
 
 # Minimum plausible watchlist size — if we read back fewer entries than this the file is
 # likely corrupted (storage hiccup, partial write). We bail out of auto-discover saves to
@@ -1190,6 +1204,172 @@ def _assess_strength(entry: dict) -> int:
     return min(strength, 5)
 
 
+# ---------------------------------------------------------------------------
+# WI-3 — v2 strength rubric (port of v2_skills screen-pdufa-pipeline-forward).
+# ---------------------------------------------------------------------------
+# Weights are explicit rather than the v1 base-plus-bonus pattern, and the
+# scoring inputs are FDA-specific (Breakthrough, Priority Review, class
+# precedent count, first-time-sponsor proxy). Max composite = 14; clipped to
+# 0-10 in signals.strength_estimate to preserve compatibility with downstream
+# rubric_engine consumers.
+
+PDUFA_RUBRIC_V2_WEIGHTS = {
+    "breakthrough_designation": 6,
+    "priority_review": 3,
+    "class_precedent": 2,   # multiplier applied to clipped-class-peer count
+    "first_time_sponsor": 3,
+}
+PDUFA_RUBRIC_V2_MAX_SCORE = 10  # what signals.strength_estimate is clipped to
+PDUFA_RUBRIC_V2_VERSION = "v2.2026-06-03"
+
+
+def _count_class_peer_approvals(enrichment: Dict[str, Any]) -> int:
+    """Deterministic class-precedent proxy: count distinct application_numbers
+    in enrichment['fda_history']. Caps at 5 to avoid mega-class dominance in
+    fully-genericized indications. No network — reads only the data we already
+    fetched for the current drug.
+
+    NOTE: this is a coarse proxy. The v2 export's "class precedent" used a
+    full mechanism-of-action lookup (P2 research-clinical-class-precedent).
+    When the bc_class_precedent_refresher table lands we should swap this
+    helper for a table read — see plan WI-2 follow-up.
+    """
+    history = enrichment.get("fda_history") or []
+    if not isinstance(history, list):
+        return 0
+    seen: set[str] = set()
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        app = item.get("application_number")
+        if isinstance(app, str) and app:
+            seen.add(app)
+    return min(len(seen), 5)
+
+
+def _sponsor_history_cache_key(sponsor_name: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", sponsor_name.lower().strip())[:64]
+    return f"sponsor_history/{safe}.json"
+
+
+def _read_sponsor_history_cache(client: SupabaseClient,
+                                sponsor_name: str) -> Optional[int]:
+    raw = client.read_cache("fda", _sponsor_history_cache_key(sponsor_name))
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+        ts = payload.get("cached_at", 0)
+        if time.time() - ts > SPONSOR_HISTORY_CACHE_TTL_S:
+            return None
+        n = payload.get("n_prior_nda")
+        return int(n) if isinstance(n, int) else None
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return None
+
+
+def _write_sponsor_history_cache(client: SupabaseClient, sponsor_name: str,
+                                 n_prior_nda: int) -> None:
+    try:
+        client.write_cache(
+            "fda", _sponsor_history_cache_key(sponsor_name),
+            json.dumps({
+                "cached_at": time.time(),
+                "n_prior_nda": int(n_prior_nda),
+            }).encode("utf-8"),
+            content_type="application/json",
+        )
+    except SupabaseError:
+        pass  # best-effort
+
+
+def _count_sponsor_prior_p3(client: SupabaseClient,
+                            sponsor_name: Optional[str]) -> Optional[int]:
+    """Count the sponsor's prior NDA/BLA submissions via openFDA. Cached 7d.
+
+    Returns None when the lookup cannot establish a count (empty sponsor name,
+    openFDA error, parse error). The first_time_sponsor bonus only fires on a
+    confirmed zero-hit lookup, not on "unknown".
+    """
+    if not sponsor_name or not sponsor_name.strip():
+        return None
+    cached = _read_sponsor_history_cache(client, sponsor_name)
+    if cached is not None:
+        return cached
+
+    # openFDA /drug/drugsfda.json — count distinct application_numbers for
+    # this sponsor with at least one NDA submission. The exhaustive truth is
+    # behind paging; we cap at limit=100 (one page) which is sufficient
+    # signal: anyone with ≥100 NDAs is clearly not a first-time sponsor.
+    sponsor_clean = sponsor_name.replace('"', "").strip()
+    if not sponsor_clean:
+        return None
+    search = (
+        f'sponsor_name:"{sponsor_clean}" '
+        'AND submissions.submission_type:"NDA"'
+    )
+    url = f"https://api.fda.gov/drug/drugsfda.json?search={quote(search)}&limit=100"
+    n_prior_nda: Optional[int] = None
+    try:
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            results = (resp.json() or {}).get("results") or []
+            distinct: set[str] = set()
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                app = r.get("application_number")
+                if isinstance(app, str) and app:
+                    distinct.add(app)
+            n_prior_nda = len(distinct)
+        elif resp.status_code == 404:
+            n_prior_nda = 0  # openFDA returns 404 for zero hits
+    except requests.RequestException:
+        n_prior_nda = None
+    except (ValueError, KeyError):
+        n_prior_nda = None
+
+    if n_prior_nda is not None:
+        _write_sponsor_history_cache(client, sponsor_name, n_prior_nda)
+    return n_prior_nda
+
+
+def _assess_strength_v2(entry: dict, client: SupabaseClient) -> int:
+    """v2 strength rubric — explicit weights per v2_skills export.
+
+    Components:
+      Breakthrough designation        +6
+      Priority Review                 +3
+      Class Precedent proxy           +2 (when ≥1 class peer approval exists)
+      First-time sponsor proxy        +3 (when sponsor has 0 prior NDAs)
+
+    Max composite = 14; clipped to 0..PDUFA_RUBRIC_V2_MAX_SCORE (10) for
+    signals.strength_estimate compatibility. The full unclipped composite is
+    surfaced via the raw_payload field 'strength_rubric_v2_raw' so the
+    operator dashboard can show the headroom that v1 doesn't have.
+    """
+    enrichment = entry.get("enrichment", {}) or {}
+    designations = enrichment.get("designations") or {}
+
+    raw = 0
+    if designations.get("breakthrough_designation"):
+        raw += PDUFA_RUBRIC_V2_WEIGHTS["breakthrough_designation"]
+    if designations.get("priority_review"):
+        raw += PDUFA_RUBRIC_V2_WEIGHTS["priority_review"]
+
+    if _count_class_peer_approvals(enrichment) >= 1:
+        raw += PDUFA_RUBRIC_V2_WEIGHTS["class_precedent"]
+
+    sponsor_name = (entry.get("sponsor_name")
+                    or entry.get("company_name")
+                    or enrichment.get("sponsor_name"))
+    sponsor_prior_p3 = _count_sponsor_prior_p3(client, sponsor_name)
+    if sponsor_prior_p3 == 0 and sponsor_name:
+        raw += PDUFA_RUBRIC_V2_WEIGHTS["first_time_sponsor"]
+
+    return max(0, min(raw, PDUFA_RUBRIC_V2_MAX_SCORE))
+
+
 def _adcom_support_ratio(vote: Any) -> Optional[float]:
     if isinstance(vote, str):
         parts = vote.split("-")
@@ -1332,13 +1512,21 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
     ticker = entry.get("ticker", "")
     drug = entry.get("drug_name", "")
     subtype = _classify_subtype(entry, days)
-    strength = _assess_strength(entry)
+    # WI-3: rubric dispatch. v1 retains the heuristic-strength ladder (2..5);
+    # v2 emits the new explicit-weights composite (0..10) and the imminent /
+    # date-change +1 booster is preserved so the subtype tiering still matters.
+    if PDUFA_STRENGTH_RUBRIC == "v2":
+        strength = _assess_strength_v2(entry, client)
+        strength_ceiling = PDUFA_RUBRIC_V2_MAX_SCORE
+    else:
+        strength = _assess_strength(entry)
+        strength_ceiling = 5
     if subtype in (
         SIGNAL_TYPE_IMMINENT,
         SIGNAL_TYPE_DATE_ADVANCED,
         SIGNAL_TYPE_DATE_DELAYED,
     ):
-        strength = min(strength + 1, 5)
+        strength = min(strength + 1, strength_ceiling)
 
     try:
         source_date = datetime.strptime(pdufa_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -1392,6 +1580,11 @@ def _build_signal(entry: dict, days: int, scan_date: datetime,
         "breakthrough_designation": bool(designations.get("breakthrough_designation")),
         "accelerated_approval": bool(designations.get("accelerated_approval")),
         "orphan_drug": bool(designations.get("orphan_drug")),
+        # WI-3: rubric version + clipped/raw composite so the operator dashboard
+        # and the reactor's bc_pregate_inputs reader can both know which rubric
+        # scored this row without joining elsewhere.
+        "strength_rubric": (PDUFA_RUBRIC_V2_VERSION if PDUFA_STRENGTH_RUBRIC == "v2"
+                            else "v1.legacy"),
         "notes": entry.get("notes", ""),
         "enrichment": {
             "trial": enrichment.get("trial"),

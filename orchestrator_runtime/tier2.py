@@ -28,8 +28,10 @@ for the `tier` column add. See `bulk_orchestrator.md` for the contract.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -54,6 +56,20 @@ TIER2_STAGE_METRIC_NAME = "tier2_bulk_synthesis"
 TIER2_ESCALATION_CONVICTION_THRESHOLD = 60.0
 TIER2_ESCALATION_UNCERTAINTY_CONVICTION_FLOOR = 45.0
 TIER2_ESCALATION_EVIDENCE_QUALITY_FLOOR = 0.45
+# Stable-high-conviction suppression. The legacy rule escalates Tier-1 every
+# time conviction_pct ≥ THRESHOLD — which means a steady-state high-conviction
+# asset re-escalates daily (Tier-2 cadence for watch_priority=1) and triggers
+# a fresh Tier-1 run + email each time. With this flag on, the high-conviction
+# reason fires only when conviction is NEWLY high (prior was below threshold
+# or had no value) or moved by at least TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA
+# vs prior. direction_change, new_primary_doc, and high-uncertainty triggers
+# are unaffected — they still fire as before. Set to "0" to restore legacy.
+TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION = (
+    os.environ.get("TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", "1") == "1"
+)
+TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA = float(
+    os.environ.get("TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA", "5.0")
+)
 TIER2_PRIMARY_DOC_TYPES: frozenset[str] = frozenset({
     "label",
     "adcomm_briefing",
@@ -71,6 +87,10 @@ TIER2_REQUIRED_FIELDS: frozenset[str] = frozenset({
     "tier",
     "orchestrator_version",
     "thesis_direction",
+    "target_type",
+    "horizon_days",
+    "event_anchor",
+    "label_rule",
     "raw_conviction_pct",
     "conviction_pct",
     "conviction_pct_calibrated",
@@ -209,6 +229,56 @@ def _coalesce_timestamp(value: Any, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value
     return fallback
+
+
+def compute_document_set_hash(sb: SupabaseClient, asset_id: str) -> Optional[str]:
+    """Hash the asset's material primary document set for queue dedup."""
+    rows = sb._rest(
+        "GET", "asset_documents",
+        params={
+            "select": "document_id",
+            "asset_id": f"eq.{asset_id}",
+            "link_type": "eq.primary",
+            "is_material": "is.true",
+        },
+    ) or []
+    doc_ids = sorted(
+        str(row.get("document_id"))
+        for row in rows
+        if row.get("document_id")
+    )
+    if not doc_ids:
+        return None
+    return hashlib.md5(",".join(doc_ids).encode("utf-8")).hexdigest()
+
+
+def check_orchestrator_enqueue_guard(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    trigger_type: str,
+    document_set_hash: Optional[str],
+) -> Dict[str, Any]:
+    """Call public.orchestrator_enqueue_guard RPC and return its {skip, reason}
+    payload. Fail-open on RPC error: a failed guard call must NOT silently
+    suppress a legitimate enqueue. Migration 20260612000050."""
+    try:
+        result = sb._rest(
+            "POST", "rpc/orchestrator_enqueue_guard",
+            json_body={
+                "p_asset_id": asset_id,
+                "p_trigger_type": trigger_type,
+                "p_hash": document_set_hash,
+            },
+        )
+        # PostgREST returns the scalar jsonb directly for a function RPC.
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, list) and result and isinstance(result[0], dict):
+            return result[0]
+        return {"skip": False, "reason": "guard_unexpected_shape"}
+    except Exception as exc:
+        return {"skip": False, "reason": f"guard_rpc_error: {str(exc)[:200]}"}
 
 
 @dataclass
@@ -445,6 +515,24 @@ def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
     ):
         errors.append(f"invalid thesis_direction: {direction!r}")
 
+    target_type = payload.get("target_type")
+    if target_type is not None and target_type not in (
+        "price_move", "regulatory_outcome", "event_outcome",
+    ):
+        errors.append(f"invalid target_type: {target_type!r}")
+
+    horizon = payload.get("horizon_days")
+    if horizon is not None:
+        if not isinstance(horizon, int) or horizon <= 0:
+            errors.append(f"horizon_days must be a positive int or null, got {horizon!r}")
+
+    label_rule = payload.get("label_rule")
+    if label_rule is not None and label_rule not in (
+        "forward_return_t30_calendar", "forward_return",
+        "approval_decision", "adcom_recommendation",
+    ):
+        errors.append(f"invalid label_rule: {label_rule!r}")
+
     for pct_field in (
         "raw_conviction_pct", "conviction_pct", "conviction_pct_calibrated",
     ):
@@ -558,6 +646,10 @@ def persist_tier2_assessment(
         "raw_conviction_pct": payload.get("raw_conviction_pct"),
         "thesis_direction": payload.get("thesis_direction"),
         "thesis_summary": payload.get("thesis_summary"),
+        "target_type": payload.get("target_type"),
+        "horizon_days": payload.get("horizon_days"),
+        "event_anchor": payload.get("event_anchor"),
+        "label_rule": payload.get("label_rule"),
         "conviction_pct_calibrated": payload.get("conviction_pct_calibrated"),
         "conviction_pct": payload.get("conviction_pct"),
         "evidence_quality": payload.get("evidence_quality"),
@@ -565,6 +657,7 @@ def persist_tier2_assessment(
         "calibration_curve_version": payload.get("calibration_curve_version"),
         "cost_usd": round(cost_usd, 4),
         "latency_ms": latency_ms,
+        "document_set_hash": compute_document_set_hash(sb, asset_id),
         # PR-5: Tier-2 is architecturally exempt from the Stage 7 constitutional
         # gate (TIER2_FORBIDDEN_NON_NULL above). gate_status='tier2_skipped'
         # makes the skip explicit so downstream callers can filter on
@@ -664,10 +757,32 @@ def check_tier1_escalation(
         isinstance(conviction, (int, float))
         and conviction >= TIER2_ESCALATION_CONVICTION_THRESHOLD
     ):
-        reasons.append(
-            f"high_conviction (conviction_pct={conviction} ≥ "
-            f"{TIER2_ESCALATION_CONVICTION_THRESHOLD})"
+        # Stable-high-conviction suppression: when this flag is on, the
+        # high_conviction reason only fires if the asset is NEWLY crossing
+        # the threshold (no prior, or prior was below threshold) OR the
+        # conviction moved by at least the material delta vs the prior
+        # Tier-1/Tier-2 emit. Direction-change and new-primary-doc
+        # escalations are unaffected — they still flow through the prior
+        # branches below.
+        prior_conviction = prior.get("conviction_pct") if prior else None
+        is_prior_high = (
+            isinstance(prior_conviction, (int, float))
+            and prior_conviction >= TIER2_ESCALATION_CONVICTION_THRESHOLD
         )
+        delta_material = (
+            isinstance(prior_conviction, (int, float))
+            and abs(conviction - prior_conviction)
+            >= TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA
+        )
+        if (
+            not TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION
+            or not is_prior_high
+            or delta_material
+        ):
+            reasons.append(
+                f"high_conviction (conviction_pct={conviction} ≥ "
+                f"{TIER2_ESCALATION_CONVICTION_THRESHOLD})"
+            )
 
     evidence_quality = current.get("evidence_quality")
     if (
@@ -708,17 +823,31 @@ def enqueue_tier1_escalation(
     *,
     triggering_assessment_id: str,
     reasons: List[str],
-) -> str:
+) -> Optional[str]:
     """Insert an orchestrator_runs row with trigger_type='tier2_escalation'.
 
     The Tier-1 drainer (orchestrator_app.orchestrator_drain_queue, currently
-    filters tier=1) will pick this up. Returns the new run_id.
+    filters tier=1) will pick this up. Returns the new run_id, or None if
+    public.orchestrator_enqueue_guard told us to skip (e.g., a same-hash
+    assessment is already <6h old). Caller treats None as a no-op, not a
+    failure.
     """
     if not reasons:
         raise ValueError(
             "enqueue_tier1_escalation called with no reasons (caller must "
             "consult check_tier1_escalation first)"
         )
+
+    doc_set_hash = compute_document_set_hash(sb, asset_id)
+    guard = check_orchestrator_enqueue_guard(
+        sb,
+        asset_id=asset_id,
+        trigger_type="tier2_escalation",
+        document_set_hash=doc_set_hash,
+    )
+    if guard.get("skip") is True:
+        reasons.append(f"enqueue_guard_skipped: {guard.get('reason')}")
+        return None
 
     rows = sb._rest(
         "POST", "orchestrator_runs",
@@ -728,6 +857,7 @@ def enqueue_tier1_escalation(
             "tier": 1,
             "status": "pending",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
+            "document_set_hash": doc_set_hash,
             "notes": {
                 "triggering_assessment_id": triggering_assessment_id,
                 "escalation_reasons": reasons,
@@ -757,12 +887,30 @@ def enqueue_tier2_bulk(
     source: str = "tier2_bulk_enqueue",
 ) -> Dict[str, Any]:
     """Insert pending tier=2 orchestrator_runs rows for `asset_ids` and
-    return per-asset {run_id, blob}. Per-asset failures isolated."""
+    return per-asset {run_id, blob}. Per-asset failures isolated.
+
+    Each asset is gated by public.orchestrator_enqueue_guard before INSERT;
+    guard-skipped assets land in `skipped` (not `failed`)."""
     from dataclasses import asdict
 
-    out: Dict[str, Any] = {"enqueued": [], "failed": []}
+    out: Dict[str, Any] = {"enqueued": [], "skipped": [], "failed": []}
     for asset_id in asset_ids:
         try:
+            doc_set_hash = compute_document_set_hash(sb, asset_id)
+            guard = check_orchestrator_enqueue_guard(
+                sb,
+                asset_id=asset_id,
+                trigger_type="scheduled",
+                document_set_hash=doc_set_hash,
+            )
+            if guard.get("skip") is True:
+                out["skipped"].append({
+                    "asset_id": asset_id,
+                    "reason": guard.get("reason"),
+                    "guard": guard,
+                })
+                continue
+
             rows = sb._rest(
                 "POST", "orchestrator_runs",
                 json_body={
@@ -770,6 +918,7 @@ def enqueue_tier2_bulk(
                     "trigger_type": "scheduled",
                     "tier": 2,
                     "status": "pending",
+                    "document_set_hash": doc_set_hash,
                     "notes": {"source": source},
                 },
                 prefer="return=representation",
@@ -793,6 +942,7 @@ def enqueue_tier2_bulk(
             })
 
     out["enqueued_count"] = len(out["enqueued"])
+    out["skipped_count"] = len(out["skipped"])
     out["failed_count"] = len(out["failed"])
     return out
 

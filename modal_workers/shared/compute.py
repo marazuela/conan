@@ -64,9 +64,15 @@ class SimilarResolvedCase:
     asset_id: str
     asset_ticker: Optional[str]
     asset_drug_name: Optional[str]
+    asset_indication: Optional[str]
+    asset_program_status: Optional[str]
+    asset_application_type: Optional[str]
     reference_assessment_date: str
     realized_outcome: str
     realized_move_pct: Optional[float]
+    similarity_score: Optional[float] = None
+    feature_distance: Optional[float] = None
+    match_reasons: List[str] = field(default_factory=list)
     notes: Optional[str] = None
 
 
@@ -146,11 +152,11 @@ def similar_resolved_cases(
         "select": (
             "id,asset_id,reference_assessment_date,realized_outcome,"
             "realized_outcome_data,notes,"
-            "fda_assets!inner(reference_class_signature,ticker,drug_name)"
+            "fda_assets!inner(reference_class_signature,ticker,drug_name,"
+            "indication,indication_normalized,program_status,application_type)"
         ),
-        "fda_assets.reference_class_signature": f"eq.{reference_class}",
         "order": "reference_assessment_date.desc",
-        "limit": str(max(k, 1)),
+        "limit": str(max(k * 8, 25)),
     }
     if holdout_only:
         params["is_holdout"] = "eq.true"
@@ -167,17 +173,75 @@ def similar_resolved_cases(
             move_f: Optional[float] = float(move) if move is not None else None
         except (TypeError, ValueError):
             move_f = None
+        score, distance, reasons = _knn_similarity(
+            reference_class=reference_class,
+            asset=asset,
+        )
         out.append(SimilarResolvedCase(
             eval_harness_id=r["id"],
             asset_id=r["asset_id"],
             asset_ticker=asset.get("ticker"),
             asset_drug_name=asset.get("drug_name"),
+            asset_indication=(
+                asset.get("indication_normalized") or asset.get("indication")
+            ),
+            asset_program_status=asset.get("program_status"),
+            asset_application_type=asset.get("application_type"),
             reference_assessment_date=r["reference_assessment_date"],
             realized_outcome=r["realized_outcome"],
             realized_move_pct=move_f,
+            similarity_score=score,
+            feature_distance=distance,
+            match_reasons=reasons,
             notes=r.get("notes"),
         ))
-    return out
+    out.sort(key=lambda c: (c.feature_distance if c.feature_distance is not None else 999.0,
+                            c.reference_assessment_date), reverse=False)
+    return out[:max(k, 1)]
+
+
+def _tokens(value: Optional[str]) -> set[str]:
+    return {
+        t for t in (value or "").lower().replace("_", " ").replace("-", " ").split()
+        if len(t) >= 3
+    }
+
+
+def _knn_similarity(
+    *,
+    reference_class: Optional[str],
+    asset: Dict[str, Any],
+) -> Tuple[float, float, List[str]]:
+    """Small deterministic K-NN distance over iter-4-style asset features."""
+    distance = 0.0
+    reasons: List[str] = []
+    if reference_class and asset.get("reference_class_signature") == reference_class:
+        reasons.append("reference_class")
+    else:
+        distance += 0.45
+
+    ref_tokens = _tokens(reference_class)
+    feature_tokens = _tokens(
+        " ".join(str(asset.get(k) or "") for k in (
+            "indication_normalized", "indication", "program_status", "application_type",
+        ))
+    )
+    if ref_tokens and feature_tokens and ref_tokens & feature_tokens:
+        reasons.append("feature_token_overlap")
+        distance -= min(0.15, 0.03 * len(ref_tokens & feature_tokens))
+
+    if asset.get("application_type"):
+        reasons.append(f"application_type:{asset.get('application_type')}")
+    else:
+        distance += 0.10
+
+    if asset.get("program_status"):
+        reasons.append(f"program_status:{asset.get('program_status')}")
+    else:
+        distance += 0.10
+
+    distance = max(0.0, min(1.0, distance))
+    return round(1.0 - distance, 4), round(distance, 4), reasons
 
 
 def build_stage_4_anchor(
@@ -230,9 +294,11 @@ def format_anchor_for_prompt(anchor: Stage4Anchor) -> Optional[str]:
             drug = c.asset_drug_name or "?"
             move = (f", {c.realized_move_pct:+.1f}%"
                     if c.realized_move_pct is not None else "")
+            sim = (f", similarity={c.similarity_score:.2f}"
+                   if c.similarity_score is not None else "")
             lines.append(
                 f"- {ticker} / {drug} ({c.reference_assessment_date}): "
-                f"{c.realized_outcome}{move}"
+                f"{c.realized_outcome}{move}{sim}"
             )
 
     lines.append("")
