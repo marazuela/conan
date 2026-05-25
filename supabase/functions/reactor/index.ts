@@ -548,10 +548,16 @@ async function processAssetDocument(link: AssetDocumentRow) {
     }
   }
 
+  // Pass docSetHash so the partial unique index
+  // orchestrator_runs_pending_content_dedup_idx (asset_id, document_set_hash)
+  // — restricted to non-null hashes — can race-block duplicate webhook fires.
+  // Without this, the in-memory check above protects cross-run dedup but two
+  // simultaneous reactor invocations could still both insert pending rows.
   const enqueue = await enqueueOrchestratorRun({
     asset_id: link.asset_id,
     trigger_type: triggerType,
     trigger_doc_id: link.document_id,
+    document_set_hash: docSetHash,
   });
   return {
     processed: true,

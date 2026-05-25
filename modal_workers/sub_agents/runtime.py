@@ -241,6 +241,38 @@ class SubAgentRunner:
             f"gather evidence and return strict JSON matching {self.schema_filename}."
         )
 
+    def _build_cached_system(self, skill_text: str) -> List[Dict[str, Any]]:
+        """Wrap the static skill markdown in a single system block with
+        cache_control. With 4-12 turn tool loops, the skill (180-230 lines,
+        ~1k+ tokens) is re-sent every turn. Marking it as an ephemeral cache
+        breakpoint lets Anthropic serve subsequent turns from cache at ~10%
+        of the input-token cost, with a one-time ~25% write premium on turn 0.
+        Opt out via ORCH_SUB_AGENT_DISABLE_PROMPT_CACHE=1 if upstream caching
+        misbehaves on a particular role.
+        """
+        block: Dict[str, Any] = {"type": "text", "text": skill_text}
+        if os.environ.get("ORCH_SUB_AGENT_DISABLE_PROMPT_CACHE") != "1":
+            block["cache_control"] = {"type": "ephemeral"}
+        return [block]
+
+    def _tools_with_cache_control(
+        self, tools: Optional[List[Dict[str, Any]]]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Mark the LAST tool definition with cache_control so the tools
+        prefix (which sits before system in Anthropic's cache key) is
+        cached across turns. Returns a shallow copy with the last entry
+        modified — never mutates the caller's list.
+        """
+        if not tools:
+            return tools
+        if os.environ.get("ORCH_SUB_AGENT_DISABLE_PROMPT_CACHE") == "1":
+            return tools
+        copied = list(tools)
+        last = dict(copied[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        copied[-1] = last
+        return copied
+
     def run(
         self,
         *,
@@ -248,7 +280,8 @@ class SubAgentRunner:
         asset_context: Dict[str, Any],
         budget_token_cap: Optional[int] = None,
     ) -> SubAgentResult:
-        system = self._load_skill()
+        skill_text = self._load_skill()
+        system = self._build_cached_system(skill_text)
         user_text = self.build_user_content(question, asset_context)
         messages: List[Dict[str, Any]] = [
             {"role": "user", "content": [{"type": "text", "text": user_text}]}
@@ -295,7 +328,7 @@ class SubAgentRunner:
                 messages=messages,
                 model=self.model,
                 max_tokens=self.max_output_tokens,
-                tools=tools_for_call,
+                tools=self._tools_with_cache_control(tools_for_call),
             )
             total_in += res.input_tokens
             total_out += res.output_tokens

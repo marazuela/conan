@@ -371,19 +371,22 @@ def check_semantics(
 """
         system_arg = SEMANTIC_SYSTEM_PROMPT
 
-    import time
-    t0 = time.time()
-    resp = a_client._client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
+    # Route through OrchestratorClient.call so we get budget accounting,
+    # transient-error retry, and cache-aware cost accounting. The earlier
+    # raw-SDK call bypassed all three: a Stage 7 spend could push past the
+    # per-run hard kill without triggering BudgetExceededError, and cache
+    # read/create tokens were silently dropped from the cost rollup.
+    res = a_client.call(
         system=system_arg,
         messages=[{"role": "user", "content": user_content}],
+        model=model,
+        max_tokens=max_tokens,
     )
-    latency_ms = int((time.time() - t0) * 1000)
-    text = "".join(b.text for b in resp.content if b.type == "text")
-    in_tokens = resp.usage.input_tokens
-    out_tokens = resp.usage.output_tokens
-    cost = estimate_cost(model, in_tokens, out_tokens)
+    latency_ms = res.latency_ms
+    text = res.text
+    in_tokens = res.input_tokens
+    out_tokens = res.output_tokens
+    cost = res.cost_usd
 
     parsed = parse_json_or_none(text)
     findings: List[ConstitutionalFinding] = []

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import statistics
 import time
 from collections import Counter
@@ -91,6 +92,66 @@ class EnsembleResult:
 
 
 SHRINKAGE_FACTOR_LAMBDA = 0.5
+
+# Dispersion-based abstain. The ensemble's shrinkage formula
+# (final_conviction = mean - 0.5 * stddev) already penalizes disagreement,
+# but doesn't stop a borderline-immediate signal from getting an email
+# when the ensemble actively disagrees on DIRECTION. This gate downgrades
+# the band from 'immediate' to 'watchlist' when either:
+#   (a) ensemble stddev > ENSEMBLE_DISPERSION_ABSTAIN_PCT  — convictions diverge wildly, OR
+#   (b) majority-direction fraction < ENSEMBLE_DIRECTION_ABSTAIN_FRAC — direction
+#       vote is too contested.
+# Env flag DISABLE_ENSEMBLE_DISPERSION_ABSTAIN=1 reverts to legacy (no downgrade).
+ENSEMBLE_DISPERSION_ABSTAIN_PCT = float(
+    os.environ.get("ORCH_ENSEMBLE_DISPERSION_ABSTAIN_PCT", "15.0")
+)
+ENSEMBLE_DIRECTION_ABSTAIN_FRAC = float(
+    os.environ.get("ORCH_ENSEMBLE_DIRECTION_ABSTAIN_FRAC", "0.6")
+)
+
+
+def compute_dispersion_abstain(
+    ensemble_payload: Optional[Dict[str, Any]],
+    band: str,
+) -> tuple[str, Optional[str]]:
+    """Decide whether ensemble disagreement should downgrade an immediate
+    band to watchlist. Returns (final_band, abstain_reason_or_none).
+
+    Only applies when N≥2 (no dispersion exists at N=1) and current band is
+    'immediate' — never promotes a lower band. When the dispersion gate fires
+    we record a structured reason so downstream observability can attribute
+    the band downgrade to ensemble disagreement rather than a low conviction.
+    """
+    if os.environ.get("ORCH_DISABLE_ENSEMBLE_DISPERSION_ABSTAIN") == "1":
+        return band, None
+    if band != "immediate" or not ensemble_payload:
+        return band, None
+    n = ensemble_payload.get("n") or 0
+    if n < 2:
+        return band, None
+
+    dispersion = ensemble_payload.get("dispersion")
+    if isinstance(dispersion, (int, float)) and dispersion > ENSEMBLE_DISPERSION_ABSTAIN_PCT:
+        return "watchlist", (
+            f"ensemble_dispersion_abstain "
+            f"(stddev={dispersion:.1f} > {ENSEMBLE_DISPERSION_ABSTAIN_PCT:.1f}pp; n={n})"
+        )
+
+    direction_dist = ensemble_payload.get("direction_distribution") or {}
+    if isinstance(direction_dist, dict) and direction_dist:
+        max_count = max(direction_dist.values())
+        total = sum(direction_dist.values())
+        if total > 0:
+            majority_frac = max_count / total
+            if majority_frac < ENSEMBLE_DIRECTION_ABSTAIN_FRAC:
+                return "watchlist", (
+                    f"ensemble_direction_abstain "
+                    f"(majority_frac={majority_frac:.2f} < "
+                    f"{ENSEMBLE_DIRECTION_ABSTAIN_FRAC:.2f}; "
+                    f"distribution={direction_dist})"
+                )
+
+    return band, None
 
 # Anthropic's current Claude 4.5+ / 4.7 models reject explicit temperature
 # with "temperature is deprecated for this model". Keep temperature for older
@@ -339,22 +400,34 @@ def run_batch_ensemble(
         s1_thinking = sum(getattr(b, "tokens", 0) for b in msg.content if b.type == "thinking")
         s1_cache_read = getattr(msg.usage, "cache_read_input_tokens", 0) or 0
         s1_cache_create = getattr(msg.usage, "cache_creation_input_tokens", 0) or 0
-        # Batch discount: 50% off list price
-        s1_cost = estimate_cost(model, s1_in, s1_out) * 0.5
+        # Batch discount: 50% off the full cache-aware list price.
+        s1_cost = estimate_cost(
+            model,
+            input_tokens=s1_in,
+            output_tokens=s1_out,
+            cache_creation_tokens=s1_cache_create,
+            cache_read_tokens=s1_cache_read,
+        ) * 0.5
 
         try:
-            t0 = time.time()
-            s9 = a_client._client.messages.create(
-                model=extractor_model,
-                max_tokens=max_tokens_extract,
+            # Route through OrchestratorClient.call so we get budget
+            # accounting, retry on 429/529, and accurate cache cost. The
+            # earlier raw-SDK call here meant batch-ensemble Stage 9 spend
+            # was invisible to the per-run hard-kill ceiling and could push
+            # the run over without triggering BudgetExceededError.
+            s9 = a_client.call(
                 system=stage_9_system,
                 messages=[{"role": "user", "content": f"Cited prose to extract:\n\n{s1_text}"}],
+                model=extractor_model,
+                max_tokens=max_tokens_extract,
             )
-            s9_text = "".join(b.text for b in s9.content if b.type == "text")
-            s9_in = s9.usage.input_tokens
-            s9_out = s9.usage.output_tokens
-            s9_cost = estimate_cost(extractor_model, s9_in, s9_out)
-            s9_latency = int((time.time() - t0) * 1000)
+            s9_text = s9.text
+            s9_in = s9.input_tokens
+            s9_out = s9.output_tokens
+            s9_cache_read = s9.cache_read_tokens
+            s9_cache_create = s9.cache_creation_tokens
+            s9_cost = s9.cost_usd
+            s9_latency = s9.latency_ms
         except anthropic.APIError as exc:
             logger.warning("Batch result %s: Stage 9 failed: %s", cid, exc)
             continue
@@ -391,8 +464,8 @@ def run_batch_ensemble(
             input_tokens=s1_in + s9_in,
             output_tokens=s1_out + s9_out,
             thinking_tokens=s1_thinking,
-            cache_read_tokens=s1_cache_read,
-            cache_creation_tokens=s1_cache_create,
+            cache_read_tokens=s1_cache_read + s9_cache_read,
+            cache_creation_tokens=s1_cache_create + s9_cache_create,
             cost_usd=s1_cost + s9_cost,
             latency_ms=s9_latency,
         ))

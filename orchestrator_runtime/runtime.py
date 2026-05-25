@@ -803,6 +803,23 @@ def stage_10_persist(
 
     band = derive_band(calibrated)
 
+    # Dispersion-based abstain. When the ensemble actively disagrees on
+    # direction or convictions diverge wildly, downgrade an immediate band
+    # to watchlist so we don't email a noisy signal. Records the abstain
+    # reason in ensemble_payload so downstream observability can attribute
+    # the downgrade. Only meaningful when N≥2; at N=1 the call is a no-op.
+    from orchestrator_runtime.ensemble import compute_dispersion_abstain
+    band, dispersion_abstain_reason = compute_dispersion_abstain(
+        ensemble_payload, band
+    )
+    if dispersion_abstain_reason is not None and ensemble_payload is not None:
+        ensemble_payload = dict(ensemble_payload)
+        ensemble_payload["dispersion_abstain_reason"] = dispersion_abstain_reason
+        logger.info(
+            "Dispersion abstain: band downgraded to %s — %s",
+            band, dispersion_abstain_reason,
+        )
+
     # Stage 4 anchor (populated upstream; safe-degrade to Nones if absent)
     anchor: Optional[Stage4Anchor] = ctx.get("reference_class_anchor")
     reference_class_value: Optional[str] = (

@@ -370,7 +370,9 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     from datetime import datetime, timezone
     from modal_workers.shared.supabase_client import SupabaseClient
     from modal_workers.shared.cost_budget import (
-        PER_RUN_HARD_KILL_USD, check_24h_thresholds,
+        PER_RUN_HARD_KILL_USD,
+        check_24h_thresholds,
+        check_orchestrator_hard_halt,
     )
     from orchestrator_runtime.client import (
         BudgetExceededError, DEFAULT_EXTRACTOR_MODEL, DEFAULT_MODEL,
@@ -379,6 +381,25 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
     from orchestrator_runtime.runtime import run_one
 
     sb = SupabaseClient()
+
+    # 24h rolling-spend hard halt. The helper opens an operator_flag on first
+    # breach (see modal_workers/shared/cost_budget.py:194-226), so the breach
+    # surfaces in the dashboard without requiring a separate alert path.
+    # Pending rows stay pending — they'll drain on the next tick once the
+    # rolling 24h cost falls back below the ceiling. This is intentionally
+    # cheaper than waiting for per-run kills to add up: per-run kill cannot
+    # prevent a runaway loop of small-but-frequent runs.
+    halt_state = check_orchestrator_hard_halt(sb)
+    if halt_state.get("halt"):
+        return {
+            "drained": 0,
+            "completed": 0,
+            "failed": 0,
+            "killed_budget": 0,
+            "halt": True,
+            "total_24h_usd": halt_state.get("total_24h_usd"),
+        }
+
     pending = sb._rest(
         "GET", "orchestrator_runs",
         params={

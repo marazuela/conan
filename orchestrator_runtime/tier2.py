@@ -28,8 +28,10 @@ for the `tier` column add. See `bulk_orchestrator.md` for the contract.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -54,6 +56,20 @@ TIER2_STAGE_METRIC_NAME = "tier2_bulk_synthesis"
 TIER2_ESCALATION_CONVICTION_THRESHOLD = 60.0
 TIER2_ESCALATION_UNCERTAINTY_CONVICTION_FLOOR = 45.0
 TIER2_ESCALATION_EVIDENCE_QUALITY_FLOOR = 0.45
+# Stable-high-conviction suppression. The legacy rule escalates Tier-1 every
+# time conviction_pct ≥ THRESHOLD — which means a steady-state high-conviction
+# asset re-escalates daily (Tier-2 cadence for watch_priority=1) and triggers
+# a fresh Tier-1 run + email each time. With this flag on, the high-conviction
+# reason fires only when conviction is NEWLY high (prior was below threshold
+# or had no value) or moved by at least TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA
+# vs prior. direction_change, new_primary_doc, and high-uncertainty triggers
+# are unaffected — they still fire as before. Set to "0" to restore legacy.
+TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION = (
+    os.environ.get("TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION", "1") == "1"
+)
+TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA = float(
+    os.environ.get("TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA", "5.0")
+)
 TIER2_PRIMARY_DOC_TYPES: frozenset[str] = frozenset({
     "label",
     "adcomm_briefing",
@@ -209,6 +225,27 @@ def _coalesce_timestamp(value: Any, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value
     return fallback
+
+
+def compute_document_set_hash(sb: SupabaseClient, asset_id: str) -> Optional[str]:
+    """Hash the asset's material primary document set for queue dedup."""
+    rows = sb._rest(
+        "GET", "asset_documents",
+        params={
+            "select": "document_id",
+            "asset_id": f"eq.{asset_id}",
+            "link_type": "eq.primary",
+            "is_material": "is.true",
+        },
+    ) or []
+    doc_ids = sorted(
+        str(row.get("document_id"))
+        for row in rows
+        if row.get("document_id")
+    )
+    if not doc_ids:
+        return None
+    return hashlib.md5(",".join(doc_ids).encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -565,6 +602,7 @@ def persist_tier2_assessment(
         "calibration_curve_version": payload.get("calibration_curve_version"),
         "cost_usd": round(cost_usd, 4),
         "latency_ms": latency_ms,
+        "document_set_hash": compute_document_set_hash(sb, asset_id),
         # PR-5: Tier-2 is architecturally exempt from the Stage 7 constitutional
         # gate (TIER2_FORBIDDEN_NON_NULL above). gate_status='tier2_skipped'
         # makes the skip explicit so downstream callers can filter on
@@ -664,10 +702,32 @@ def check_tier1_escalation(
         isinstance(conviction, (int, float))
         and conviction >= TIER2_ESCALATION_CONVICTION_THRESHOLD
     ):
-        reasons.append(
-            f"high_conviction (conviction_pct={conviction} ≥ "
-            f"{TIER2_ESCALATION_CONVICTION_THRESHOLD})"
+        # Stable-high-conviction suppression: when this flag is on, the
+        # high_conviction reason only fires if the asset is NEWLY crossing
+        # the threshold (no prior, or prior was below threshold) OR the
+        # conviction moved by at least the material delta vs the prior
+        # Tier-1/Tier-2 emit. Direction-change and new-primary-doc
+        # escalations are unaffected — they still flow through the prior
+        # branches below.
+        prior_conviction = prior.get("conviction_pct") if prior else None
+        is_prior_high = (
+            isinstance(prior_conviction, (int, float))
+            and prior_conviction >= TIER2_ESCALATION_CONVICTION_THRESHOLD
         )
+        delta_material = (
+            isinstance(prior_conviction, (int, float))
+            and abs(conviction - prior_conviction)
+            >= TIER2_ESCALATION_MATERIAL_CONVICTION_DELTA
+        )
+        if (
+            not TIER2_ESCALATION_SUPPRESS_STABLE_HIGH_CONVICTION
+            or not is_prior_high
+            or delta_material
+        ):
+            reasons.append(
+                f"high_conviction (conviction_pct={conviction} ≥ "
+                f"{TIER2_ESCALATION_CONVICTION_THRESHOLD})"
+            )
 
     evidence_quality = current.get("evidence_quality")
     if (
@@ -728,6 +788,7 @@ def enqueue_tier1_escalation(
             "tier": 1,
             "status": "pending",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
+            "document_set_hash": compute_document_set_hash(sb, asset_id),
             "notes": {
                 "triggering_assessment_id": triggering_assessment_id,
                 "escalation_reasons": reasons,
@@ -770,6 +831,7 @@ def enqueue_tier2_bulk(
                     "trigger_type": "scheduled",
                     "tier": 2,
                     "status": "pending",
+                    "document_set_hash": compute_document_set_hash(sb, asset_id),
                     "notes": {"source": source},
                 },
                 prefer="return=representation",

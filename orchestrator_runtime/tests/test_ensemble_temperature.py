@@ -196,17 +196,20 @@ def test_batch_ensemble_omits_rejected_temperature_from_stage_1_requests():
             ),
         ]
 
+    # Stage 9 now goes through OrchestratorClient.call (batch ensemble
+    # routing change), so the mock exposes `call` on the wrapper. The
+    # batches API itself has no wrapper so it stays on _client.
     client = SimpleNamespace(
+        call=MagicMock(return_value=_call_result(_stage_9_json())),
         _client=SimpleNamespace(
             messages=SimpleNamespace(
-                create=MagicMock(return_value=_message(_stage_9_json())),
                 batches=SimpleNamespace(
                     create=MagicMock(side_effect=fake_batch_create),
                     retrieve=MagicMock(),
                     results=MagicMock(side_effect=fake_results),
                 ),
             )
-        )
+        ),
     )
 
     result = run_batch_ensemble(
