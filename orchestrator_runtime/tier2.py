@@ -252,6 +252,35 @@ def compute_document_set_hash(sb: SupabaseClient, asset_id: str) -> Optional[str
     return hashlib.md5(",".join(doc_ids).encode("utf-8")).hexdigest()
 
 
+def check_orchestrator_enqueue_guard(
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    trigger_type: str,
+    document_set_hash: Optional[str],
+) -> Dict[str, Any]:
+    """Call public.orchestrator_enqueue_guard RPC and return its {skip, reason}
+    payload. Fail-open on RPC error: a failed guard call must NOT silently
+    suppress a legitimate enqueue. Migration 20260612000050."""
+    try:
+        result = sb._rest(
+            "POST", "rpc/orchestrator_enqueue_guard",
+            json_body={
+                "p_asset_id": asset_id,
+                "p_trigger_type": trigger_type,
+                "p_hash": document_set_hash,
+            },
+        )
+        # PostgREST returns the scalar jsonb directly for a function RPC.
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, list) and result and isinstance(result[0], dict):
+            return result[0]
+        return {"skip": False, "reason": "guard_unexpected_shape"}
+    except Exception as exc:
+        return {"skip": False, "reason": f"guard_rpc_error: {str(exc)[:200]}"}
+
+
 @dataclass
 class Tier2InputBlob:
     """The JSON payload the bulk_orchestrator skill consumes (one per asset)."""
@@ -794,17 +823,31 @@ def enqueue_tier1_escalation(
     *,
     triggering_assessment_id: str,
     reasons: List[str],
-) -> str:
+) -> Optional[str]:
     """Insert an orchestrator_runs row with trigger_type='tier2_escalation'.
 
     The Tier-1 drainer (orchestrator_app.orchestrator_drain_queue, currently
-    filters tier=1) will pick this up. Returns the new run_id.
+    filters tier=1) will pick this up. Returns the new run_id, or None if
+    public.orchestrator_enqueue_guard told us to skip (e.g., a same-hash
+    assessment is already <6h old). Caller treats None as a no-op, not a
+    failure.
     """
     if not reasons:
         raise ValueError(
             "enqueue_tier1_escalation called with no reasons (caller must "
             "consult check_tier1_escalation first)"
         )
+
+    doc_set_hash = compute_document_set_hash(sb, asset_id)
+    guard = check_orchestrator_enqueue_guard(
+        sb,
+        asset_id=asset_id,
+        trigger_type="tier2_escalation",
+        document_set_hash=doc_set_hash,
+    )
+    if guard.get("skip") is True:
+        reasons.append(f"enqueue_guard_skipped: {guard.get('reason')}")
+        return None
 
     rows = sb._rest(
         "POST", "orchestrator_runs",
@@ -814,7 +857,7 @@ def enqueue_tier1_escalation(
             "tier": 1,
             "status": "pending",
             "scheduled_at": datetime.now(timezone.utc).isoformat(),
-            "document_set_hash": compute_document_set_hash(sb, asset_id),
+            "document_set_hash": doc_set_hash,
             "notes": {
                 "triggering_assessment_id": triggering_assessment_id,
                 "escalation_reasons": reasons,
@@ -844,12 +887,30 @@ def enqueue_tier2_bulk(
     source: str = "tier2_bulk_enqueue",
 ) -> Dict[str, Any]:
     """Insert pending tier=2 orchestrator_runs rows for `asset_ids` and
-    return per-asset {run_id, blob}. Per-asset failures isolated."""
+    return per-asset {run_id, blob}. Per-asset failures isolated.
+
+    Each asset is gated by public.orchestrator_enqueue_guard before INSERT;
+    guard-skipped assets land in `skipped` (not `failed`)."""
     from dataclasses import asdict
 
-    out: Dict[str, Any] = {"enqueued": [], "failed": []}
+    out: Dict[str, Any] = {"enqueued": [], "skipped": [], "failed": []}
     for asset_id in asset_ids:
         try:
+            doc_set_hash = compute_document_set_hash(sb, asset_id)
+            guard = check_orchestrator_enqueue_guard(
+                sb,
+                asset_id=asset_id,
+                trigger_type="scheduled",
+                document_set_hash=doc_set_hash,
+            )
+            if guard.get("skip") is True:
+                out["skipped"].append({
+                    "asset_id": asset_id,
+                    "reason": guard.get("reason"),
+                    "guard": guard,
+                })
+                continue
+
             rows = sb._rest(
                 "POST", "orchestrator_runs",
                 json_body={
@@ -857,7 +918,7 @@ def enqueue_tier2_bulk(
                     "trigger_type": "scheduled",
                     "tier": 2,
                     "status": "pending",
-                    "document_set_hash": compute_document_set_hash(sb, asset_id),
+                    "document_set_hash": doc_set_hash,
                     "notes": {"source": source},
                 },
                 prefer="return=representation",
@@ -881,6 +942,7 @@ def enqueue_tier2_bulk(
             })
 
     out["enqueued_count"] = len(out["enqueued"])
+    out["skipped_count"] = len(out["skipped"])
     out["failed_count"] = len(out["failed"])
     return out
 

@@ -527,33 +527,39 @@ async function processAssetDocument(link: AssetDocumentRow) {
   const triggerType: "cross_source" | "new_doc" =
     (priorLinks?.length ?? 0) > 0 ? "cross_source" : "new_doc";
 
-  // PR-2 content-aware dedup: compute md5 over the asset's current material
-  // primary document_id set and compare against the last non-superseded
-  // convergence_assessments row. If unchanged, skip the enqueue — running
-  // synthesis again can't produce new information.
+  // PR-B content-aware dedup: hand off to public.orchestrator_enqueue_guard
+  // so the dedup policy lives in ONE place (callable from pg_cron, Python,
+  // and Deno). Migration 20260612000050. The guard returns skip=true when:
+  //   - same-hash assessment <6h old and not superseded, OR
+  //   - same-hash pending orchestrator_runs row already queued.
+  // Bypass set (manual / operator_refresh / backtest) is enforced inside
+  // the guard. Reactor only emits new_doc / cross_source, so we always call.
   const docSetHash = await computeDocSetHash(link.asset_id);
-  if (docSetHash !== null && !CONTENT_DEDUP_BYPASS_TRIGGERS.has(triggerType)) {
-    const { data: lastAssessment, error: lastErr } = await sb
-      .from("convergence_assessments")
-      .select("document_set_hash")
-      .eq("asset_id", link.asset_id)
-      .is("superseded_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastErr) throw lastErr;
-    if (lastAssessment?.document_set_hash === docSetHash) {
-      return {
-        processed: true,
-        asset_id: link.asset_id,
-        document_id: link.document_id,
-        trigger_type: triggerType,
-        enqueued: false,
-        orchestrator_run_id: null,
-        coalesce_dedupe: true,
-        dedupe_reason: "doc_set_unchanged",
-      };
-    }
+  const { data: guardData, error: guardErr } = await sb.rpc(
+    "orchestrator_enqueue_guard",
+    {
+      p_asset_id: link.asset_id,
+      p_trigger_type: triggerType,
+      p_hash: docSetHash,
+    },
+  );
+  if (guardErr) throw guardErr;
+  // PostgREST returns the jsonb body directly.
+  const guard = (guardData ?? { skip: false, reason: "guard_no_payload" }) as {
+    skip?: boolean;
+    reason?: string;
+  };
+  if (guard.skip === true) {
+    return {
+      processed: true,
+      asset_id: link.asset_id,
+      document_id: link.document_id,
+      trigger_type: triggerType,
+      enqueued: false,
+      orchestrator_run_id: null,
+      coalesce_dedupe: true,
+      dedupe_reason: guard.reason ?? "enqueue_guard_skip",
+    };
   }
 
   // WI-2: BC convergence pre-gate. Scores the asset against three structural
