@@ -85,6 +85,12 @@ class GateEvaluation:
     ranking_auc_new: Optional[float]
     ranking_auc_delta: Optional[float]
     max_single_asset_contribution_pct: Optional[float]
+    # WI-6: Q2 sample-balance audit verdict for the training cohort. When
+    # internal_config.q2_gate_mode='required', a 'fail' verdict here flips
+    # `passed` to False with gate_reason='q2_failed'. In 'warn' / 'off' modes
+    # the verdict is captured but does NOT block promotion.
+    q2_audit_verdict: Optional[str] = None
+    q2_gate_mode: Optional[str] = None
 
 
 @dataclass
@@ -180,6 +186,27 @@ def run_nightly_refit(
         bootstrap_resamples=bootstrap_resamples,
         rng_seed=rng_seed,
     )
+
+    # WI-6: Q2 sample-balance gate. Reads internal_config.q2_gate_mode; runs
+    # audit_cohort(); when mode='required' and verdict='fail', overrides the
+    # D-103 gate to block curve promotion. mode='warn' (default for 30d) only
+    # captures the verdict for shadow-mode measurement. mode='off' skips
+    # the audit entirely.
+    try:
+        from modal_workers.scripts.audit_sample_balance import evaluate_q2_gate
+        q2_result = evaluate_q2_gate(sb, profile="binary_catalyst")
+        gate.q2_audit_verdict = q2_result.get("verdict")
+        gate.q2_gate_mode = q2_result.get("gate_mode")
+        if q2_result.get("blocks_promotion"):
+            gate.passed = False
+            gate.gate_reason = "q2_failed"
+    except Exception as exc:  # noqa: BLE001
+        # Q2 audit is advisory until shadow window stabilizes — never let
+        # an audit-side error block calibration. Log + continue with the
+        # D-103 verdict as-is.
+        logger.warning("Q2 gate evaluation failed (continuing with D-103 only): %s", exc)
+        gate.q2_audit_verdict = None
+        gate.q2_gate_mode = "error"
 
     # Persist a candidate curve regardless of gate outcome — it lets operators
     # manually promote via fda_calibration_activate even when auto-gate fails.
@@ -558,6 +585,9 @@ def _insert_eval_run(
         "max_single_asset_contribution_pct": gate.max_single_asset_contribution_pct,
         "passed_gate": gate.passed,
         "gate_reason": gate.gate_reason,
+        # WI-6: Q2 sample-balance verdict captured on every refit, even when
+        # mode='warn' (the verdict doesn't block promotion in that case).
+        "q2_audit_verdict": gate.q2_audit_verdict,
         "per_assessment_results": {
             "calibration_curve_version": version,
             "activated": activated,
