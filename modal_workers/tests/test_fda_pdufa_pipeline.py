@@ -652,3 +652,227 @@ def test_build_eop2_signal_uses_smaller_magnitude_than_pdufa(fake_client):
     assert sig is not None
     assert sig.raw_payload["upside_pct"] == 15.0
     assert sig.raw_payload["downside_pct"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# WI-3 — v2 strength rubric tests
+# ---------------------------------------------------------------------------
+# The v2 rubric (port of v2_skills screen-pdufa-pipeline-forward) replaces v1's
+# heuristic base-plus-bonus ladder with explicit weights. Sponsor history is
+# stubbed via _stub_sponsor_prior to avoid hitting openFDA.
+
+from modal_workers.scanners.fda_pdufa_pipeline import (
+    PDUFA_RUBRIC_V2_MAX_SCORE,
+    PDUFA_RUBRIC_V2_WEIGHTS,
+    _assess_strength_v2,
+    _count_class_peer_approvals,
+    _count_sponsor_prior_p3,
+)
+
+
+def _stub_sponsor_prior(monkeypatch, n: int | None) -> None:
+    monkeypatch.setattr(
+        "modal_workers.scanners.fda_pdufa_pipeline._count_sponsor_prior_p3",
+        lambda _client, _name: n,
+    )
+
+
+def test_v2_rubric_all_signals_fire_clips_to_max(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 0)
+    entry = _entry(
+        sponsor_name="Genuine First Time Sponsor LLC",
+        enrichment={
+            "designations": {
+                "breakthrough_designation": True,
+                "priority_review": True,
+            },
+            "fda_history": [
+                {"application_number": "NDA-100001"},
+                {"application_number": "NDA-100002"},
+            ],
+        },
+    )
+    # Raw composite = BT(6) + PR(3) + class(2) + sponsor(3) = 14;
+    # clipped to PDUFA_RUBRIC_V2_MAX_SCORE (10).
+    assert _assess_strength_v2(entry, fake_client) == PDUFA_RUBRIC_V2_MAX_SCORE
+
+
+def test_v2_rubric_breakthrough_only(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 5)  # experienced sponsor → no bonus
+    entry = _entry(
+        sponsor_name="Big Pharma Inc",
+        enrichment={
+            "designations": {"breakthrough_designation": True},
+            "fda_history": [],  # no class peers
+        },
+    )
+    assert (
+        _assess_strength_v2(entry, fake_client)
+        == PDUFA_RUBRIC_V2_WEIGHTS["breakthrough_designation"]
+    )
+
+
+def test_v2_rubric_priority_review_only(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 5)
+    entry = _entry(
+        sponsor_name="Big Pharma Inc",
+        enrichment={
+            "designations": {"priority_review": True},
+            "fda_history": [],
+        },
+    )
+    assert (
+        _assess_strength_v2(entry, fake_client)
+        == PDUFA_RUBRIC_V2_WEIGHTS["priority_review"]
+    )
+
+
+def test_v2_rubric_first_time_sponsor_only(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 0)
+    entry = _entry(
+        sponsor_name="Genuine First Time Sponsor LLC",
+        enrichment={"designations": {}, "fda_history": []},
+    )
+    assert (
+        _assess_strength_v2(entry, fake_client)
+        == PDUFA_RUBRIC_V2_WEIGHTS["first_time_sponsor"]
+    )
+
+
+def test_v2_rubric_class_precedent_only(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 5)
+    entry = _entry(
+        sponsor_name="Big Pharma Inc",
+        enrichment={
+            "designations": {},
+            "fda_history": [{"application_number": "NDA-100001"}],
+        },
+    )
+    assert (
+        _assess_strength_v2(entry, fake_client)
+        == PDUFA_RUBRIC_V2_WEIGHTS["class_precedent"]
+    )
+
+
+def test_v2_rubric_zero_signals_scores_zero(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 5)
+    entry = _entry(
+        sponsor_name="Big Pharma Inc",
+        enrichment={"designations": {}, "fda_history": []},
+    )
+    assert _assess_strength_v2(entry, fake_client) == 0
+
+
+def test_v2_rubric_unknown_sponsor_history_skips_sponsor_bonus(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, None)
+    entry = _entry(
+        sponsor_name="API Failure Sponsor LLC",
+        enrichment={"designations": {}, "fda_history": []},
+    )
+    assert _assess_strength_v2(entry, fake_client) == 0
+
+
+def test_v2_rubric_breakthrough_plus_priority(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 5)
+    entry = _entry(
+        sponsor_name="Big Pharma Inc",
+        enrichment={
+            "designations": {
+                "breakthrough_designation": True,
+                "priority_review": True,
+            },
+            "fda_history": [],
+        },
+    )
+    # 6 + 3 = 9
+    assert _assess_strength_v2(entry, fake_client) == 9
+
+
+def test_v2_rubric_missing_sponsor_name_skips_sponsor_bonus(fake_client, monkeypatch):
+    _stub_sponsor_prior(monkeypatch, 0)
+    entry = _entry(
+        sponsor_name="",
+        company_name="",
+        enrichment={
+            "designations": {"breakthrough_designation": True},
+            "fda_history": [],
+        },
+    )
+    # No sponsor → can't claim first-time-sponsor even if the stub says 0.
+    assert (
+        _assess_strength_v2(entry, fake_client)
+        == PDUFA_RUBRIC_V2_WEIGHTS["breakthrough_designation"]
+    )
+
+
+def test_count_class_peer_approvals_caps_at_five():
+    enrichment = {
+        "fda_history": [{"application_number": f"NDA-{i}"} for i in range(20)]
+    }
+    assert _count_class_peer_approvals(enrichment) == 5
+
+
+def test_count_class_peer_approvals_deduplicates():
+    enrichment = {
+        "fda_history": [
+            {"application_number": "NDA-001"},
+            {"application_number": "NDA-001"},
+            {"application_number": "NDA-002"},
+        ]
+    }
+    assert _count_class_peer_approvals(enrichment) == 2
+
+
+def test_count_sponsor_prior_p3_returns_none_on_openfda_failure(fake_client, monkeypatch):
+    fake_client.read_cache.return_value = None
+
+    def fail_get(*_args, **_kwargs):
+        raise scanner.requests.RequestException("network down")
+
+    monkeypatch.setattr(scanner.requests, "get", fail_get)
+
+    assert _count_sponsor_prior_p3(fake_client, "API Failure Sponsor LLC") is None
+    fake_client.write_cache.assert_not_called()
+
+
+def test_v2_rubric_dispatch_via_env_flag(fake_client, monkeypatch):
+    """When PDUFA_STRENGTH_RUBRIC='v2' is set at import time, _build_signal
+    routes through _assess_strength_v2. This test patches the module-level
+    constant after import (the equivalent for in-process testing)."""
+    monkeypatch.setattr(scanner, "PDUFA_STRENGTH_RUBRIC", "v2")
+    _stub_sponsor_prior(monkeypatch, 0)
+    today = datetime.now(timezone.utc).date()
+    entry = _entry(
+        ticker="AXSM",
+        sponsor_name="Genuine First Time Sponsor LLC",
+        pdufa_date=(today + timedelta(days=45)).isoformat(),
+        enrichment={
+            "designations": {
+                "breakthrough_designation": True,
+                "priority_review": True,
+            },
+            "fda_history": [{"application_number": "NDA-100001"}],
+        },
+    )
+    sig = _build_signal(entry, days=45, scan_date=_scan_date(),
+                       issuer_figi=None, client=fake_client)
+    assert sig is not None
+    # Composite = 14 → clipped to 10. Subtype 'pdufa_watchlist' (>30d) does
+    # NOT get the +1 imminent booster.
+    assert sig.strength_estimate == PDUFA_RUBRIC_V2_MAX_SCORE
+    assert sig.raw_payload["strength_rubric"].startswith("v2.")
+
+
+def test_v1_rubric_default_when_env_unset(fake_client, monkeypatch):
+    """Default rubric is v1 — signal raw_payload carries the legacy marker."""
+    monkeypatch.setattr(scanner, "PDUFA_STRENGTH_RUBRIC", "v1")
+    today = datetime.now(timezone.utc).date()
+    entry = _entry(
+        ticker="AXSM",
+        pdufa_date=(today + timedelta(days=45)).isoformat(),
+        enrichment={"designations": {"priority_review": True}, "fda_history": []},
+    )
+    sig = _build_signal(entry, days=45, scan_date=_scan_date(),
+                       issuer_figi=None, client=fake_client)
+    assert sig is not None
+    assert sig.raw_payload["strength_rubric"] == "v1.legacy"

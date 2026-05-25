@@ -440,6 +440,142 @@ def assess_thesis_v2(thesis: Optional[Dict[str, Any]]) -> Tuple[bool, List[str]]
     return (len(reasons) == 0), reasons
 
 
+# -----------------------------------------------------------------------------
+# §6.7 discipline gate — WI-1, port of v2_skills compose-thesis-with-discipline.
+#
+# The 6 v2 discipline fields catch drafts that survive the syntactic gate yet
+# ship without a real variant-perception statement, structured preconditions,
+# scenario distribution, milestone-bounded horizon, or FDA-specific sizing.
+#
+# `kill_criteria` is DERIVED — when structured_kill_conditions has ≥3 entries
+# the field is considered present without requiring a separate prose field
+# (the existing v2 schema already enforces the structured array).
+#
+# `time_horizon` falls back to a one-line stub built from next_catalyst_date
+# when absent (the catalyst date is already required upstream).
+#
+# Routing is owned by thesis_writer.md §6.7; this function only returns the
+# verdict object. See plan: plan-it-thoroughly-unified-scroll.md (WI-1).
+# -----------------------------------------------------------------------------
+
+DISCIPLINE_FIELDS = [
+    "variant_perception",
+    "preconditions",
+    "kill_criteria",
+    "return_distribution",
+    "time_horizon",
+    "sizing_inputs",
+]
+
+DISCIPLINE_MIN_CHARS = {
+    "variant_perception": 80,
+    "preconditions": 40,
+    "return_distribution": 60,
+    "time_horizon": 60,
+    "sizing_inputs": 40,
+    # kill_criteria has no min_chars — derived from structured_kill_conditions.
+}
+
+_DIGIT_RE = re.compile(r"\d")
+
+
+def assess_discipline_v2(thesis: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the §6.7 discipline verdict for a drafted thesis.
+
+    Output shape (matches thesis_writer.md §6.7 spec):
+      {
+        "verdict": "discipline_pass" | "discipline_decline" | "discipline_retry",
+        "missing_fields": ["preconditions", ...],
+        "present_but_too_short": ["variant_perception", ...],
+        "min_chars_required": {...},
+      }
+
+    Classification per field:
+      - present: non-empty AND length ≥ min_chars (and digit-regex for
+        return_distribution).
+      - too_short: non-empty AND fails min_chars / digit-regex.
+      - missing: absent OR empty.
+
+    Verdict:
+      - any missing  → "discipline_decline"
+      - else any too_short → "discipline_retry"
+      - else → "discipline_pass"
+
+    Pure function — no I/O, no DB. Caller wires the routing per §6.7. The
+    `shadow` and `caller_spec_sha` fields are added by the caller, not here.
+    """
+    missing: List[str] = []
+    too_short: List[str] = []
+
+    if not isinstance(thesis, dict):
+        return {
+            "verdict": "discipline_decline",
+            "missing_fields": list(DISCIPLINE_FIELDS),
+            "present_but_too_short": [],
+            "min_chars_required": dict(DISCIPLINE_MIN_CHARS),
+        }
+
+    # kill_criteria is derived from structured_kill_conditions[]
+    skc = thesis.get("structured_kill_conditions")
+    if not (isinstance(skc, list) and len(skc) >= 3):
+        # The syntactic gate already enforces ≥3 entries; if it slipped through
+        # we still flag here so the discipline verdict is self-contained.
+        missing.append("kill_criteria")
+
+    # time_horizon: synthesize stub from next_catalyst_date if absent.
+    time_horizon = thesis.get("time_horizon")
+    if not (isinstance(time_horizon, str) and time_horizon.strip()):
+        next_cat = thesis.get("next_catalyst_date")
+        if isinstance(next_cat, str) and next_cat.strip():
+            # Treat as present-via-stub; do not flag.
+            pass
+        else:
+            missing.append("time_horizon")
+    else:
+        if _non_ws_len(time_horizon) < DISCIPLINE_MIN_CHARS["time_horizon"]:
+            too_short.append("time_horizon")
+
+    # Prose string fields with min_chars.
+    for field in ("variant_perception", "preconditions", "sizing_inputs"):
+        val = thesis.get(field)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            missing.append(field)
+            continue
+        if not isinstance(val, str):
+            missing.append(field)
+            continue
+        if _non_ws_len(val) < DISCIPLINE_MIN_CHARS[field]:
+            too_short.append(field)
+
+    # return_distribution: prose with min_chars AND must contain a digit.
+    rd = thesis.get("return_distribution")
+    if rd is None or (isinstance(rd, str) and not rd.strip()):
+        missing.append("return_distribution")
+    elif not isinstance(rd, str):
+        missing.append("return_distribution")
+    else:
+        if _non_ws_len(rd) < DISCIPLINE_MIN_CHARS["return_distribution"]:
+            too_short.append("return_distribution")
+        elif not _DIGIT_RE.search(rd):
+            # Has length but no digit — count as too_short so retry budget can
+            # remind the drafter to include the scenario math.
+            too_short.append("return_distribution")
+
+    if missing:
+        verdict = "discipline_decline"
+    elif too_short:
+        verdict = "discipline_retry"
+    else:
+        verdict = "discipline_pass"
+
+    return {
+        "verdict": verdict,
+        "missing_fields": missing,
+        "present_but_too_short": too_short,
+        "min_chars_required": dict(DISCIPLINE_MIN_CHARS),
+    }
+
+
 def render_candidate_markdown_v2(
     signal: Dict[str, Any],
     thesis: Dict[str, Any],

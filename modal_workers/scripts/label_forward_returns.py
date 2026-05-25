@@ -65,8 +65,15 @@ SPY_TICKER = "SPY"
 PRICE_MOVE_LABEL_RULE = "forward_return_t30_calendar"
 
 # HIT thresholds per export methodology_spec.md.
-BINARY_CATALYST_HIT_PCT = 20.0  # absolute return at T+30
+BINARY_CATALYST_HIT_PCT = 20.0  # absolute return at T+30 (long-side approval)
 ACTIVIST_GOVERNANCE_HIT_PCT = 15.0  # SPY-relative return at T+180
+
+# WI-4: extension of binary_catalyst HIT/MISS — CRL/AdCom-neg short-side and
+# T+90 wrong-side MISS. Port of v2_skills label-outcomes-from-prices.
+# Same default values as the v2 export's methodology_spec.md.
+BINARY_CATALYST_HIT_PCT_DOWN = -30.0  # T+30 magnitude that flags CRL/AdCom-neg
+BINARY_CATALYST_T90_WRONG_SIDE_MIN_PCT = 5.0  # ignore tiny wrong-side drift
+BINARY_CATALYST_DEFAULT_DIRECTION = "long"   # legacy callers omit thesis_direction
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +105,11 @@ class ForwardReturnLabel:
     hit_window_days: Optional[int] = None     # which window the HIT/MISS verdict reads from
     hit: Optional[bool] = None                # True/False/None — None = cannot be evaluated
     miss_reason: Optional[str] = None         # populated when hit=False or None
+    # WI-4: thesis direction is consulted by the binary_catalyst HIT/MISS
+    # extension to interpret T+90 wrong-side moves correctly. Optional —
+    # legacy callers that don't pass it inherit BINARY_CATALYST_DEFAULT_DIRECTION
+    # ('long') so existing labels stay byte-identical.
+    thesis_direction: Optional[str] = None    # 'long' | 'short' | None
     label_rule: str = PRICE_MOVE_LABEL_RULE
     label_method: str = "yfinance_v0.1"
     labeled_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -129,6 +141,23 @@ def _window_end(filed: date) -> date:
     return filed + timedelta(days=max(WINDOWS_DAYS) + 14)
 
 
+def _t90_wrong_side(t90_return_pct: float, thesis_direction: str) -> bool:
+    """WI-4 — T+90 wrong-side detector. Returns True when the T+90 return
+    contradicts the thesis_direction by at least BINARY_CATALYST_T90_WRONG_SIDE_MIN_PCT.
+
+    Long thesis: wrong-side means T+90 return < -floor.
+    Short thesis: wrong-side means T+90 return > +floor.
+
+    The noise floor (default 5%) keeps lukewarm drift from triggering a MISS
+    on an asset whose T+30 was already inconclusive.
+    """
+    floor = BINARY_CATALYST_T90_WRONG_SIDE_MIN_PCT
+    if thesis_direction == "short":
+        return t90_return_pct > floor
+    # default 'long' (and any other value): wrong-side is negative
+    return t90_return_pct < -floor
+
+
 def _window_start(filed: date) -> date:
     """Earliest calendar day for the anchor lookup. T - 21 days covers
     most stock-exchange holiday clusters around an event date."""
@@ -147,6 +176,7 @@ def label_event(
     prefetch_closes: Optional[List[Dict[str, Any]]] = None,
     spy_closes: Optional[List[Dict[str, Any]]] = None,
     event_id: Optional[str] = None,
+    thesis_direction: Optional[str] = None,
 ) -> ForwardReturnLabel:
     """Compute forward returns + HIT/MISS for a single event.
 
@@ -166,9 +196,14 @@ def label_event(
     event_id : optional
         Carried through to the output for downstream join with the source
         ledger.
+    thesis_direction : optional
+        'long' or 'short' — WI-4. Consulted only by binary_catalyst HIT/MISS
+        for T+90 wrong-side validation. Defaults to 'long' so legacy callers
+        produce byte-identical labels.
     """
     out = ForwardReturnLabel(
         event_id=event_id, ticker=ticker, filed_at=filed_at, profile=profile,
+        thesis_direction=thesis_direction or BINARY_CATALYST_DEFAULT_DIRECTION,
     )
 
     try:
@@ -261,13 +296,48 @@ def label_event(
     if profile == "binary_catalyst":
         out.hit_window_days = 30
         w30 = next((w for w in out.windows if w.days == 30 and w.status == "ok"), None)
-        if w30 is None or w30.return_pct is None:
+        w90 = next((w for w in out.windows if w.days == 90 and w.status == "ok"), None)
+        # WI-4: corporate-action mid-window → UNRESOLVABLE. Any window ≤T+90
+        # that flipped to 'delisted' or 'invalidated' before T+30 means the
+        # event resolved off-market and the post-event price isn't comparable
+        # to a clean approval/CRL outcome.
+        pre_t30_corp_action = any(
+            w.status in ("delisted", "invalidated")
+            for w in out.windows
+            if w.days <= 30 and w.days > 0
+        )
+        if pre_t30_corp_action and (w30 is None or w30.return_pct is None):
+            out.hit = None
+            out.miss_reason = "corporate_action_pre_t30"
+        elif w30 is None or w30.return_pct is None:
             out.hit = None
             out.miss_reason = "t30_invalidated"
+        elif w30.return_pct >= BINARY_CATALYST_HIT_PCT:
+            # Long-side HIT (approval-shape move).
+            out.hit = True
+        elif w30.return_pct <= BINARY_CATALYST_HIT_PCT_DOWN:
+            # WI-4 short-side HIT — CRL / AdCom-neg shape. Symmetric to
+            # the long approval move; the magnitude is asymmetric (-30 vs
+            # +20) because CRL drops cluster larger than approval pops.
+            out.hit = True
+            out.miss_reason = None
+        elif w90 is not None and w90.return_pct is not None and _t90_wrong_side(
+            w90.return_pct,
+            out.thesis_direction or BINARY_CATALYST_DEFAULT_DIRECTION,
+        ):
+            # WI-4 T+90 wrong-side MISS — the position drifted against the
+            # thesis direction beyond a noise floor. We use this for assets
+            # where T+30 was inconclusive (between -30 and +20) but T+90
+            # confirms the thesis was wrong.
+            out.hit = False
+            out.miss_reason = f"t90_wrong_side_return_pct={w90.return_pct:+.2f}"
         else:
-            out.hit = w30.return_pct >= BINARY_CATALYST_HIT_PCT
-            if not out.hit:
-                out.miss_reason = f"t30_return_pct={w30.return_pct:+.2f}_below_+{BINARY_CATALYST_HIT_PCT:.0f}"
+            out.hit = False
+            out.miss_reason = (
+                f"t30_return_pct={w30.return_pct:+.2f}_below_"
+                f"+{BINARY_CATALYST_HIT_PCT:.0f}_and_above_"
+                f"{BINARY_CATALYST_HIT_PCT_DOWN:+.0f}"
+            )
 
     elif profile == "activist_governance":
         out.hit_window_days = 180
@@ -317,6 +387,7 @@ def _serializable_label(label: ForwardReturnLabel) -> Dict[str, Any]:
         "hit_window_days": label.hit_window_days,
         "hit": label.hit,
         "miss_reason": label.miss_reason,
+        "thesis_direction": label.thesis_direction,
         "label_rule": label.label_rule,
         "label_method": label.label_method,
         "labeled_at": label.labeled_at,
@@ -337,6 +408,10 @@ def label_ledger(
         ticker = ev.get("ticker") or ev.get("ticker_local")
         filed_at = ev.get("filed_at") or ev.get("filing_date")
         ev_id = ev.get("event_id") or ev.get("id")
+        thesis_direction = ev.get("thesis_direction")
+        thesis_direction_str = (
+            str(thesis_direction).strip() if thesis_direction is not None else None
+        )
         if not ticker or not filed_at:
             out.append({
                 "event_id": ev_id, "ticker": ticker, "filed_at": filed_at,
@@ -352,7 +427,13 @@ def label_ledger(
                 "miss_reason": f"unresolved_ticker_sentinel:{ticker_str}",
             })
             continue
-        label = label_event(ticker_str, str(filed_at), profile, event_id=ev_id)
+        label = label_event(
+            ticker_str,
+            str(filed_at),
+            profile,
+            event_id=ev_id,
+            thesis_direction=thesis_direction_str or None,
+        )
         out.append(_serializable_label(label))
     return out
 

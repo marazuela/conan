@@ -1,0 +1,140 @@
+// WI-2 — Binary-catalyst convergence pre-gate scorer.
+//
+// Ported from v2_skills/detect-binary-catalyst-convergence. The gate sits in
+// processAssetDocument() between the content-dedup check and the
+// enqueueOrchestratorRun() call so we don't burn an orchestrator slot on an
+// asset that lacks the structural quality signals v2 uses to dispatch.
+//
+// V1 scoring (max composite = 10, threshold from internal_config):
+//   Breakthrough designation        +6
+//   First-time sponsor (no prior P3 NDA / BLA)  +4
+//   Class precedent (stubbed to 0; refresher table is follow-up PR)
+//
+// When the bc_class_precedent_refresher table lands, max climbs to 15 and the
+// internal_config.bc_pregate_threshold should be bumped from 6 to 9.
+//
+// Pure-data helpers in this file have no Deno imports — keep it that way so
+// they can be unit-tested via Deno's test runner without env wiring.
+
+export interface BcPregateInputs {
+  breakthrough_designation: boolean;
+  first_time_sponsor: boolean;
+  class_precedent: number; // 0 in v1 (stubbed); refresher table fills this later
+  enrichment_state: "ready" | "stub" | "unavailable";
+}
+
+export interface BcPregateScore {
+  score: number;
+  inputs: BcPregateInputs;
+  reasons: string[];   // populated on decline (or shadow-decline)
+  passed: boolean;     // score >= threshold AND enrichment_state='ready'
+}
+
+// V1 weights — keep in lockstep with v2_skills/detect-binary-catalyst-convergence.
+export const BC_PREGATE_WEIGHTS = {
+  breakthrough_designation: 6,
+  first_time_sponsor: 4,
+  class_precedent_per_unit: 5, // multiplier for the (currently-stubbed) class precedent input
+} as const;
+
+export const BC_PREGATE_MAX_SCORE_V1 = 10; // BT+6 + sponsor+4; class_precedent stubbed to 0
+export const BC_PREGATE_DEFAULT_THRESHOLD = 6;
+
+/**
+ * Convert an FDA-family signal raw_payload into pre-gate inputs. Kept pure so
+ * the reactor can unit-test payload interpretation separately from Supabase I/O.
+ */
+export function inputsFromRawPayload(rawPayload: Record<string, unknown>): BcPregateInputs {
+  const classPrecedent = rawPayload["class_precedent"];
+  return {
+    breakthrough_designation: rawPayload["breakthrough_designation"] === true,
+    first_time_sponsor: rawPayload["first_time_sponsor"] === true,
+    class_precedent: typeof classPrecedent === "number" && Number.isFinite(classPrecedent)
+      ? classPrecedent
+      : 0,
+    enrichment_state: "ready",
+  };
+}
+
+/**
+ * Pure scoring function. Input shape mirrors what evaluateBcPreGate() collects
+ * from fda_pdufa_pipeline + fda_assets at gate time. No I/O.
+ */
+export function scoreBcPregate(
+  inputs: BcPregateInputs,
+  threshold: number = BC_PREGATE_DEFAULT_THRESHOLD,
+): BcPregateScore {
+  const reasons: string[] = [];
+
+  // Enrichment-pending stub assets auto-decline. The asset will be re-evaluated
+  // when enrichment completes (new material-doc INSERT triggers re-dispatch);
+  // scoring as zero would permanently decline stubs that genuinely deserve
+  // dispatch once their designation flags / sponsor history hydrate.
+  if (inputs.enrichment_state === "stub") {
+    return {
+      score: 0,
+      inputs,
+      reasons: ["enrichment_pending"],
+      passed: false,
+    };
+  }
+  if (inputs.enrichment_state === "unavailable") {
+    return {
+      score: 0,
+      inputs,
+      reasons: ["enrichment_unavailable"],
+      passed: false,
+    };
+  }
+
+  let score = 0;
+  if (inputs.breakthrough_designation) {
+    score += BC_PREGATE_WEIGHTS.breakthrough_designation;
+  } else {
+    reasons.push("no_breakthrough_designation");
+  }
+  if (inputs.first_time_sponsor) {
+    score += BC_PREGATE_WEIGHTS.first_time_sponsor;
+  } else {
+    reasons.push("sponsor_has_prior_p3");
+  }
+  // class_precedent is a numeric input in [0..1] (or null/0 in v1 stub). When
+  // the refresher table lands and class_precedent > 0, weight by the per-unit
+  // multiplier. v1 stub always emits 0 so this term is 0.
+  if (inputs.class_precedent > 0) {
+    score += inputs.class_precedent * BC_PREGATE_WEIGHTS.class_precedent_per_unit;
+  } else {
+    reasons.push("class_precedent_unknown");
+  }
+
+  const passed = score >= threshold;
+  return {
+    score,
+    inputs,
+    reasons: passed ? [] : reasons,
+    passed,
+  };
+}
+
+/**
+ * Helper: parses a string config value into a boolean. Treats 'true' / '1' /
+ * 'yes' (case-insensitive) as true; everything else as false. Matches the
+ * convention used by internal_config flag readers elsewhere in the project.
+ */
+export function configFlagBool(v: string | null | undefined): boolean {
+  if (v === null || v === undefined) return false;
+  return /^(true|1|yes)$/i.test(v.trim());
+}
+
+/**
+ * Helper: parses a string config value into a positive integer threshold,
+ * falling back to BC_PREGATE_DEFAULT_THRESHOLD on parse failure.
+ */
+export function configThreshold(v: string | null | undefined): number {
+  if (v === null || v === undefined) return BC_PREGATE_DEFAULT_THRESHOLD;
+  const trimmed = v.trim();
+  if (trimmed === "") return BC_PREGATE_DEFAULT_THRESHOLD;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n < 0) return BC_PREGATE_DEFAULT_THRESHOLD;
+  return n;
+}
