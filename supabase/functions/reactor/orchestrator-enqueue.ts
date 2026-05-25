@@ -32,18 +32,14 @@ export function buildOrchestratorRunInsert(args: EnqueueArgs): OrchestratorRunIn
 }
 
 // Bypass set: enqueues with these trigger_types skip the content-dedup check.
-// Operator-initiated (manual / operator_refresh) and system-initiated outside
-// the doc bus (tier2_escalation, catalyst_proximity, aging_recheck, scheduled,
-// backtest) intentionally proceed even when document_set_hash is unchanged.
+// Manual/operator initiated runs and replay backtests intentionally proceed
+// even when document_set_hash is unchanged. Routine system refresh paths are
+// content-deduped so unchanged evidence does not burn another assessment.
 //
 // Mirrored in the partial unique index orchestrator_runs_pending_content_dedup_idx
 // (see migration 20260527000010_v3_content_dedup_document_set_hash.sql).
 export const CONTENT_DEDUP_BYPASS_TRIGGERS: ReadonlySet<string> = new Set([
   "manual",
   "operator_refresh",
-  "tier2_escalation",
-  "catalyst_proximity",
-  "aging_recheck",
-  "scheduled",
   "backtest",
 ]);

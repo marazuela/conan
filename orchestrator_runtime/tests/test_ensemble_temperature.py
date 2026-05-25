@@ -12,7 +12,7 @@ import pytest
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "x")
 
-from orchestrator_runtime.client import CallResult  # noqa: E402
+from orchestrator_runtime.client import CallResult, OrchestratorClient  # noqa: E402
 from orchestrator_runtime.ensemble import (  # noqa: E402
     _run_one_streaming,
     _stage_1_request_params,
@@ -196,11 +196,12 @@ def test_batch_ensemble_omits_rejected_temperature_from_stage_1_requests():
             ),
         ]
 
-    # Stage 9 now goes through OrchestratorClient.call (batch ensemble
-    # routing change), so the mock exposes `call` on the wrapper. The
-    # batches API itself has no wrapper so it stays on _client.
+    # Stage 9 now goes through OrchestratorClient.call (PR routing batch
+    # ensemble through the wrapper for budget + retry). The batches API
+    # itself has no wrapper, so we still mock that surface on _client.
+    stage_9_call_result = _call_result(_stage_9_json())
     client = SimpleNamespace(
-        call=MagicMock(return_value=_call_result(_stage_9_json())),
+        call=MagicMock(return_value=stage_9_call_result),
         _client=SimpleNamespace(
             messages=SimpleNamespace(
                 batches=SimpleNamespace(
@@ -228,3 +229,36 @@ def test_batch_ensemble_omits_rejected_temperature_from_stage_1_requests():
     assert result.n == 2
     assert len(captured["requests"]) == 2
     assert all("temperature" not in req["params"] for req in captured["requests"])
+
+
+def test_orchestrator_client_omits_rejected_temperature_at_final_boundary():
+    client = OrchestratorClient(api_key="test-key")
+    message = _message("ok", input_tokens=12, output_tokens=4)
+    client._client.messages.create = MagicMock(return_value=message)
+
+    client.call(
+        system="system",
+        messages=[{"role": "user", "content": "user"}],
+        model="claude-sonnet-4-5-20250929",
+        temperature=0.8,
+    )
+
+    kwargs = client._client.messages.create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-4-5-20250929"
+    assert "temperature" not in kwargs
+
+
+def test_orchestrator_client_keeps_temperature_for_legacy_models():
+    client = OrchestratorClient(api_key="test-key")
+    message = _message("ok", input_tokens=12, output_tokens=4)
+    client._client.messages.create = MagicMock(return_value=message)
+
+    client.call(
+        system="system",
+        messages=[{"role": "user", "content": "user"}],
+        model="claude-3-5-sonnet-20241022",
+        temperature=0.8,
+    )
+
+    kwargs = client._client.messages.create.call_args.kwargs
+    assert kwargs["temperature"] == 0.8

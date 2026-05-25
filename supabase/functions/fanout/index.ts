@@ -1061,12 +1061,16 @@ async function loadPriorAssessmentEmailState(
   );
   if (!prior) return null;
 
-  const priorWithDeliveryTime = {
-    ...(prior as Record<string, unknown>),
-    created_at: deliveredAtByAssessmentId.get((prior as { id: string }).id) ?? prior.created_at,
+  const priorRecord = prior as AssessmentEmailState & { id: string };
+  return {
+    asset_id: priorRecord.asset_id,
+    band: priorRecord.band,
+    document_set_hash: priorRecord.document_set_hash,
+    thesis_direction: priorRecord.thesis_direction,
+    conviction_pct: priorRecord.conviction_pct,
+    conviction_pct_calibrated: priorRecord.conviction_pct_calibrated,
+    created_at: deliveredAtByAssessmentId.get(priorRecord.id) ?? priorRecord.created_at,
   };
-  delete priorWithDeliveryTime.id;
-  return priorWithDeliveryTime as unknown as AssessmentEmailState;
 }
 
 function _assetLabel(asset: FdaAssetRow | null, entity: EntityRow | null): string {

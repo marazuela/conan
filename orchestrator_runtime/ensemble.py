@@ -43,6 +43,7 @@ import anthropic
 from orchestrator_runtime.client import (
     OrchestratorClient,
     estimate_cost,
+    model_accepts_temperature,
     parse_json_or_none,
 )
 
@@ -153,22 +154,6 @@ def compute_dispersion_abstain(
 
     return band, None
 
-# Anthropic's current Claude 4.5+ / 4.7 models reject explicit temperature
-# with "temperature is deprecated for this model". Keep temperature for older
-# models where it is still accepted, but omit it for the production family so
-# the provider default sampling behavior can still supply ensemble diversity.
-_MODELS_REJECTING_TEMPERATURE = (
-    "claude-sonnet-4-5",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-    "claude-opus-4-7",
-)
-
-
-def _model_accepts_temperature(model: str) -> bool:
-    normalized = model.lower()
-    return not any(marker in normalized for marker in _MODELS_REJECTING_TEMPERATURE)
-
 
 def _stage_1_request_params(
     *,
@@ -184,7 +169,7 @@ def _stage_1_request_params(
         "system": stage_1_system,
         "messages": [{"role": "user", "content": stage_1_user_content}],
     }
-    if _model_accepts_temperature(model):
+    if model_accepts_temperature(model):
         params["temperature"] = temperature
     else:
         logger.info(

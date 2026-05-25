@@ -48,10 +48,9 @@ Deno.test("document_set_hash defaults to null when omitted (legacy callers)", ()
   assert(row.document_set_hash === null, "missing document_set_hash → null");
 });
 
-Deno.test("CONTENT_DEDUP_BYPASS_TRIGGERS covers operator/system triggers", () => {
+Deno.test("CONTENT_DEDUP_BYPASS_TRIGGERS covers only operator/replay triggers", () => {
   const expected = [
-    "manual", "operator_refresh", "tier2_escalation",
-    "catalyst_proximity", "aging_recheck", "scheduled", "backtest",
+    "manual", "operator_refresh", "backtest",
   ];
   for (const t of expected) {
     assert(
@@ -59,11 +58,14 @@ Deno.test("CONTENT_DEDUP_BYPASS_TRIGGERS covers operator/system triggers", () =>
       `bypass set must include ${t}`,
     );
   }
-  // Doc-bus triggers must NOT bypass.
-  for (const t of ["new_doc", "cross_source", "market_move"]) {
+  // Doc-bus and routine system refresh triggers must NOT bypass.
+  for (const t of [
+    "new_doc", "cross_source", "market_move", "tier2_escalation",
+    "catalyst_proximity", "aging_recheck", "scheduled",
+  ]) {
     assert(
       !CONTENT_DEDUP_BYPASS_TRIGGERS.has(t),
-      `bypass set must NOT include ${t} (doc-bus triggers are content-deduped)`,
+      `bypass set must NOT include ${t} (system triggers are content-deduped)`,
     );
   }
 });
