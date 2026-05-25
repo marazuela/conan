@@ -26,13 +26,13 @@ volume and per-asset Tier-1 cost. Phase C unblocks the things that move
 | 7 | Tighten Tier-1 escalation (stable-high-conviction suppress) | B.2 | shipped (env-flag revertible) |
 | 8 | Material-change gate for scheduled Tier-2 fanout | B.3 | **already-existed**, verified |
 | 9 | Dispersion-based abstain in ensemble | B.4 | shipped (env-flag revertible) |
-| 10 | Backfill 1502 staged eval cases | C.1 | **deferred** — see §1 |
-| 11 | Define explicit prediction target schema | C.2 | **deferred** — see §2 |
-| 12 | Wire K-NN precedent skill into Stage 4 | C.3 | **deferred** — see §3 |
-| 13 | Market-side gate (options IV vs LLM conviction) | C.4 | **deferred** — see §4 |
-| 14 | `convergence_signature` belt-and-suspenders dedup | C.5 | **deferred** — see §5 |
-| 15 | Role-diverse ensemble (Opus + Sonnet + Haiku) | C.6 | **deferred** per D-127 |
-| 16 | RAG `corpus="all"` → targeted-corpus default | C.7 | **deferred** — see §7 |
+| 10 | Backfill 1502 staged eval cases | C.1 | **deferred** — operational (see §1) |
+| 11 | Define explicit prediction target schema | C.2 | shipped (env-default backfill = `price_move` / 30d / `forward_return_t30_calendar`) |
+| 12 | Wire K-NN precedent skill into Stage 4 | C.3 | shipped (real `_knn_similarity` over iter-4 features in `compute.py`, results threaded into `Stage4Anchor.similar_cases`) |
+| 13 | Market-side gate (options IV vs LLM conviction) | C.4 | shipped (env-flag off by default: `ORCH_ENABLE_MARKET_SIDE_GATE`) |
+| 14 | `convergence_signature` belt-and-suspenders dedup | C.5 | shipped (signature computed in Stage 10, partial unique index on `(asset_id, signature) WHERE superseded_by IS NULL`) |
+| 15 | Role-diverse ensemble (Opus + Sonnet + Haiku) | C.6 | shipped (env-flag off by default: `ORCH_ENABLE_ROLE_DIVERSE_ENSEMBLE`; D-127 still gates promotion-to-default until eval data closes) |
+| 16 | RAG `corpus="all"` → targeted-corpus default | C.7 | shipped (recommend_stage_1_rag_corpora chooses targeted set from anchor signals; `ORCH_STAGE_1_RAG_CORPORA` overrides) |
 
 ## §1 Backfill 1502 staged eval cases (C.1)
 
@@ -245,5 +245,30 @@ These were added by this PR. Default values listed; flip to revert.
 | `ORCH_DISABLE_ENSEMBLE_DISPERSION_ABSTAIN` | unset (off, i.e. abstain on) | Set `=1` to disable dispersion-based band downgrade |
 | `ORCH_ENSEMBLE_DISPERSION_ABSTAIN_PCT` | `15.0` | Conviction stddev ceiling (pp) before abstain |
 | `ORCH_ENSEMBLE_DIRECTION_ABSTAIN_FRAC` | `0.6` | Majority-direction fraction floor before abstain |
+| `ORCH_STAGE_1_RAG_CORPORA` | unset (use anchor recommendation) | CSV override for the Stage 1 RAG corpus set; `all` keeps legacy 4-corpus fanout |
+| `ORCH_ENABLE_MARKET_SIDE_GATE` | unset (off) | Set `=1` to allow band downgrade `immediate → watchlist` when expected_value_bps below threshold |
+| `ORCH_MARKET_GATE_EV_THRESHOLD_BPS` | `0.0` | Min EV (bps) before market-side gate fires |
+| `ORCH_ENABLE_ROLE_DIVERSE_ENSEMBLE` | unset (off) | Set `=1` to swap streaming ensemble for the Opus/Sonnet/Haiku role-diverse path |
+| `ORCH_ROLE_ENSEMBLE_OPUS_MODEL` / `_SONNET_MODEL` / `_HAIKU_MODEL` | Opus 4.7 / Sonnet 4.6 / Haiku 4.5 defaults | Override individual ensemble role models when the role-diverse path is on |
+| `ORCH_POST_MORTEM_WINDOW_DAYS` | `60` | Days after catalyst before a post-mortem is enqueued (used when no catalyst event found) |
 
 Document them in `DECISIONS.md` if any become permanent post-soak.
+
+## What still blocks the eval-loop closure (C.1, D-127 promotion)
+
+C.1 is operational rather than engineering — it requires running
+`label_forward_returns.py` against the staged inputs until each outcome
+bucket reaches n≥200 resolved. Once that's done, two things follow
+automatically:
+
+1. **D-127 unblocks** — the eval harness can run paired-bootstrap
+   on same-model vs role-diverse ensemble (now feature-flagged off)
+   and decide whether to promote it to default.
+2. **Calibration becomes meaningful** — `nightly_calibration_refit.py`
+   now refits per `target_type` (stratified Phase C work), so the curves
+   stop blending populations. Until n is large enough per stratum the
+   refit will still skip those buckets safely.
+
+When C.1 closes, flip the relevant env flags above to `=1`, run the
+paired bootstrap on the 271+ resolved cases, and only promote what
+clears the D-103 gate.

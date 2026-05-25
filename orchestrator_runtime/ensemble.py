@@ -66,6 +66,7 @@ class EnsembleRun:
     cost_usd: float
     latency_ms: int
     custom_id: Optional[str] = None
+    role: Optional[str] = None
 
 
 @dataclass
@@ -240,6 +241,7 @@ def _run_one_streaming(
     temperature: float,
     max_tokens_synth: int,
     max_tokens_extract: int,
+    role: Optional[str] = None,
 ) -> Optional[EnsembleRun]:
     stage_1_kwargs = _stage_1_request_params(
         model=model,
@@ -301,7 +303,73 @@ def _run_one_streaming(
         cache_creation_tokens=s1.cache_creation_tokens + s9.cache_creation_tokens,
         cost_usd=s1.cost_usd + s9.cost_usd,
         latency_ms=s1.latency_ms + s9.latency_ms,
+        role=role,
     )
+
+
+ROLE_DIVERSE_PROFILES = (
+    (
+        "opus_synthesis",
+        os.environ.get("ORCH_ROLE_ENSEMBLE_OPUS_MODEL", "claude-opus-4-7-20260115"),
+        None,
+    ),
+    (
+        "sonnet_adversary",
+        os.environ.get("ORCH_ROLE_ENSEMBLE_SONNET_MODEL", "claude-sonnet-4-6-20251101"),
+        None,
+    ),
+    (
+        "haiku_extractor",
+        None,
+        os.environ.get("ORCH_ROLE_ENSEMBLE_HAIKU_MODEL", "claude-haiku-4-5-20251001"),
+    ),
+)
+
+
+def run_role_diverse_ensemble(
+    a_client: OrchestratorClient,
+    *,
+    stage_1_system: Any,
+    stage_1_user_content: str,
+    stage_9_system: str,
+    model: str,
+    extractor_model: str,
+    temperature: float = 0.8,
+    max_tokens_synth: int = 4096,
+    max_tokens_extract: int = 8192,
+) -> EnsembleResult:
+    """Experimental C.6 ensemble: vary model roles instead of temperature."""
+    runs: List[EnsembleRun] = []
+    for idx, (role, synth_override, extractor_override) in enumerate(ROLE_DIVERSE_PROFILES):
+        synth_model = synth_override or model
+        extract_model = extractor_override or extractor_model
+        logger.info(
+            "Role-diverse ensemble run %d/%d role=%s synth=%s extractor=%s",
+            idx + 1, len(ROLE_DIVERSE_PROFILES), role, synth_model, extract_model,
+        )
+        try:
+            run = _run_one_streaming(
+                a_client,
+                stage_1_system,
+                stage_1_user_content,
+                stage_9_system,
+                synth_model,
+                extract_model,
+                idx,
+                temperature,
+                max_tokens_synth,
+                max_tokens_extract,
+                role=role,
+            )
+        except anthropic.APIError as exc:
+            logger.warning("Role-diverse ensemble role=%s failed: %s", role, exc)
+            continue
+        if run:
+            runs.append(run)
+
+    if not runs:
+        raise RuntimeError("Role-diverse ensemble produced 0 successful runs")
+    return _aggregate(runs, mode="role_diverse")
 
 
 # ===========================================================================

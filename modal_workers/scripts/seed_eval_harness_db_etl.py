@@ -365,6 +365,10 @@ def _build_eval_harness_row(
         "realized_outcome": _derive_realized_outcome(label),
         "realized_outcome_data": label,
         "document_set": document_set or [],
+        "label_rule": label.get("label_rule") or "forward_return_t30_calendar",
+        "target_type": "price_move",
+        "horizon_days": label.get("hit_window_days") or 30,
+        "event_anchor": staged.get("event_id"),
         "is_holdout": False,
         "difficulty": None,
         "notes": (

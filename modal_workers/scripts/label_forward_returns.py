@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 WINDOWS_DAYS: Tuple[int, ...] = (30, 60, 90, 180, 360)
 SPY_TICKER = "SPY"
+PRICE_MOVE_LABEL_RULE = "forward_return_t30_calendar"
 
 # HIT thresholds per export methodology_spec.md.
 BINARY_CATALYST_HIT_PCT = 20.0  # absolute return at T+30
@@ -97,6 +98,7 @@ class ForwardReturnLabel:
     hit_window_days: Optional[int] = None     # which window the HIT/MISS verdict reads from
     hit: Optional[bool] = None                # True/False/None — None = cannot be evaluated
     miss_reason: Optional[str] = None         # populated when hit=False or None
+    label_rule: str = PRICE_MOVE_LABEL_RULE
     label_method: str = "yfinance_v0.1"
     labeled_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -315,6 +317,7 @@ def _serializable_label(label: ForwardReturnLabel) -> Dict[str, Any]:
         "hit_window_days": label.hit_window_days,
         "hit": label.hit,
         "miss_reason": label.miss_reason,
+        "label_rule": label.label_rule,
         "label_method": label.label_method,
         "labeled_at": label.labeled_at,
     }

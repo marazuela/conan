@@ -87,6 +87,10 @@ TIER2_REQUIRED_FIELDS: frozenset[str] = frozenset({
     "tier",
     "orchestrator_version",
     "thesis_direction",
+    "target_type",
+    "horizon_days",
+    "event_anchor",
+    "label_rule",
     "raw_conviction_pct",
     "conviction_pct",
     "conviction_pct_calibrated",
@@ -482,6 +486,24 @@ def validate_tier2_output(payload: Dict[str, Any]) -> List[str]:
     ):
         errors.append(f"invalid thesis_direction: {direction!r}")
 
+    target_type = payload.get("target_type")
+    if target_type is not None and target_type not in (
+        "price_move", "regulatory_outcome", "event_outcome",
+    ):
+        errors.append(f"invalid target_type: {target_type!r}")
+
+    horizon = payload.get("horizon_days")
+    if horizon is not None:
+        if not isinstance(horizon, int) or horizon <= 0:
+            errors.append(f"horizon_days must be a positive int or null, got {horizon!r}")
+
+    label_rule = payload.get("label_rule")
+    if label_rule is not None and label_rule not in (
+        "forward_return_t30_calendar", "forward_return",
+        "approval_decision", "adcom_recommendation",
+    ):
+        errors.append(f"invalid label_rule: {label_rule!r}")
+
     for pct_field in (
         "raw_conviction_pct", "conviction_pct", "conviction_pct_calibrated",
     ):
@@ -595,6 +617,10 @@ def persist_tier2_assessment(
         "raw_conviction_pct": payload.get("raw_conviction_pct"),
         "thesis_direction": payload.get("thesis_direction"),
         "thesis_summary": payload.get("thesis_summary"),
+        "target_type": payload.get("target_type"),
+        "horizon_days": payload.get("horizon_days"),
+        "event_anchor": payload.get("event_anchor"),
+        "label_rule": payload.get("label_rule"),
         "conviction_pct_calibrated": payload.get("conviction_pct_calibrated"),
         "conviction_pct": payload.get("conviction_pct"),
         "evidence_quality": payload.get("evidence_quality"),

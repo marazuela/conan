@@ -62,6 +62,9 @@ DEFAULT_BOOTSTRAP_RESAMPLES = 10000
 DEFAULT_ENABLE_PROMOTION = (
     os.environ.get("ENABLE_PROMOTION", "false").lower() == "true"
 )
+DEFAULT_TRAINING_SOURCE = os.environ.get(
+    "ORCH_CALIBRATION_TRAINING_SOURCE", "post_mortem_queue",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +94,31 @@ class RefitResult:
     new_curve_data: Dict[str, Any]
     activated: bool
     gate: GateEvaluation
+    training_source: str = DEFAULT_TRAINING_SOURCE
+    training_snapshot: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class TrainingPairSnapshot:
+    source: str
+    raw: List[float]
+    realized: List[int]
+    asset_ids: List[str]
+    n_rows_seen: int
+    n_pairs: int
+    n_positive: int
+    n_negative: int
+    skipped: Dict[str, int]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "source": self.source,
+            "n_rows_seen": self.n_rows_seen,
+            "n_pairs": self.n_pairs,
+            "n_positive": self.n_positive,
+            "n_negative": self.n_negative,
+            "skipped": dict(self.skipped),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +132,15 @@ def run_nightly_refit(
     bootstrap_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     enable_promotion: Optional[bool] = None,
     rng_seed: Optional[int] = None,
+    training_source: str = DEFAULT_TRAINING_SOURCE,
 ) -> RefitResult:
     """Pull resolved post-mortems, fit new isotonic, gate vs prod, optionally promote."""
     sb = sb or SupabaseClient()
     if enable_promotion is None:
         enable_promotion = DEFAULT_ENABLE_PROMOTION
 
-    raw, realized, asset_ids = _fetch_training_pairs(sb)
+    snapshot = fetch_training_pair_snapshot(sb, source=training_source)
+    raw, realized, asset_ids = snapshot.raw, snapshot.realized, snapshot.asset_ids
     n = len(raw)
     if n == 0:
         return RefitResult(
@@ -118,6 +148,8 @@ def run_nightly_refit(
             new_curve_version=None,
             new_curve_data={},
             activated=False,
+            training_source=training_source,
+            training_snapshot=snapshot.as_dict(),
             gate=GateEvaluation(
                 passed=False, gate_reason="no_baseline",
                 n_eval_cases=0,
@@ -170,6 +202,8 @@ def run_nightly_refit(
         new_curve_data=new_curve_data,
         activated=activated,
         gate=gate,
+        training_source=training_source,
+        training_snapshot=snapshot.as_dict(),
     )
 
 
@@ -359,9 +393,33 @@ def _make_curve_version(curve: Dict[str, Any], n: int) -> str:
 # DB I/O
 # ---------------------------------------------------------------------------
 
+def fetch_training_pair_snapshot(
+    sb: SupabaseClient,
+    *,
+    source: str = DEFAULT_TRAINING_SOURCE,
+) -> TrainingPairSnapshot:
+    if source != "post_mortem_queue":
+        raise ValueError(
+            "nightly_calibration_refit currently supports "
+            "ORCH_CALIBRATION_TRAINING_SOURCE=post_mortem_queue only; "
+            "eval_harness lacks per-case predictions for curve fitting."
+        )
+    return _fetch_training_pairs_from_post_mortem_queue(sb, source=source)
+
+
 def _fetch_training_pairs(
     sb: SupabaseClient,
+    source: str = DEFAULT_TRAINING_SOURCE,
 ) -> Tuple[List[float], List[int], List[str]]:
+    snapshot = fetch_training_pair_snapshot(sb, source=source)
+    return snapshot.raw, snapshot.realized, snapshot.asset_ids
+
+
+def _fetch_training_pairs_from_post_mortem_queue(
+    sb: SupabaseClient,
+    *,
+    source: str,
+) -> TrainingPairSnapshot:
     """Pull (raw_conviction_pct/100, hit_int, asset_id) tuples for every
     post_mortem_complete row whose convergence_assessment exists.
     """
@@ -372,7 +430,11 @@ def _fetch_training_pairs(
     }) or []
 
     if not pms:
-        return [], [], []
+        return TrainingPairSnapshot(
+            source=source, raw=[], realized=[], asset_ids=[],
+            n_rows_seen=0, n_pairs=0, n_positive=0, n_negative=0,
+            skipped={},
+        )
 
     assessment_ids = [p["assessment_id"] for p in pms]
     in_filter = f"in.({','.join(assessment_ids)})"
@@ -386,16 +448,20 @@ def _fetch_training_pairs(
     raw: List[float] = []
     realized: List[int] = []
     asset_ids: List[str] = []
+    skipped: Dict[str, int] = {}
     for p in pms:
         ro = p.get("realized_outcome") or {}
         hit = ro.get("hit")
         if hit is None:
+            skipped["missing_hit"] = skipped.get("missing_hit", 0) + 1
             continue  # no_outcome path
         a = asmt_by_id.get(p["assessment_id"])
         if not a:
+            skipped["missing_assessment"] = skipped.get("missing_assessment", 0) + 1
             continue
         raw_pct = a.get("raw_conviction_pct") or a.get("conviction_pct")
         if raw_pct is None:
+            skipped["missing_raw_conviction"] = skipped.get("missing_raw_conviction", 0) + 1
             continue
         # Direction-aligned realized: we calibrate the conviction probability
         # of the predicted direction being correct. Map the raw asymmetry into
@@ -405,7 +471,17 @@ def _fetch_training_pairs(
         realized.append(realized_int)
         asset_ids.append(p["asset_id"])
 
-    return raw, realized, asset_ids
+    return TrainingPairSnapshot(
+        source=source,
+        raw=raw,
+        realized=realized,
+        asset_ids=asset_ids,
+        n_rows_seen=len(pms),
+        n_pairs=len(raw),
+        n_positive=sum(1 for y in realized if y == 1),
+        n_negative=sum(1 for y in realized if y == 0),
+        skipped=skipped,
+    )
 
 
 def _direction_aligned_outcome(direction: Optional[str], hit: bool) -> int:
@@ -718,6 +794,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--enable-promotion", action="store_true",
                         help="Override env ENABLE_PROMOTION; if set, gate-passing curves auto-promote.")
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--training-source",
+        default=DEFAULT_TRAINING_SOURCE,
+        choices=["post_mortem_queue"],
+        help="Source for calibration pairs. eval_harness is intentionally not "
+             "accepted until it stores per-case predictions.",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Print the training-pair count report and exit without fitting.",
+    )
     parser.add_argument("--skip-tier-quality-gate", action="store_true",
                         help="Skip the Phase 4B Tier-1 vs Tier-2 Brier comparison.")
     args = parser.parse_args(argv)
@@ -725,11 +813,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+    if args.report_only:
+        snapshot = fetch_training_pair_snapshot(
+            SupabaseClient(), source=args.training_source,
+        )
+        logger.info("training_pair_snapshot: %s", snapshot.as_dict())
+        return 0
+
     result = run_nightly_refit(
         min_n=args.min_n,
         bootstrap_resamples=args.bootstrap_resamples,
         enable_promotion=(args.enable_promotion or DEFAULT_ENABLE_PROMOTION),
         rng_seed=args.seed,
+        training_source=args.training_source,
     )
     logger.info(
         "nightly_calibration_refit: n=%d gate=%s reason=%s activated=%s version=%s",

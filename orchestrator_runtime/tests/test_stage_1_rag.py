@@ -84,6 +84,35 @@ def test_stage_1_rag_retrieve_asset_scoped_passes_id(monkeypatch):
     assert seen["asset_id"] == "asset-1"
 
 
+def test_stage_1_rag_retrieve_uses_targeted_corpora(monkeypatch):
+    from orchestrator_runtime import runtime
+
+    calls: List[str] = []
+
+    def stub_hs(_sb, _q, *, corpus, k, asset_id, document_ids=None):
+        calls.append(corpus)
+        return [
+            {"chunk_id": f"{corpus}-1", "score": 0.5, "chunk_text": corpus},
+        ]
+
+    monkeypatch.setattr(
+        "orchestrator_runtime.rag_handle.hybrid_search", stub_hs,
+    )
+    ctx = _ctx(asset={
+        "id": "asset-1",
+        "ticker": "AXSM",
+        "drug_name": "AXS-05",
+        "reference_class_signature": "phase3_psych_NDA",
+        "program_status": "phase3_readout",
+    })
+
+    metric = runtime.stage_1_rag_retrieve(object(), ctx, k=4)
+
+    assert calls == ["literature", "filings"]
+    assert metric.notes["corpora"] == ["literature", "filings"]
+    assert len(ctx["rag_chunks"]) == 2
+
+
 def test_stage_1_rag_retrieve_handles_search_failure(monkeypatch):
     """If hybrid_search raises (e.g. RPC missing pre-backfill), the function
     degrades to an empty list and Stage 1 falls through to legacy path."""

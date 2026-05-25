@@ -16,6 +16,7 @@ from orchestrator_runtime.client import CallResult, OrchestratorClient  # noqa: 
 from orchestrator_runtime.ensemble import (  # noqa: E402
     _run_one_streaming,
     _stage_1_request_params,
+    run_role_diverse_ensemble,
     run_batch_ensemble,
 )
 
@@ -262,3 +263,44 @@ def test_orchestrator_client_keeps_temperature_for_legacy_models():
 
     kwargs = client._client.messages.create.call_args.kwargs
     assert kwargs["temperature"] == 0.8
+
+
+def test_role_diverse_ensemble_uses_model_profiles(monkeypatch):
+    import orchestrator_runtime.ensemble as ensemble_mod
+
+    profiles = (
+        ("opus_synthesis", "opus-test", None),
+        ("sonnet_adversary", "sonnet-test", None),
+        ("haiku_extractor", None, "haiku-test"),
+    )
+    monkeypatch.setattr(ensemble_mod, "ROLE_DIVERSE_PROFILES", profiles)
+
+    seen = []
+    client = MagicMock()
+
+    def fake_call(*, system, messages, model, max_tokens, temperature=None):
+        seen.append(model)
+        if len(seen) % 2 == 1:
+            return _call_result("cited synthesis prose")
+        return _call_result(_stage_9_json(conviction=70 + len(seen)))
+
+    client.call.side_effect = fake_call
+
+    result = run_role_diverse_ensemble(
+        client,
+        stage_1_system="stage 1 system",
+        stage_1_user_content="stage 1 user",
+        stage_9_system="stage 9 system",
+        model="default-sonnet",
+        extractor_model="default-extractor",
+    )
+
+    assert result.mode == "role_diverse"
+    assert [r.role for r in result.runs] == [
+        "opus_synthesis", "sonnet_adversary", "haiku_extractor",
+    ]
+    assert seen == [
+        "opus-test", "default-extractor",
+        "sonnet-test", "default-extractor",
+        "default-sonnet", "haiku-test",
+    ]
