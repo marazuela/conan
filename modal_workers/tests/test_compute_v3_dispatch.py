@@ -260,6 +260,8 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "q1_audit_run",
         "q2_audit_run",
         "fda_event_harvest_daily",
+        # D-129 WI-2 follow-up (2026-05-25)
+        "bc_class_precedent_refresh",
     })
 
 
@@ -639,6 +641,28 @@ def test_dispatch_fda_event_harvest_passes_date_range_args(monkeypatch):
     }
 
 
+def test_dispatch_bc_class_precedent_refresh_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("bc_class_precedent_refresh", {})
+    assert out["spawned"] is True
+    assert captured["fn"] == "bc_class_precedent_refresh_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_bc_class_precedent_refresh_passes_tuning_args(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("bc_class_precedent_refresh", {
+        "lookback_years": 5,
+        "apply": False,
+        "ignored": True,
+    })
+    assert captured["kwargs"] == {"lookback_years": 5, "apply": False}
+
+
 def test_spawn_only_actions_set_is_documented():
     """The _SPAWN_ONLY_ACTIONS map must list every spawn action so the
     multiplex can't develop two ways to spawn (one via if-chain, one via
@@ -651,5 +675,6 @@ def test_spawn_only_actions_set_is_documented():
     for action in (
         "earnings_calendar_fetch_daily", "fomc_calendar_refresh",
         "q1_audit_run", "q2_audit_run", "fda_event_harvest_daily",
+        "bc_class_precedent_refresh",
     ):
         assert action in _SPAWN_ONLY_ACTIONS

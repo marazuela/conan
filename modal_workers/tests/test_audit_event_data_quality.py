@@ -15,8 +15,12 @@ import pytest
 from modal_workers.scripts.audit_event_data_quality import (
     DEFAULT_EARNINGS_WINDOW_TD,
     LOW_VOLUME_DAY_PCT,
+    MATERIAL_8K_ITEMS,
     Q1Verdict,
     T_PLUS_DAYS,
+    _doc_has_material_8k_item,
+    _extract_8k_items,
+    _filter_material_8k_rows,
     assemble_verdict,
     check_earnings_within_window,
     check_fomc_day,
@@ -118,14 +122,94 @@ def test_spx_three_sigma_empty_input_returns_no_spy_data():
 
 
 def test_material_8k_triggers_when_count_positive():
-    result = check_material_8k_in_window(ticker="AXSM", in_window_8k_count=2)
+    result = check_material_8k_in_window(
+        ticker="AXSM", in_window_8k_count=2, items_observed=["1.01", "8.01"],
+    )
     assert result["triggered"] is True
     assert result["evidence"]["count"] == 2
+    assert result["evidence"]["items_observed"] == ["1.01", "8.01"]
 
 
 def test_material_8k_doesnt_trigger_at_zero():
     result = check_material_8k_in_window(ticker="AXSM", in_window_8k_count=0)
     assert result["triggered"] is False
+    assert result["evidence"]["items_observed"] == []
+
+
+def test_material_8k_evidence_carries_material_item_set():
+    result = check_material_8k_in_window(ticker="AXSM", in_window_8k_count=0)
+    assert result["evidence"]["material_items"] == sorted(MATERIAL_8K_ITEMS)
+
+
+# ---------------------------------------------------------------------------
+# Pure 8-K item filtering (replaces the v1 stub)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_8k_items_parses_string_list():
+    assert _extract_8k_items({"items": ["1.01", "8.01"]}) == ["1.01", "8.01"]
+
+
+def test_extract_8k_items_coerces_non_string_codes():
+    # EFTS occasionally emits items as numerics; we normalize to str.
+    assert _extract_8k_items({"items": [1.01, "8.01", None, ""]}) == ["1.01", "8.01"]
+
+
+def test_extract_8k_items_handles_missing_or_malformed_extensions():
+    assert _extract_8k_items(None) == []
+    assert _extract_8k_items({}) == []
+    assert _extract_8k_items({"items": "1.01"}) == []  # not a list
+    assert _extract_8k_items({"items": []}) == []
+
+
+def test_doc_has_material_8k_item_matches_each_material_code():
+    for code in ("1.01", "2.02", "8.01"):
+        assert _doc_has_material_8k_item({"items": [code]}) is True
+
+
+def test_doc_has_material_8k_item_rejects_non_material_codes():
+    # 5.02 = officer departure; 7.01 = Reg-FD; neither moves the stock the
+    # way 1.01/2.02/8.01 do.
+    assert _doc_has_material_8k_item({"items": ["5.02", "7.01"]}) is False
+    assert _doc_has_material_8k_item({"items": []}) is False
+
+
+def test_filter_material_8k_rows_counts_only_material_docs():
+    rows = [
+        {"documents": {"id": "d1", "extensions": {"items": ["1.01"]}}},  # material
+        {"documents": {"id": "d2", "extensions": {"items": ["5.02"]}}},  # not material
+        {"documents": {"id": "d3", "extensions": {"items": ["8.01", "1.01"]}}},  # material
+        {"documents": {"id": "d4", "extensions": {"items": []}}},        # empty items
+        {"documents": None},                                             # malformed
+    ]
+    count, observed = _filter_material_8k_rows(rows)
+    assert count == 2
+    assert observed == ["1.01", "8.01"]
+
+
+def test_filter_material_8k_rows_excludes_source_docs():
+    rows = [
+        {"documents": {"id": "d1", "extensions": {"items": ["1.01"]}}},
+        {"documents": {"id": "d2", "extensions": {"items": ["2.02"]}}},
+    ]
+    count, observed = _filter_material_8k_rows(rows, exclude_document_ids=["d1"])
+    assert count == 1
+    assert observed == ["2.02"]
+
+
+def test_filter_material_8k_rows_deduplicates_observed_items():
+    # Two material docs both carrying 1.01 should report ["1.01"] once.
+    rows = [
+        {"documents": {"id": "d1", "extensions": {"items": ["1.01"]}}},
+        {"documents": {"id": "d2", "extensions": {"items": ["1.01", "2.02"]}}},
+    ]
+    count, observed = _filter_material_8k_rows(rows)
+    assert count == 2
+    assert observed == ["1.01", "2.02"]
+
+
+def test_filter_material_8k_rows_empty_input_returns_zero():
+    assert _filter_material_8k_rows([]) == (0, [])
 
 
 # ---------------------------------------------------------------------------

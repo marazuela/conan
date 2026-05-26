@@ -6,10 +6,13 @@
 import {
   BC_PREGATE_DEFAULT_THRESHOLD,
   BC_PREGATE_MAX_SCORE_V1,
+  BC_PREGATE_MAX_SCORE_V2,
   BC_PREGATE_WEIGHTS,
+  classPrecedentFromApprovalRate,
   configFlagBool,
   configThreshold,
   inputsFromRawPayload,
+  normalizeClassField,
   scoreBcPregate,
   type BcPregateInputs,
 } from "./bc-pregate.ts";
@@ -128,15 +131,17 @@ Deno.test("enrichment_state='unavailable' declines with enrichment_unavailable",
 // Case 5 — class_precedent post-refresher (future state)
 // ---------------------------------------------------------------------------
 
-Deno.test("class_precedent=1 lifts score per per-unit weight (future state)", () => {
-  // Once the bc_class_precedent_refresher table lands and emits real values
-  // in [0..1], the per-unit multiplier (5) lifts the max composite to 15.
+Deno.test("class_precedent=1 lifts score to v2 max=15", () => {
+  // With the refresher table populated, class_precedent ∈[0..1] is the
+  // approval_rate from fda_class_precedent_base_rates. The per-unit
+  // multiplier (5) lifts the max composite to 15.
   const result = scoreBcPregate(inputs({
     breakthrough_designation: true,
     first_time_sponsor: true,
     class_precedent: 1.0,
   }));
-  assert(result.score === 15, `BT(6) + sponsor(4) + class(1*5)=15, got ${result.score}`);
+  assert(result.score === BC_PREGATE_MAX_SCORE_V2,
+    `BT(6) + sponsor(4) + class(1*5)=15, got ${result.score}`);
   assert(result.passed === true);
 });
 
@@ -184,6 +189,65 @@ Deno.test("custom threshold 9 separates two-fires (10) from one-fire (6)", () =>
   assert(scoreBcPregate(inputs(tightSetup), 9).passed === true, "10 >= 9 passes");
   assert(scoreBcPregate(inputs({ breakthrough_designation: true }), 9).passed === false,
     "6 < 9 declines under stricter threshold");
+});
+
+// ---------------------------------------------------------------------------
+// V2 max constant + class_precedent term math
+// ---------------------------------------------------------------------------
+
+Deno.test("BC_PREGATE_MAX_SCORE_V2 equals V1 max plus full class_precedent contribution", () => {
+  // The V2 max is the v1 max (10) plus the per-unit weight (5) for
+  // class_precedent=1.0. Locks the contract that refresher integration
+  // tops out at exactly this number — any future weight tweaks need to
+  // update both constants.
+  assert(
+    BC_PREGATE_MAX_SCORE_V2 ===
+      BC_PREGATE_MAX_SCORE_V1 + BC_PREGATE_WEIGHTS.class_precedent_per_unit,
+    `V2 max should equal V1 + class weight; got ${BC_PREGATE_MAX_SCORE_V2}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// normalizeClassField — byte-for-byte mirror of the Python refresher
+// ---------------------------------------------------------------------------
+
+Deno.test("normalizeClassField lowercases and collapses whitespace", () => {
+  assert(normalizeClassField("  GLP-1 Agonist  ") === "glp-1 agonist",
+    "trim + lowercase");
+  assert(normalizeClassField("anti-VEGF\tmAb") === "anti-vegf mab",
+    "tab → space");
+  assert(normalizeClassField("JAK   inhibitor") === "jak inhibitor",
+    "collapse interior whitespace");
+});
+
+Deno.test("normalizeClassField returns empty for null/undefined/non-string", () => {
+  assert(normalizeClassField(null) === "");
+  assert(normalizeClassField(undefined) === "");
+  assert(normalizeClassField(123) === "");
+  assert(normalizeClassField("") === "");
+  assert(normalizeClassField("   ") === "");
+});
+
+// ---------------------------------------------------------------------------
+// classPrecedentFromApprovalRate — clamps DB values into the scorer range
+// ---------------------------------------------------------------------------
+
+Deno.test("classPrecedentFromApprovalRate passes valid [0..1] values through", () => {
+  assert(classPrecedentFromApprovalRate(0) === 0);
+  assert(classPrecedentFromApprovalRate(0.6) === 0.6);
+  assert(classPrecedentFromApprovalRate(1) === 1);
+});
+
+Deno.test("classPrecedentFromApprovalRate clamps out-of-range values", () => {
+  assert(classPrecedentFromApprovalRate(-0.5) === 0, "negative → 0");
+  assert(classPrecedentFromApprovalRate(1.5) === 1, "above 1 → 1");
+});
+
+Deno.test("classPrecedentFromApprovalRate returns 0 for null/NaN/non-numeric", () => {
+  assert(classPrecedentFromApprovalRate(null) === 0);
+  assert(classPrecedentFromApprovalRate(undefined) === 0);
+  assert(classPrecedentFromApprovalRate(NaN) === 0);
+  assert(classPrecedentFromApprovalRate("0.5") === 0, "string → 0 (no coercion)");
 });
 
 // ---------------------------------------------------------------------------
