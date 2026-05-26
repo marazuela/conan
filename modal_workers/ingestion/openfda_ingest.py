@@ -425,11 +425,79 @@ def _ingest_label_record(label: Dict[str, Any], writer: DocumentWriter) -> "_Ing
         logger.exception("openfda label: write failed for set_id=%s: %s", set_id, exc)
         return _IngestOutcome(error=True)
 
+    # Best-effort: seed fda_assets.mechanism from the label's MoA when the
+    # asset row still has NULL. Never clobbers an operator-curated value.
+    # Errors here must NOT fail the ingest — log and move on.
+    try:
+        _maybe_seed_asset_mechanism(writer.client, label)
+    except Exception:  # noqa: BLE001
+        logger.exception("openfda label: mechanism seed pass raised for set_id=%s", set_id)
+
     return _IngestOutcome(
         written=result.was_new,
         dedup_hit=not result.was_new,
         document_id=result.document_id,
     )
+
+
+def extract_mechanism_from_label(label: Dict[str, Any]) -> str:
+    """Pull a single normalized MoA string from an openFDA `drug/label` record.
+
+    openFDA returns `mechanism_of_action` as a list of strings (one entry per
+    label-section paragraph). We join with whitespace, trim, and cap at 1024
+    characters — class-precedent normalization is `LOWER(TRIM(...))`, so
+    multi-kilobyte blobs add no signal. Returns "" when MoA is absent.
+    """
+    raw = label.get("mechanism_of_action")
+    if isinstance(raw, list):
+        parts = [s for s in raw if isinstance(s, str) and s.strip()]
+        text = " ".join(p.strip() for p in parts)
+    elif isinstance(raw, str):
+        text = raw
+    else:
+        return ""
+    text = " ".join(text.split())  # collapse runs of whitespace
+    return text[:1024]
+
+
+def _maybe_seed_asset_mechanism(client: Any, label: Dict[str, Any]) -> int:
+    """Upsert fda_assets.mechanism from this label where the asset row currently
+    has NULL. Match strategy is application_number ∈ openfda.application_number;
+    one label can map to multiple fda_assets rows (the unique key is
+    (ticker, drug_name, application_number) so per-ticker duplicates are
+    expected and intentional). Returns count of asset rows touched.
+    """
+    openfda_meta = label.get("openfda") or {}
+    application_numbers = sorted({
+        a.strip() for a in (openfda_meta.get("application_number") or [])
+        if isinstance(a, str) and a.strip()
+    })
+    if not application_numbers:
+        return 0
+
+    moa = extract_mechanism_from_label(label)
+    if not moa:
+        return 0
+
+    in_clause = "(" + ",".join(f'"{n}"' for n in application_numbers) + ")"
+    rows = client._rest_with_retry(
+        "PATCH",
+        "fda_assets",
+        params={
+            "application_number": f"in.{in_clause}",
+            "mechanism": "is.null",
+            "select": "id",
+        },
+        json_body={"mechanism": moa},
+        prefer="return=representation",
+    )
+    n_updated = len(rows or [])
+    if n_updated:
+        logger.info(
+            "openfda label: seeded mechanism on %d fda_assets row(s) "
+            "(application_numbers=%s, moa_chars=%d)",
+            n_updated, application_numbers, len(moa))
+    return n_updated
 
 
 def _format_label_as_text(label: Dict[str, Any]) -> str:
