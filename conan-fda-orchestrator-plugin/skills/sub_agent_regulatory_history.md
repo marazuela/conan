@@ -69,8 +69,9 @@ The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` t
   "additionalProperties": false,
   "required": [
     "schema_version", "asset_id", "class_membership", "class_precedents",
-    "base_rates", "sponsor_track_record", "reviewer_panel_concerns",
-    "divergence_from_norm_flags", "sourcing_completeness_pct", "retrieved_at"
+    "base_rates", "sparse_class_warning", "sponsor_track_record",
+    "reviewer_panel_concerns", "divergence_from_norm_flags",
+    "sourcing_completeness_pct", "retrieved_at"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -115,6 +116,16 @@ The orchestrator's `dispatch_sub_agent("regulatory_history", asset_id, query)` t
         "adcomm_convene_rate": { "type": ["number", "null"] },
         "boxed_warning_rate": { "type": ["number", "null"] },
         "median_nda_to_decision_days": { "type": ["integer", "null"] }
+      }
+    },
+    "sparse_class_warning": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fires", "n_precedents", "threshold"],
+      "properties": {
+        "fires": { "type": "boolean" },
+        "n_precedents": { "type": "integer", "minimum": 0 },
+        "threshold": { "type": "integer", "minimum": 1, "default": 5 },
+        "rationale": { "type": ["string", "null"] }
       }
     },
     "sponsor_track_record": {
@@ -175,6 +186,12 @@ Worked example (illustrative shape; substitute your real findings):
     "boxed_warning_rate": 0.22,
     "median_nda_to_decision_days": 305
   },
+  "sparse_class_warning": {
+    "fires": false,
+    "n_precedents": 39,
+    "threshold": 5,
+    "rationale": null
+  },
   "sponsor_track_record": {
     "prior_approvals": N, "prior_crls": M, "prior_breakthrough": K,
     "rtor_participated": bool, "active_warning_letters": N_wl,
@@ -199,6 +216,8 @@ Every entry in `class_precedents`, every base rate, every sponsor-history elemen
 4. **AdComm history.** `fda-adcomm-mcp.get_calendar` for the reviewer panel × indication over `lookback_years`. For each AdComm: `search_transcripts` for the recurring concern themes, `get_voting_history` for vote tallies, `get_panel_composition` for current vs historical members.
 5. **Sponsor track record.** EDGAR EFTS (`internal-rag-mcp.hybrid_search_internal`) for the sponsor's prior FDA disclosures (8-K Item 8.01s referencing CRLs, BTD grants, priority designations, RTOR). Cross-reference openFDA warning letters by sponsor address.
 6. **Synthesis.** Compute base rates with binomial CIs (Wilson interval). List divergence-from-norm flags ONLY when supported by enumerated precedents (e.g., "no class member has been approved with full label without an AdComm in the last 5 years; this indication's panel convenes for ~31% of NDAs in this class"). Refuse to invent flags.
+
+   **Sparse-class warning.** Emit `sparse_class_warning` on every output. Set `fires=true` and write a short `rationale` whenever `base_rates.n < threshold` (default threshold = 5). The threshold is calibrated against the U3 `compare-to-historical-precedents` low-density convention — a class with fewer than five enumerated precedents cannot anchor a base rate without explicitly flagging the extrapolation risk. When `fires=true`, downstream Stage 5 synthesis MUST widen the base-rate CI rather than treat the point estimate as load-bearing. Do not omit the field when the class is dense — emit `fires=false` with `rationale: null` so the operator can verify the check ran.
 7. **Schema validation.** Pydantic-validate against `regulatory_history_v1.json`. Retry up to 3× on failure with feedback prompt; escalate with `validation_pass=false` on terminal failure.
 8. **Memory writeback.** Append new precedents + new panel concerns to the memory file via Supabase Storage. Storage path written into output for the orchestrator's per-stage cost tracker.
 

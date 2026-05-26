@@ -5,13 +5,16 @@
 // enqueueOrchestratorRun() call so we don't burn an orchestrator slot on an
 // asset that lacks the structural quality signals v2 uses to dispatch.
 //
-// V1 scoring (max composite = 10, threshold from internal_config):
-//   Breakthrough designation        +6
+// V1 scoring (max composite = 10):
+//   Breakthrough designation                    +6
 //   First-time sponsor (no prior P3 NDA / BLA)  +4
-//   Class precedent (stubbed to 0; refresher table is follow-up PR)
+//   Class precedent (stubbed to 0)
 //
-// When the bc_class_precedent_refresher table lands, max climbs to 15 and the
-// internal_config.bc_pregate_threshold should be bumped from 6 to 9.
+// V2 scoring (max composite = 15) — active once `fda_class_precedent_base_rates`
+// is populated by `bc_class_precedent_refresher.py`:
+//   Class precedent term = approval_rate (∈[0..1]) * 5
+// At that point operator should bump `internal_config.bc_pregate_threshold`
+// from 6 to 9. Threshold lives in config so the cutover is a single SQL flip.
 //
 // Pure-data helpers in this file have no Deno imports — keep it that way so
 // they can be unit-tested via Deno's test runner without env wiring.
@@ -19,7 +22,9 @@
 export interface BcPregateInputs {
   breakthrough_designation: boolean;
   first_time_sponsor: boolean;
-  class_precedent: number; // 0 in v1 (stubbed); refresher table fills this later
+  // approval_rate from fda_class_precedent_base_rates, ∈[0..1]. 0 = no row in
+  // the refresher table OR n_total<threshold; the gate scores the term as 0.
+  class_precedent: number;
   enrichment_state: "ready" | "stub" | "unavailable";
 }
 
@@ -38,7 +43,33 @@ export const BC_PREGATE_WEIGHTS = {
 } as const;
 
 export const BC_PREGATE_MAX_SCORE_V1 = 10; // BT+6 + sponsor+4; class_precedent stubbed to 0
+export const BC_PREGATE_MAX_SCORE_V2 = 15; // adds class_precedent * 5 (refresher-populated)
 export const BC_PREGATE_DEFAULT_THRESHOLD = 6;
+
+/**
+ * Canonicalize a mechanism-of-action or indication string for lookup against
+ * `fda_class_precedent_base_rates`. Mirrors `normalize_class_field()` in
+ * `modal_workers/scripts/bc_class_precedent_refresher.py` byte-for-byte so
+ * the reactor reads rows the refresher wrote.
+ *
+ * Steps: trim, lowercase, collapse interior whitespace.
+ */
+export function normalizeClassField(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+}
+
+/**
+ * Clamp a raw `approval_rate` row value into the [0..1] range expected by
+ * `inputsFromRawPayload.class_precedent`. NULL / non-finite → 0 so the gate
+ * treats sparse/missing classes as "no precedent" (the safe default).
+ */
+export function classPrecedentFromApprovalRate(rate: unknown): number {
+  if (typeof rate !== "number" || !Number.isFinite(rate)) return 0;
+  if (rate < 0) return 0;
+  if (rate > 1) return 1;
+  return rate;
+}
 
 /**
  * Convert an FDA-family signal raw_payload into pre-gate inputs. Kept pure so

@@ -754,3 +754,30 @@ Operator step after deploy: `UPDATE internal_config SET value=<deployed compute-
 **Promotion action.** Single header edit in `conan-fda-orchestrator-plugin/skills/sub_agent_regulatory_history.md` changing the `version:` frontmatter from v0 to v1. No code change in the orchestrator runtime; no schema migration; no DECISIONS entry beyond the cross-reference back to this D-130 with the verification timestamp.
 
 **Consequences.** Until the gate clears, the sub-agent remains v0 — fully functional and called from the orchestrator, but flagged in the dashboard as "pre-promotion (D-130 gate open)". This keeps the v0/v1 distinction load-bearing: v1 means "passed live-traffic eval", v0 means "lifted methodology from v2 export but unverified at scale". A future PR that flips the version header should reference D-130 in its commit message and add a single-line entry to this DECISIONS log noting the date the criteria were verified.
+
+---
+
+## D-131 — D-129 queued follow-ups land (2026-05-25)
+
+**Context.** D-129 "Out of scope follow-ups (queued)" enumerated four items that needed their own PRs. This entry records that three of those landed in the same session, with one (FOMC backfill) gated on operator `supabase db push`.
+
+**Items landed.**
+
+- **`fda_class_precedent_base_rates` + nightly refresher** — `supabase/migrations/20260613004000_fda_class_precedent_base_rates.sql` (table keyed `(moa_canonical, indication)` per Pedro 2026-05-25), `modal_workers/scripts/bc_class_precedent_refresher.py` (Wilson-CI aggregation from `fda_regulatory_events`, 20 Python tests), `bc_class_precedent_refresh_worker` Modal entrypoint in `orchestrator_app.py`, dispatch action `bc_class_precedent_refresh`, nightly pg_cron `20260613005000_bc_class_precedent_refresh_pg_cron.sql` at 06:20 UTC with empty-URL guard, and reactor `bc-pregate.ts` updated to read `approval_rate` via new `lookupClassPrecedent(asset_id)` (7 new Deno tests, 23 total pass). The pre-gate composite max climbs from 10 → 15 once the table is seeded; operator should bump `internal_config.bc_pregate_threshold` from 6 to 9 after a representative refresh.
+
+- **8-K Items 1.01/2.02/8.01 materiality classifier** — `modal_workers/scripts/audit_event_data_quality.py` `_count_in_window_8k()` stub replaced with a real query against `asset_documents → documents` filtering on `extensions.items` overlap with `MATERIAL_8K_ITEMS = {1.01, 2.02, 8.01}` and excluding `eval_harness.document_set`. New pure helpers `_extract_8k_items`, `_doc_has_material_8k_item`, `_filter_material_8k_rows` for unit testability (10 new Python tests, 36 total pass). Item codes are already in `documents.extensions.items` from EFTS — no re-ingestion required. Confounder evidence now surfaces `items_observed` for operator forensics.
+
+- **`sparse_class_warning` field added to `regulatory_history_v1.json`** — D-130 Condition 3 required this field be inspectable on every assessment. Schema in `conan-fda-orchestrator-plugin/skills/sub_agent_regulatory_history.md` now lists `sparse_class_warning` as required with shape `{fires: bool, n_precedents: int, threshold: int (default 5), rationale: string|null}`. Internal-loop step 6 instructs the sub-agent to emit `fires=true` whenever `base_rates.n < threshold` so downstream Stage 5 widens CIs rather than treating the point estimate as load-bearing. Closes the implementation gap that would have made D-130 Condition 3 unmeetable at the 2026-06-24 earliest-flip date.
+
+**Items drafted, pending operator apply.**
+
+- **FOMC emergency-meeting backfill** — `supabase/migrations/20260613003000_fomc_emergency_backfill.sql` seeds three canonical post-2018 emergency meetings (2020-03-03, 2020-03-15, 2020-03-23) as `meeting_type='emergency'` with `source='manual'` and the federalreserve.gov press-release URLs. Idempotent via `ON CONFLICT (fomc_date, meeting_type) DO NOTHING`. Defensive `DELETE … meeting_type='minutes'` cleanup on the same three dates handles prior misclassification by the parser. Pedro confirmed the three dates 2026-05-25; awaiting `supabase db push`.
+
+**Out of scope, still queued.**
+
+- `_count_sponsor_prior_p3` denormalization onto `fda_assets` (per D-129).
+- Polygon SPY history wiring for `check_spx_three_sigma` (per D-129).
+- `populate_next_catalyst_date()` rebuild RPC (per D-129).
+- EDGAR 8-K harvest path inside `harvest_fda_events.py` (per D-129).
+
+**Operator follow-up.** After deploying the BC refresher Modal endpoint, set `internal_config.modal_url_bc_class_precedent_refresher` to enable the daily cron. After one full refresh cycle populates `fda_class_precedent_base_rates` with a representative population, flip `internal_config.bc_pregate_threshold` from 6 to 9 to engage the v2 gate behavior. The reactor's `lookupClassPrecedent` returns 0 when the table is empty so the deploy order is non-strict — code can land before the table is seeded without changing observed gate behavior.

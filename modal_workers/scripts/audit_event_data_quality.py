@@ -45,7 +45,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -59,6 +59,13 @@ DEFAULT_SPX_SIGMA = 3.0
 LOW_VOLUME_RATIO = 0.25      # day's volume < 25% of trailing-90td median → low
 LOW_VOLUME_DAY_PCT = 0.20    # >20% of window days low → coverage failure
 T_PLUS_DAYS = 30             # confounder + coverage window length
+
+# Items 1.01 (Material Definitive Agreement), 2.02 (Results of Operations and
+# Financial Condition), 8.01 (Other Events) are the three 8-K item codes that
+# materially affect post-event returns. Any other item (e.g. 5.02 board
+# changes, 7.01 Reg-FD disclosure) is filtered out so a routine compensation
+# 8-K doesn't spuriously flag the event as confounded.
+MATERIAL_8K_ITEMS = frozenset({"1.01", "2.02", "8.01"})
 
 Verdict = Literal["clean", "confounded", "discard"]
 
@@ -214,10 +221,15 @@ def check_spx_three_sigma(
 
 def check_material_8k_in_window(
     *, ticker: str, in_window_8k_count: int, source_doc_excluded: bool = True,
+    items_observed: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Naive v1: any 8-K filed for same ticker in T+0..T+30 (excluding the
-    source doc). Phase 3b enhancement filters to specific Items (1.01, 2.02,
-    8.01) — for now we treat presence as a confounder.
+    """Trigger when ≥1 8-K filed for the same asset in T+0..T+30 carries a
+    material item code (1.01, 2.02, or 8.01) and isn't the source doc.
+
+    The caller (`_count_in_window_8k`) does the items filtering against
+    `MATERIAL_8K_ITEMS` so this helper stays pure. `items_observed` is the
+    union of item codes seen across the matched 8-Ks; surfaced into evidence
+    so an operator can spot-check why the confounder fired.
     """
     return {
         "triggered": in_window_8k_count > 0,
@@ -225,8 +237,27 @@ def check_material_8k_in_window(
             "ticker": ticker,
             "count": in_window_8k_count,
             "source_doc_excluded": source_doc_excluded,
+            "items_observed": sorted(set(items_observed or [])),
+            "material_items": sorted(MATERIAL_8K_ITEMS),
         },
     }
+
+
+def _extract_8k_items(extensions: Any) -> List[str]:
+    """Pull the items array off a documents.extensions JSONB. Returns [] when
+    the field is missing/malformed. Item codes are normalized to strings
+    (EFTS sometimes emits them as numbers like `1.01` vs `"1.01"`).
+    """
+    if not isinstance(extensions, dict):
+        return []
+    raw = extensions.get("items")
+    if not isinstance(raw, list):
+        return []
+    return [str(it) for it in raw if it not in (None, "")]
+
+
+def _doc_has_material_8k_item(extensions: Any) -> bool:
+    return any(it in MATERIAL_8K_ITEMS for it in _extract_8k_items(extensions))
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +349,9 @@ def audit_event(
         )
 
     ticker = row.get("ticker")
+    asset_id = row.get("asset_id")
     ref_date = _parse_iso_date(row.get("reference_assessment_date"))
-    if ticker is None or ref_date is None:
+    if ticker is None or ref_date is None or asset_id is None:
         return Q1Verdict(
             verdict="discard",
             reasons=["missing_ticker_or_ref_date"],
@@ -328,7 +360,12 @@ def audit_event(
     earnings_dates = _load_earnings_dates_for_ticker(sb, ticker)
     fomc_dates = _load_fomc_dates(sb)
     spy_returns = _load_spy_returns_in_window(sb, ref_date)
-    in_window_8k_count = _count_in_window_8k(sb, ticker=ticker, ref_date=ref_date)
+    material_8k_count, material_8k_items = _count_in_window_8k(
+        sb,
+        asset_id=asset_id,
+        ref_date=ref_date,
+        exclude_document_ids=row.get("document_set") or [],
+    )
     windows = _extract_windows_from_realized_outcome(row.get("realized_outcome_data"))
 
     confounders = {
@@ -342,7 +379,8 @@ def audit_event(
             threshold_sigma=spx_sigma_threshold,
         ),
         "material_8k_in_window": check_material_8k_in_window(
-            ticker=ticker, in_window_8k_count=in_window_8k_count,
+            ticker=ticker, in_window_8k_count=material_8k_count,
+            items_observed=material_8k_items,
         ),
     }
     coverage = {
@@ -373,8 +411,9 @@ def _load_eval_harness_row(sb: SupabaseClient, eval_harness_id: str) -> Optional
         "eval_harness",
         params={
             "select": (
-                "id,reference_assessment_date,realized_outcome_data,"
-                "tradeable_filter_pass,issuer_status,fda_assets!inner(ticker)"
+                "id,asset_id,reference_assessment_date,realized_outcome_data,"
+                "tradeable_filter_pass,issuer_status,document_set,"
+                "fda_assets!inner(ticker)"
             ),
             "id": f"eq.{eval_harness_id}",
             "limit": "1",
@@ -432,13 +471,70 @@ def _load_spy_returns_in_window(
 
 
 def _count_in_window_8k(
-    sb: SupabaseClient, *, ticker: str, ref_date: date,
-) -> int:
-    """Stub — would join asset_documents → documents on edgar 8-K source.
-    v1 returns 0 so the confounder doesn't fire spuriously while the
-    naive-vs-Items-1.01/2.02/8.01 classifier is being designed.
+    sb: SupabaseClient,
+    *,
+    asset_id: str,
+    ref_date: date,
+    exclude_document_ids: Iterable[str] = (),
+) -> tuple[int, List[str]]:
+    """Count 8-Ks linked to the asset, filed in T+0..T+30, carrying a
+    material item code (1.01 / 2.02 / 8.01). Documents in
+    `exclude_document_ids` (typically `eval_harness.document_set`) are
+    dropped so the assessment's own input docs don't self-trigger.
+
+    Returns (count, sorted_unique_items_observed). The items list feeds
+    `check_material_8k_in_window` evidence for operator forensics.
+
+    Item codes live in `documents.extensions.items` (populated by
+    `edgar_ingest.py` from the SEC EFTS `_source.items` array). 8-Ks
+    ingested before the EFTS items field was wired return [] from
+    `_extract_8k_items` and don't trigger — a safe-by-default gap that
+    can be closed by a backfill later if needed.
     """
-    return 0
+    floor = ref_date.isoformat()
+    ceil = (ref_date + timedelta(days=T_PLUS_DAYS)).isoformat()
+    rows = sb._rest_with_retry(
+        "GET",
+        "asset_documents",
+        params={
+            "select": "documents!inner(id,source,doc_type,published_at,extensions)",
+            "asset_id": f"eq.{asset_id}",
+            "documents.source": "eq.edgar",
+            "documents.doc_type": "eq.8-K",
+            "documents.and": f"(published_at.gte.{floor},published_at.lte.{ceil})",
+        },
+    ) or []
+    return _filter_material_8k_rows(rows, exclude_document_ids=exclude_document_ids)
+
+
+def _filter_material_8k_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    exclude_document_ids: Iterable[str] = (),
+) -> tuple[int, List[str]]:
+    """Pure helper: from raw PostgREST rows (asset_documents+documents inner
+    join), return (count, observed_items) for docs whose `extensions.items`
+    contains a material 8-K item and whose id isn't in `exclude_document_ids`.
+
+    A row's `documents` value can be a single object (inner join) or absent
+    (PostgREST collapsed it because the embed filter failed); both are
+    handled.
+    """
+    exclude = {str(x) for x in (exclude_document_ids or ()) if x}
+    count = 0
+    items_seen: set[str] = set()
+    for row in rows:
+        doc = row.get("documents")
+        if not isinstance(doc, dict):
+            continue
+        if str(doc.get("id")) in exclude:
+            continue
+        items = _extract_8k_items(doc.get("extensions"))
+        material_hits = [it for it in items if it in MATERIAL_8K_ITEMS]
+        if material_hits:
+            count += 1
+            items_seen.update(material_hits)
+    return count, sorted(items_seen)
 
 
 def _extract_windows_from_realized_outcome(realized: Any) -> List[Dict[str, Any]]:

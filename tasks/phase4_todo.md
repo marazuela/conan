@@ -28,11 +28,11 @@ Derived from the approved plan at `~/.claude/plans/plan-it-partitioned-thompson.
 
 ### Remaining for Phase 4 exit criterion (Pedro-side Supabase Studio)
 
-- [ ] Supabase Studio → Authentication → URL Configuration: Site URL `https://conan-dashboard.vercel.app`; Additional redirect URLs `https://conan-dashboard.vercel.app/**`, `https://*.vercel.app/auth/callback`, `http://localhost:3000/**`.
-- [ ] Supabase Studio → Authentication → Users: invite Pedro's email (+ any collaborators).
-- [ ] Pedro cold-logs-in via magic link and walks the 11 routes per `dashboard/README.md` §5.
-- [ ] (Optional) DNS: `conan.solutz.com` CNAME → `cname.vercel-dns.com`; add domain in Vercel → Project → Domains.
-- [ ] (Optional) fanout edge function env: `DASHBOARD_URL=https://conan-dashboard.vercel.app` (or custom domain).
+- [x] Supabase Studio → Authentication → URL Configuration. Verified 2026-05-21 via management API: Site URL `https://conan-dashboard.vercel.app`; uri_allow_list includes `https://conan-dashboard.vercel.app/**`, `https://conan-dashboard-*.vercel.app/**`, `https://*.vercel.app/auth/callback`, `http://localhost:3000/**`, `http://localhost:3456/**`.
+- [x] Supabase Studio → Authentication → Users: `pedro@solutz.com` and `javiergorordo13@hotmail.com` present, email-confirmed.
+- [x] Magic-link smoke: `pedro@solutz.com` last_sign_in 2026-05-06; `javiergorordo13@hotmail.com` last_sign_in 2026-04-20.
+- [x] fanout edge function env: `DASHBOARD_URL=https://conan-dashboard.vercel.app` set 2026-05-21 (previously unset → emails were defaulting to `https://conan.example.com` placeholder).
+- [ ] (Optional) DNS: `conan.solutz.com` CNAME → `cname.vercel-dns.com`; add domain in Vercel → Project → Domains. Note: Pedro's Vercel account currently owns `solutz.app`, not `solutz.com` — confirm the target host before doing the CNAME.
 
 ## Smoke summary (local, unauthed — pre-deploy)
 

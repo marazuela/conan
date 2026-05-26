@@ -61,7 +61,9 @@ import {
   type BcPregateInputs,
   configFlagBool,
   configThreshold,
+  classPrecedentFromApprovalRate,
   inputsFromRawPayload,
+  normalizeClassField,
   scoreBcPregate,
 } from "./bc-pregate.ts";
 import { fetchWithRetry } from "./fetch-retry.ts";
@@ -568,7 +570,7 @@ async function processAssetDocument(link: AssetDocumentRow) {
   // writes a status='declined' audit row INSTEAD of enqueuing pending. When
   // shadow (default), persists the score on the pending row for offline
   // measurement and lets dispatch proceed. See plan WI-2.
-  const pregate = await evaluateBcPreGate(link.document_id);
+  const pregate = await evaluateBcPreGate(link.asset_id, link.document_id);
 
   if (pregate.enabled && !pregate.passed) {
     // Active mode + below threshold → write declined audit row, skip dispatch.
@@ -647,7 +649,39 @@ function _recordOrNull(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-async function evaluateBcPreGate(document_id: string): Promise<{
+/**
+ * Look up the class-peer approval rate for an asset by joining its
+ * (mechanism, indication) → `fda_class_precedent_base_rates`. Returns 0
+ * when the asset or the base-rates row is missing — the safe default that
+ * leaves the gate's class_precedent term at 0 (i.e. behaviorally identical
+ * to v1 stub).
+ */
+async function lookupClassPrecedent(asset_id: string): Promise<number> {
+  const { data: assetRow, error: assetErr } = await sb
+    .from("fda_assets")
+    .select("mechanism, indication")
+    .eq("id", asset_id)
+    .maybeSingle();
+  if (assetErr) throw assetErr;
+  if (!assetRow) return 0;
+  const asset = assetRow as { mechanism?: string | null; indication?: string | null };
+  const moa = normalizeClassField(asset.mechanism);
+  const ind = normalizeClassField(asset.indication);
+  if (!moa || !ind) return 0;
+  const { data: rateRow, error: rateErr } = await sb
+    .from("fda_class_precedent_base_rates")
+    .select("approval_rate")
+    .eq("moa_canonical", moa)
+    .eq("indication", ind)
+    .maybeSingle();
+  if (rateErr) throw rateErr;
+  if (!rateRow) return 0;
+  return classPrecedentFromApprovalRate(
+    (rateRow as { approval_rate?: number | null }).approval_rate,
+  );
+}
+
+async function evaluateBcPreGate(asset_id: string, document_id: string): Promise<{
   enabled: boolean;
   passed: boolean;
   score: number;
@@ -727,6 +761,11 @@ async function evaluateBcPreGate(document_id: string): Promise<{
   }
 
   const inputs = inputsFromRawPayload(rawPayload);
+  // Override raw_payload's class_precedent (typically absent or stubbed to 0)
+  // with the refresher-computed base rate. When the table is empty / no row
+  // exists for this asset, lookupClassPrecedent returns 0 — behaviorally
+  // identical to the v1 stub, so this is forward-compatible.
+  inputs.class_precedent = await lookupClassPrecedent(asset_id);
   const r = scoreBcPregate(inputs, threshold);
   return { enabled, ...r };
 }
