@@ -825,6 +825,29 @@ def fda_event_harvest_daily_worker(
     return asdict(result)
 
 
+@app.function(
+    image=image,
+    timeout=300,  # 5min: one bulk fetch + grouped upsert; small dataset today
+    secrets=[supabase_secrets],
+)
+def bc_class_precedent_refresh_worker(
+    lookback_years: int = 10,
+    apply: bool = True,
+) -> Dict[str, Any]:
+    """WI-2 follow-up — refresh `fda_class_precedent_base_rates` from
+    `fda_regulatory_events`. Reactor reads the resulting rows to fill the
+    class_precedent input in the BC convergence pre-gate (was stubbed to 0
+    in v1). See `modal_workers/scripts/bc_class_precedent_refresher.py`."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.bc_class_precedent_refresher import refresh
+
+    return refresh(
+        SupabaseClient(),
+        lookback_years=lookback_years,
+        apply=apply,
+    )
+
+
 # ============================================================================
 # compute_v3_dispatch — multiplex FastAPI endpoint
 #
@@ -873,6 +896,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "q2_audit_run",
     "calibration_refit_run",
     "fda_event_harvest_daily",
+    "bc_class_precedent_refresh",
 })
 
 # Spawn-only actions: dispatch fires the worker and returns immediately. Used
@@ -888,6 +912,7 @@ _SPAWN_ONLY_ACTIONS: Dict[str, str] = {
     "q2_audit_run": "q2_audit_run_worker",
     "calibration_refit_run": "calibration_refit_run_worker",
     "fda_event_harvest_daily": "fda_event_harvest_daily_worker",
+    "bc_class_precedent_refresh": "bc_class_precedent_refresh_worker",
 }
 
 
@@ -1035,6 +1060,17 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
         kwargs = {}
         for k in ("start_date", "end_date"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "bc_class_precedent_refresh":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "bc_class_precedent_refresh_worker",
+        )
+        kwargs = {}
+        for k in ("lookback_years", "apply"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
