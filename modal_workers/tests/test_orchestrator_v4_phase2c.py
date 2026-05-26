@@ -97,21 +97,21 @@ def test_v4_logs_collapse_for_observability():
 
 
 # ---------------------------------------------------------------------------
-# v3 behavior unchanged when flag unset
+# v3 rollback (ORCH_V4=0) leaves the operator knobs alone
 # ---------------------------------------------------------------------------
 
-def test_v3_default_does_not_force_knobs(monkeypatch):
-    """The forced-knob block lives INSIDE `if is_v4:` so v3 callers retain
-    their operator-passed values. Tested by recomputing the gate value the
-    way the function does."""
-    monkeypatch.delenv("ORCH_V4", raising=False)
+def test_v3_rollback_does_not_force_knobs(monkeypatch):
+    """Phase 6a flipped the default to v4. The forced-knob block lives inside
+    `if is_v4:` so v3-rollback callers (ORCH_V4=0) retain their operator-passed
+    values. Tested by recomputing the gate value the way the function does."""
+    monkeypatch.setenv("ORCH_V4", "0")
 
-    # The function-level branch only runs when the env var is set.
-    is_v4 = os.environ.get("ORCH_V4") == "1"
+    # Phase 6a default semantics: ORCH_V4=0 is the explicit rollback path.
+    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
     assert is_v4 is False
 
-    # And the source must keep these forces strictly inside the v4 block —
-    # no top-level unconditional overwrites snuck in.
+    # And the source must keep these forces strictly inside the `if is_v4:`
+    # block — no top-level unconditional overwrites snuck in.
     from orchestrator_runtime import runtime
     source = inspect.getsource(runtime._run_one_inner)
 
@@ -124,7 +124,7 @@ def test_v3_default_does_not_force_knobs(monkeypatch):
         count=1,
     )
     # These would be regressions: anywhere outside the v4 block reassigning
-    # the three knobs would silently break v3.
+    # the three knobs would silently break v3-rollback.
     assert not re.search(
         r"^    ensemble_n\s*=\s*1\s*$", stripped, re.MULTILINE
     ), "ensemble_n=1 reassigned outside v4 block"

@@ -2247,7 +2247,11 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    enable_premortem: bool,
                    dry_run: bool,
                    parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    # v4 (Phase 2a + 2c): env-driven flag. When set:
+    # v4 (Phase 2a + 2c + 6a): env-driven flag. v4 is now the default;
+    # ORCH_V4=0 is the explicit rollback to the v3 multi-stage pipeline
+    # (no code change required — env var update + Modal redeploy).
+    #
+    # When v4 is active (default):
     #   - Stage 1 uses STAGE_1_V4_SYSTEM (FDA + commercial dual mandate; the
     #     prompt absorbs hypothesis enumeration + adversarial premortem inline
     #     and self-caps conviction_pct ≤30 if all hypotheses falsify).
@@ -2260,19 +2264,25 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     #   - Stage 6 ensemble is forced to single-shot (ensemble_n=1). Variance
     #     reduction is no longer the default; opt-in for backtest cohorts.
     # Persist stamps orchestrator_version_v4=true + signal_category +
-    # commercial_dimensions. Phase 6 deletes this whole branch + the bypassed
-    # Stage 2/3/6/7 code paths once the flag flip stabilizes.
-    is_v4 = os.environ.get("ORCH_V4") == "1"
+    # commercial_dimensions. Phase 6c deletes this whole branch + the bypassed
+    # Stage 2/3/6/7 code paths after the flag-flip observation period
+    # (~14 days) confirms v4 quality + cost are stable.
+    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
     stage_1_prompt = STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM
     stage_9_prompt = STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM
     if is_v4:
         logger.info(
-            "v4 path active (ORCH_V4=1): commercial dual-mandate prompts; "
+            "v4 path active (default): commercial dual-mandate prompts; "
             "stages 2/3/6/semantic-7 collapsed",
         )
         ensemble_n = 1
         enable_premortem = False
         constitutional_skip_semantic = True
+    else:
+        logger.warning(
+            "v4 path DISABLED via ORCH_V4=0 — running v3 multi-stage pipeline. "
+            "This is the Phase 6 rollback path; re-enable by unsetting the env var.",
+        )
 
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 

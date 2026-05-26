@@ -164,7 +164,10 @@ def test_run_one_inner_reads_orch_v4_env_var():
     from orchestrator_runtime import runtime
 
     source = inspect.getsource(runtime._run_one_inner)
-    assert 'os.environ.get("ORCH_V4")' in source, (
+    # Phase 6a flipped the default — the env read now carries a `"1"` default
+    # arg so unset → v4. Either form (Phase 2a `("ORCH_V4")` or Phase 6a
+    # `("ORCH_V4", "1")`) is a runtime read of the same env var, so accept both.
+    assert 'os.environ.get("ORCH_V4"' in source, (
         "_run_one_inner must read ORCH_V4 from os.environ (runtime read, "
         "not module-load constant)"
     )
@@ -177,33 +180,46 @@ def test_run_one_inner_reads_orch_v4_env_var():
     assert "signal_category=" in source
 
 
-def test_run_one_inner_v3_default_when_flag_unset(monkeypatch):
-    """Smoke check: removing ORCH_V4 returns the v3 prompt selection logic.
+def test_run_one_inner_v4_default_when_flag_unset(monkeypatch):
+    """Phase 6a flipped the default. Unset ORCH_V4 now means v4 runs.
 
-    We can't run the full pipeline without an Anthropic key, but we can
-    verify the prompt-selection lines compute the right values when imported
-    and called with a known env state.
+    Smoke check: re-evaluate the selection logic the way _run_one_inner does.
+    If this diverges from the function body, the function body has drifted.
     """
     monkeypatch.delenv("ORCH_V4", raising=False)
-    # Re-evaluate the selection logic the way _run_one_inner does. If this
-    # diverges from the function body, the function body has drifted.
     from orchestrator_runtime.runtime import (
         STAGE_1_SYSTEM, STAGE_1_V4_SYSTEM, STAGE_9_SYSTEM, STAGE_9_V4_SYSTEM,
     )
 
-    is_v4 = os.environ.get("ORCH_V4") == "1"
+    # Phase 6a default: v4 unless ORCH_V4=0 is explicitly set.
+    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
+    assert is_v4 is True
+    assert (STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM) is STAGE_1_V4_SYSTEM
+    assert (STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM) is STAGE_9_V4_SYSTEM
+
+
+def test_run_one_inner_v3_rollback_when_flag_explicitly_zero(monkeypatch):
+    """Phase 6a invariant: ORCH_V4=0 is the operator rollback path. Must
+    still route to the v3 multi-stage pipeline without code changes."""
+    monkeypatch.setenv("ORCH_V4", "0")
+    from orchestrator_runtime.runtime import (
+        STAGE_1_SYSTEM, STAGE_1_V4_SYSTEM, STAGE_9_SYSTEM, STAGE_9_V4_SYSTEM,
+    )
+
+    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
     assert is_v4 is False
     assert (STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM) is STAGE_1_SYSTEM
     assert (STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM) is STAGE_9_SYSTEM
 
 
-def test_run_one_inner_v4_branch_when_flag_set(monkeypatch):
+def test_run_one_inner_v4_branch_when_flag_set_explicit(monkeypatch):
+    """Explicit ORCH_V4=1 still works (backward-compat with pre-6a callers)."""
     monkeypatch.setenv("ORCH_V4", "1")
     from orchestrator_runtime.runtime import (
         STAGE_1_SYSTEM, STAGE_1_V4_SYSTEM, STAGE_9_SYSTEM, STAGE_9_V4_SYSTEM,
     )
 
-    is_v4 = os.environ.get("ORCH_V4") == "1"
+    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
     assert is_v4 is True
     assert (STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM) is STAGE_1_V4_SYSTEM
     assert (STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM) is STAGE_9_V4_SYSTEM
