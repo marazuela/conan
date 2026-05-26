@@ -801,6 +801,163 @@ def bc_class_precedent_refresh_worker(
 
 
 # ============================================================================
+# Phase 3a / 3b / 4 — calendar + audit + harvest workers.
+#
+# These are plain @app.function workers (no fastapi_endpoint) that
+# compute_v3_dispatch spawns fire-and-forget so the multiplex endpoint
+# returns in <1s while the actual job runs up to its own timeout. Pattern
+# mirrors orchestrator_drain_queue / feedback_loop_kickoff.
+#
+# The pg_cron jobs in 20260605000050 (earnings), 20260605000060 (FOMC),
+# and 20260612000020 (harvest) POST to compute_v3_dispatch with the
+# corresponding action — that's the only entrypoint operators need.
+# ============================================================================
+
+
+@app.function(
+    image=image,
+    timeout=900,  # 15min: ~400 tickers × ~100ms/ticker + 2s/batch-of-50
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def phase3a_earnings_calendar_fetch_worker(
+    window_days: int = 7,
+    forward_days: int = 90,
+    tickers: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Daily refresh of public.earnings_calendar via yfinance (primary) +
+    Polygon (fallback). Targets the tradeable-filter-passed universe by
+    default. Phase 3a — Q1 audit feeder."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.fetchers.universe.earnings_calendar import (
+        fetch, load_tradeable_tickers,
+    )
+
+    sb = SupabaseClient()
+    targets = tickers if tickers else load_tradeable_tickers(sb)
+    return fetch(
+        sb,
+        tickers=targets,
+        lookback_days=window_days,
+        forward_days=forward_days,
+        dry_run=False,
+    )
+
+
+@app.function(
+    image=image,
+    timeout=60,  # single HTTP fetch + parse
+    secrets=[supabase_secrets],
+)
+def phase3a_fomc_calendar_refresh_worker(year: Optional[int] = None) -> Dict[str, Any]:
+    """Monthly refresh of public.fomc_calendar via federalreserve.gov
+    scrape. Phase 3a — Q1 audit feeder."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.fetchers.universe.fomc_calendar import fetch
+
+    return fetch(SupabaseClient(), year=year, dry_run=False)
+
+
+@app.function(
+    image=image,
+    timeout=600,  # 10min: bounded by Polygon SPY pulls per event
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def q1_audit_run_worker(re_audit: bool = False) -> Dict[str, int]:
+    """WI-5 Q1 confounder + coverage audit across eval_harness rows.
+    Re-audits in place when re_audit=True."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_event_data_quality import _audit_all
+
+    return _audit_all(SupabaseClient(), re_audit=re_audit, apply=True)
+
+
+@app.function(
+    image=image,
+    timeout=120,  # single cohort aggregation
+    secrets=[supabase_secrets],
+)
+def q2_audit_run_worker(profile: str = "binary_catalyst") -> Dict[str, Any]:
+    """WI-6 Q2 sample-balance audit for the q1_verdict='clean' cohort.
+    Persists a row in eval_sample_balance_audits and returns the verdict
+    + axes summary."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_sample_balance import (
+        audit_cohort, persist_q2_verdict,
+    )
+
+    sb = SupabaseClient()
+    verdict = audit_cohort(sb, profile=profile)
+    persist_q2_verdict(sb, verdict)
+    return {
+        "verdict": verdict.verdict,
+        "cohort_hash": verdict.cohort_hash,
+        "cohort_size": verdict.cohort_size,
+        "phase5_triggers": verdict.phase5_triggers,
+        "axes": {k: v.as_dict() for k, v in verdict.axes.items()},
+    }
+
+
+@app.function(
+    image=image,
+    timeout=900,  # 15min: openFDA paging over a daily window
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def fda_event_harvest_daily_worker(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """WI-7 M1 FDA-only ongoing harvest. Defaults to (latest_checkpoint+1d
+    ... today). After harvest, sweeps fda_assets.next_catalyst_date from
+    the new fda_regulatory_events rows."""
+    from datetime import date, timedelta
+    from dataclasses import asdict
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.harvest_fda_events import (
+        harvest, latest_checkpoint,
+    )
+
+    sb = SupabaseClient()
+    today = date.today()
+    if end_date:
+        end = date.fromisoformat(end_date)
+    else:
+        end = today
+    if start_date:
+        start = date.fromisoformat(start_date)
+    else:
+        last = latest_checkpoint(sb, "openfda")
+        start = (last + timedelta(days=1)) if last else (today - timedelta(days=7))
+
+    result = harvest(sb, start_date=start, end_date=end,
+                    sources=("openfda",), dry_run=False)
+    return asdict(result)
+
+
+@app.function(
+    image=image,
+    timeout=300,  # 5min: one bulk fetch + grouped upsert; small dataset today
+    secrets=[supabase_secrets],
+)
+def bc_class_precedent_refresh_worker(
+    lookback_years: int = 10,
+    apply: bool = True,
+) -> Dict[str, Any]:
+    """WI-2 follow-up — refresh `fda_class_precedent_base_rates` from
+    `fda_regulatory_events`. Reactor reads the resulting rows to fill the
+    class_precedent input in the BC convergence pre-gate (was stubbed to 0
+    in v1). See `modal_workers/scripts/bc_class_precedent_refresher.py`."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.bc_class_precedent_refresher import refresh
+
+    return refresh(
+        SupabaseClient(),
+        lookback_years=lookback_years,
+        apply=apply,
+    )
+
+
+# ============================================================================
 # compute_v3_dispatch — multiplex FastAPI endpoint
 #
 # One Modal endpoint slot, N logical compute operations. Cowork-side skills

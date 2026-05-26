@@ -67,10 +67,9 @@ CREATE POLICY fda_class_precedent_base_rates_select
 -- internal_config row so the operator can verify the refresher pipeline is
 -- pointed at a Modal endpoint before the nightly pg_cron starts firing. Empty
 -- value keeps the cron job a no-op (matches the Phase 3a pattern).
-INSERT INTO public.internal_config (key, value, description)
-VALUES (
-  'modal_url_bc_class_precedent_refresher',
-  '',
-  'Modal entrypoint URL for bc_class_precedent_refresher (D-129 WI-2 follow-up). Empty = pg_cron skips. Bump bc_pregate_threshold from 6 to 9 after first full refresh seeds the table.'
-)
+-- internal_config has no description column on this project; intent documented
+-- in the cron migration's COMMENT instead. Bump bc_pregate_threshold from 6 to
+-- 9 after first full refresh seeds the table.
+INSERT INTO public.internal_config (key, value)
+VALUES ('modal_url_bc_class_precedent_refresher', '')
 ON CONFLICT (key) DO NOTHING;
