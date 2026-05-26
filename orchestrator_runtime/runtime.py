@@ -81,7 +81,7 @@ from orchestrator_runtime.sub_agent_dispatcher import (
     dispatch_sub_agent_tool,
     reset_budget as reset_sub_agent_budget,
 )
-from orchestrator_runtime.tier2 import validate_evidence_packet
+from orchestrator_runtime.evidence_packet import validate_evidence_packet
 from orchestrator_runtime.hypothesis import (
     STAGE_2_SYSTEM,
     HypothesisResult,

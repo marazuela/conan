@@ -75,6 +75,14 @@ image = (
         "../conan-cowork-skills/schemas",
         "/conan-cowork-skills/schemas",
     )
+    # v4 Phase 6a: flip ORCH_V4 default to 1 so production runs the v4
+    # single-pass FDA+commercial pipeline by default (collapsed stages,
+    # commercial_opportunity sub-agent, deterministic citation validator).
+    # Reversible by setting ORCH_V4=0 in a function-level env or Modal
+    # secret — no redeploy needed for rollback. Phase 6c will delete the
+    # v3 codepath and remove this env entirely once observation period
+    # passes.
+    .env({"ORCH_V4": "1"})
 )
 
 # Secrets
@@ -589,79 +597,23 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 
 
 # ============================================================================
-# Phase 4B — Tier-2 (Cowork bulk) dispatch surface
+# Tier-2 (Cowork bulk) — DELETED in v4 Phase 6b.
 # ============================================================================
 #
-# Three sync Modal functions form the contract Cowork calls into. The
-# bulk_orchestrator skill itself runs ON the Cowork machine (not on Modal);
-# these endpoints are the bridge between Cowork's local skill execution and
-# the production DB / queue.
+# Previously hosted three Modal functions (tier2_bulk_enqueue, tier2_complete,
+# tier2_fail) bridging the Cowork `bulk_orchestrator` skill to the production
+# DB. Removed alongside orchestrator_runtime/tier2.py.
 #
-# Cowork-side flow (per scheduled cadence):
-#   1. Resolve a list of asset_ids due (per fda_assets.watch_priority).
-#   2. Modal call: tier2_bulk_enqueue(asset_ids) → for each asset, creates a
-#      pending orchestrator_runs row (tier=2) AND returns the input blob the
-#      skill consumes. Single round-trip.
-#   3. For each asset, run the bulk_orchestrator skill against the blob.
-#   4. Modal call: tier2_complete(run_id, payload) per success → validates,
-#      persists tier=2 convergence_assessments, applies §Escalation rule
-#      (high conviction / direction change / new primary doc), enqueues
-#      tier1 escalation if triggered, marks the run completed.
-#   5. Modal call: tier2_fail(run_id, error) per skill error → marks failed.
+# Replacement: under v4, re-analysis is purely event-driven via the reactor's
+# new_doc / cross_source / operator_refresh triggers → orchestrator_drain_queue.
+# Scheduled bulk re-runs are not needed when nothing has changed; when
+# something has changed, the reactor catches it. See ~/.claude/plans/proud-
+# booping-seal.md §Phase 6.
 #
-# All deterministic logic (validator, persister, escalation rule) lives in
-# orchestrator_runtime/tier2.py — these endpoints are thin glue.
+# The fda_assets.watch_priority column stays (still useful for prioritizing
+# operator attention in dashboards), but the cadence routine that drained it
+# into tier2_bulk_enqueue is gone.
 # ============================================================================
-
-@app.function(
-    image=image,
-    timeout=120,
-    secrets=[supabase_secrets],
-)
-def tier2_bulk_enqueue(asset_ids: list) -> Dict[str, Any]:
-    """Phase 4B: enqueue Tier-2 scheduled bulk runs. Thin wrapper around
-    `orchestrator_runtime.tier2.enqueue_tier2_bulk` — see that function for
-    the full contract."""
-    from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import enqueue_tier2_bulk
-
-    return enqueue_tier2_bulk(SupabaseClient(), asset_ids)
-
-
-@app.function(
-    image=image,
-    timeout=120,
-    secrets=[supabase_secrets],
-)
-def tier2_complete(
-    run_id: str,
-    payload: Dict[str, Any],
-    cost_usd: float = 0.0,
-    latency_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Phase 4B: Cowork posts a completed Tier-2 skill run here. Thin
-    wrapper around `orchestrator_runtime.tier2.complete_tier2_run`."""
-    from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import complete_tier2_run
-
-    return complete_tier2_run(
-        SupabaseClient(), run_id, payload,
-        cost_usd=cost_usd, latency_ms=latency_ms,
-    )
-
-
-@app.function(
-    image=image,
-    timeout=15,
-    secrets=[supabase_secrets],
-)
-def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
-    """Phase 4B: Cowork reports a Tier-2 skill error. Thin wrapper around
-    `orchestrator_runtime.tier2.fail_tier2_run`."""
-    from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import fail_tier2_run
-
-    return fail_tier2_run(SupabaseClient(), run_id, error_message)
 
 
 # ============================================================================
@@ -866,25 +818,23 @@ def bc_class_precedent_refresh_worker(
 # 401 on mismatch, 500 on server misconfiguration).
 #
 # Action contract:
-#   tier2_bulk_enqueue: args={asset_ids: [str, ...]}
-#   tier2_complete:    args={run_id, payload, cost_usd?, latency_ms?}
-#   tier2_fail:        args={run_id, error_message}
 #   ic_memo_run:       args={assessment_id, question?, persist?}
 #
 # Asset linking and fact extraction intentionally are not exposed here. They
 # are local skill workflows now, so production cannot spend the Modal Anthropic
 # API key on background extraction/classification.
 #
+# Tier-2 actions (tier2_bulk_enqueue / tier2_complete / tier2_fail) were
+# removed in v4 Phase 6b — the Cowork bulk_orchestrator pipeline is sunset.
+# Re-analysis under v4 is purely event-driven via the reactor.
+#
 # Each action's response shape matches the underlying runtime helper's
-# return value verbatim — see orchestrator_runtime.tier2 / ic_memo_runner
-# for the per-action contracts.
+# return value verbatim — see orchestrator_runtime/ic_memo_runner.py for the
+# per-action contract.
 # ============================================================================
 
 # Importable for tests (without spinning up Modal at import time).
 COMPUTE_V3_ACTIONS = frozenset({
-    "tier2_bulk_enqueue",
-    "tier2_complete",
-    "tier2_fail",
     "ic_memo_run",
     "feedback_loop_kickoff",
     "orchestrator_drain_queue",
@@ -1077,27 +1027,14 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         return {"spawned": True, "function_call_id": handle.object_id}
 
     from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import (
-        complete_tier2_run,
-        enqueue_tier2_bulk,
-        fail_tier2_run,
-    )
     from orchestrator_runtime.ic_memo_runner import run_ic_memo
 
     sb = SupabaseClient()
-    if action == "tier2_bulk_enqueue":
-        return enqueue_tier2_bulk(sb, args["asset_ids"])
-    if action == "tier2_complete":
-        return complete_tier2_run(
-            sb,
-            args["run_id"],
-            args["payload"],
-            cost_usd=args.get("cost_usd", 0.0),
-            latency_ms=args.get("latency_ms"),
-        )
-    if action == "tier2_fail":
-        return fail_tier2_run(sb, args["run_id"], args.get("error_message", ""))
-    # ic_memo_run
+    # Only ic_memo_run remains as an inline (non-spawn) action — the Tier-2
+    # tier2_bulk_enqueue / tier2_complete / tier2_fail actions were deleted
+    # in v4 Phase 6b. Everything else routes via the spawn-only branches
+    # above (feedback_loop_kickoff, orchestrator_drain_queue, calendar +
+    # audit + harvest workers, seed_fda_asset_aliases_refresh).
     return run_ic_memo(
         sb,
         args["assessment_id"],

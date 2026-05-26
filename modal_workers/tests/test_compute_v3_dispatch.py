@@ -80,96 +80,17 @@ def test_dispatch_unknown_action_raises_400():
     assert exc_info.value.status_code == 400
     detail = exc_info.value.detail
     assert "valid_actions" in detail
-    assert "tier2_bulk_enqueue" in detail["valid_actions"]
+    # Phase 6b: tier2_* actions were removed. The remaining ic_memo_run is a
+    # stable sentinel for the action-list invariant.
+    assert "ic_memo_run" in detail["valid_actions"]
 
 
-def test_dispatch_routes_tier2_bulk_enqueue(monkeypatch):
-    """Ensure the dispatcher passes through to enqueue_tier2_bulk."""
-    captured: Dict[str, Any] = {}
-
-    def fake_enqueue(sb, asset_ids):
-        captured["sb"] = sb
-        captured["asset_ids"] = asset_ids
-        return {"enqueued": [{"asset_id": "a", "run_id": "r"}],
-                "failed": [], "enqueued_count": 1, "failed_count": 0}
-
-    monkeypatch.setattr("orchestrator_runtime.tier2.enqueue_tier2_bulk",
-                        fake_enqueue)
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    out = _dispatch_compute_v3_action(
-        "tier2_bulk_enqueue", {"asset_ids": ["a1", "a2"]},
-    )
-    assert out["enqueued_count"] == 1
-    assert captured["asset_ids"] == ["a1", "a2"]
-
-
-def test_dispatch_routes_tier2_complete(monkeypatch):
-    captured: Dict[str, Any] = {}
-
-    def fake_complete(sb, run_id, payload, *, cost_usd=0.0, latency_ms=None):
-        captured["run_id"] = run_id
-        captured["payload"] = payload
-        captured["cost_usd"] = cost_usd
-        captured["latency_ms"] = latency_ms
-        return {"status": "completed", "assessment_id": "a-1",
-                "escalated": False, "escalation_reasons": [],
-                "escalation_run_id": None}
-
-    monkeypatch.setattr("orchestrator_runtime.tier2.complete_tier2_run",
-                        fake_complete)
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    out = _dispatch_compute_v3_action("tier2_complete", {
-        "run_id": "run-1",
-        "payload": {"tier": 2, "thesis_direction": "long"},
-        "cost_usd": 0.42,
-        "latency_ms": 45000,
-    })
-    assert out["status"] == "completed"
-    assert captured["run_id"] == "run-1"
-    assert captured["cost_usd"] == 0.42
-    assert captured["latency_ms"] == 45000
-
-
-def test_dispatch_tier2_complete_uses_defaults_when_optional_args_missing(monkeypatch):
-    """cost_usd and latency_ms are optional in the contract; verify defaults."""
-    captured: Dict[str, Any] = {}
-
-    def fake_complete(sb, run_id, payload, *, cost_usd=0.0, latency_ms=None):
-        captured["cost_usd"] = cost_usd
-        captured["latency_ms"] = latency_ms
-        return {"status": "completed"}
-
-    monkeypatch.setattr("orchestrator_runtime.tier2.complete_tier2_run",
-                        fake_complete)
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    _dispatch_compute_v3_action("tier2_complete", {
-        "run_id": "run-1",
-        "payload": {},
-    })
-    assert captured["cost_usd"] == 0.0
-    assert captured["latency_ms"] is None
-
-
-def test_dispatch_routes_tier2_fail(monkeypatch):
-    captured: Dict[str, Any] = {}
-
-    def fake_fail(sb, run_id, error_message):
-        captured["run_id"] = run_id
-        captured["error_message"] = error_message
-        return {"run_id": run_id, "status": "failed"}
-
-    monkeypatch.setattr("orchestrator_runtime.tier2.fail_tier2_run",
-                        fake_fail)
-    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    out = _dispatch_compute_v3_action("tier2_fail", {
-        "run_id": "run-9", "error_message": "modal cold-start timeout",
-    })
-    assert out["status"] == "failed"
-    assert captured["error_message"] == "modal cold-start timeout"
+# v4 Phase 6b: test_dispatch_routes_tier2_bulk_enqueue,
+# test_dispatch_routes_tier2_complete,
+# test_dispatch_tier2_complete_uses_defaults_when_optional_args_missing,
+# test_dispatch_routes_tier2_fail — DELETED. The Cowork bulk_orchestrator
+# pipeline is sunset; re-analysis under v4 is purely event-driven via the
+# reactor.
 
 
 def test_dispatch_routes_ic_memo_run(monkeypatch):
@@ -220,17 +141,9 @@ def test_dispatch_ic_memo_run_uses_defaults(monkeypatch):
 def test_dispatch_required_args_missing_raises_keyerror(monkeypatch):
     """Missing required args bubble as KeyError → FastAPI translates to
     a 500 on production. Tests assert the exception type rather than HTTP
-    response code (the dispatcher itself doesn't translate)."""
+    response code (the dispatcher itself doesn't translate). Tier-2
+    cases removed in Phase 6b — those actions no longer exist."""
     from modal_workers.orchestrator_app import _dispatch_compute_v3_action
-
-    with pytest.raises(KeyError, match="asset_ids"):
-        _dispatch_compute_v3_action("tier2_bulk_enqueue", {})
-
-    with pytest.raises(KeyError, match="run_id"):
-        _dispatch_compute_v3_action("tier2_complete", {"payload": {}})
-
-    with pytest.raises(KeyError, match="run_id"):
-        _dispatch_compute_v3_action("tier2_fail", {})
 
     with pytest.raises(KeyError, match="assessment_id"):
         _dispatch_compute_v3_action("ic_memo_run", {})
@@ -247,9 +160,8 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
     from modal_workers.orchestrator_app import COMPUTE_V3_ACTIONS
 
     assert COMPUTE_V3_ACTIONS == frozenset({
-        "tier2_bulk_enqueue",
-        "tier2_complete",
-        "tier2_fail",
+        # Tier-2 actions removed in v4 Phase 6b — Cowork bulk_orchestrator
+        # pipeline sunset; re-analysis is event-driven only under v4.
         "ic_memo_run",
         "feedback_loop_kickoff",
         "orchestrator_drain_queue",

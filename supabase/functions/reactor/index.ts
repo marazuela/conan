@@ -144,8 +144,10 @@ const FDA_PROFILES_ROUTED_TO_ORCHESTRATOR = new Set([
 
 // Cross-source coalesce window for asset_documents → orchestrator_runs.
 // If a sibling primary doc was linked to the same asset in the last 24h,
-// we tag the new run as 'cross_source' (Tier 1 trigger per spec) instead
-// of 'new_doc' (Tier 2 trigger).
+// we tag the new run as 'cross_source'; otherwise 'new_doc'. Both flow to
+// the Tier-1 drain queue under v4 (Phase 6b removed the Tier-2 cadence
+// path). The trigger_type taxonomy is retained for observability and
+// downstream filtering (e.g. dispersion_abstain on cross_source).
 const CROSS_SOURCE_WINDOW_HOURS = 24;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
