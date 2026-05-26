@@ -33,7 +33,19 @@ from typing import Dict, List, Tuple, Any, Optional
 # Profile weight tables
 # --------------------------------------------------------------------
 
-RUBRIC_VERSION = 1
+RUBRIC_VERSION = 2
+
+# Policy covenant (Phase 5, v4 architecture simplification):
+#   Stock price, market cap, and recent price action MUST NOT participate
+#   in band assignment or discard selection inside this module. They are
+#   contextual inputs only — surfaced in the dashboard, used by the
+#   post-catalyst fallback in pre_edge_monitor.py (operator-overridable),
+#   but never a hard kill condition on a scored signal.
+#
+#   The corresponding lint lives at modal_workers/tests/test_no_price_kill_
+#   in_rubric.py and greps this module for market_cap / stock_price /
+#   price_pct participating in classify_band or discard flow. Don't disable
+#   it without updating this comment.
 
 WEIGHTS: Dict[str, Dict[str, float]] = {
     "merger_arb": {
@@ -59,6 +71,12 @@ WEIGHTS: Dict[str, Dict[str, float]] = {
         "competitive_landscape": 1.5,
         "catalyst_timeline": 1.0,
         "liquidity": 1.0,
+        # v4 Phase 5 additions: insider activity (Form 4 cluster reroute)
+        # and shareholder structure (new edgar_13d_13g_scanner.py). Both
+        # are emitted unscored by the scanners — the AI resolver fills the
+        # dim values from raw_payload / asset context before scoring.
+        "insider_pressure": 1.0,
+        "shareholder_structure": 0.5,
     },
     "short_positioning": {
         "crowding_intensity": 2.5,
@@ -84,6 +102,70 @@ WEIGHTS: Dict[str, Dict[str, float]] = {
         "liquidity": 1.0,
     },
 }
+
+
+# v4 Phase 5: DB-driven weights helper. Not yet wired into score_signal —
+# that stays pure (no DB access) so scanner hot path keeps current latency.
+# Phase 7's agentic retrospective uses this to read the active weights when
+# proposing rubric changes, and a future Phase 5b can flip score_signal to
+# consult this first with Python fallback.
+_db_weights_cache: Dict[str, Dict[str, float]] = {}
+
+
+def get_active_weights(
+    profile: str,
+    client: Optional[Any] = None,
+    *,
+    bypass_cache: bool = False,
+) -> Dict[str, float]:
+    """Return active dimension weights for a profile.
+
+    Resolution order:
+      1. Module-level cache (if populated and not bypassed).
+      2. `rubrics` table WHERE superseded_at IS NULL (if client provided).
+      3. Hardcoded Python WEIGHTS dict (always available).
+
+    The DB read is best-effort — query failure returns Python WEIGHTS so the
+    scanner hot path can never be blocked by a DB blip. `bypass_cache=True`
+    forces a re-read (used by Phase 7 retrospectives that need fresh weights).
+    """
+    if not bypass_cache and profile in _db_weights_cache:
+        return _db_weights_cache[profile]
+
+    if client is not None:
+        try:
+            rows = client._rest(
+                "GET",
+                "rubrics",
+                params={
+                    "profile": f"eq.{profile}",
+                    "superseded_at": "is.null",
+                    "select": "dimension_weights",
+                    "limit": "1",
+                },
+            ) or []
+            if rows:
+                dw = rows[0].get("dimension_weights") or {}
+                if isinstance(dw, dict) and dw:
+                    # Validate shape — must be {str: number}. Skip cache on
+                    # malformed rows so the next call retries from DB.
+                    cleaned = {
+                        k: float(v) for k, v in dw.items()
+                        if isinstance(k, str) and isinstance(v, (int, float))
+                    }
+                    if cleaned:
+                        _db_weights_cache[profile] = cleaned
+                        return cleaned
+        except Exception:  # noqa: BLE001
+            pass
+
+    return WEIGHTS.get(profile, {})
+
+
+def clear_active_weights_cache() -> None:
+    """Test + operator hook: drop the module-level cache so the next
+    `get_active_weights` call re-reads from DB."""
+    _db_weights_cache.clear()
 
 
 def weighted_total(dims: Dict[str, int], profile: str) -> float:
