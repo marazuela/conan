@@ -38,8 +38,11 @@ def test_weights_has_six_profiles():
     }
 
 
-def test_rubric_version_is_pinned_to_seeded_v1_weights():
-    assert RUBRIC_VERSION == 1
+def test_rubric_version_is_pinned_to_seeded_weights():
+    # v4 Phase 5 bumped to v2 (binary_catalyst extended with insider_pressure
+    # + shareholder_structure from the Form 4 reroute + 13D/13G scanner).
+    # The seed migration is supabase/migrations/20260613007000_v4_rubrics_v2_seed.sql.
+    assert RUBRIC_VERSION == 2
 
 
 def test_merger_arb_weights():
@@ -58,9 +61,13 @@ def test_activist_governance_weights():
 
 
 def test_binary_catalyst_weights():
+    # v4 Phase 5: insider_pressure (1.0) + shareholder_structure (0.5) added
+    # for the Form 4 cluster reroute and edgar_13d_13g_scanner emissions.
+    # Other six dims byte-identical to v1.
     assert WEIGHTS["binary_catalyst"] == {
         "approval_probability": 2.5, "market_mispricing": 2.5, "magnitude": 1.5,
         "competitive_landscape": 1.5, "catalyst_timeline": 1.0, "liquidity": 1.0,
+        "insider_pressure": 1.0, "shareholder_structure": 0.5,
     }
 
 

@@ -75,6 +75,14 @@ image = (
         "../conan-cowork-skills/schemas",
         "/conan-cowork-skills/schemas",
     )
+    # v4 Phase 6a: flip ORCH_V4 default to 1 so production runs the v4
+    # single-pass FDA+commercial pipeline by default (collapsed stages,
+    # commercial_opportunity sub-agent, deterministic citation validator).
+    # Reversible by setting ORCH_V4=0 in a function-level env or Modal
+    # secret — no redeploy needed for rollback. Phase 6c will delete the
+    # v3 codepath and remove this env entirely once observation period
+    # passes.
+    .env({"ORCH_V4": "1"})
 )
 
 # Secrets
@@ -589,79 +597,207 @@ def operator_refresh_endpoint(payload: dict) -> dict:
 
 
 # ============================================================================
-# Phase 4B — Tier-2 (Cowork bulk) dispatch surface
+# Tier-2 (Cowork bulk) — DELETED in v4 Phase 6b.
 # ============================================================================
 #
-# Three sync Modal functions form the contract Cowork calls into. The
-# bulk_orchestrator skill itself runs ON the Cowork machine (not on Modal);
-# these endpoints are the bridge between Cowork's local skill execution and
-# the production DB / queue.
+# Previously hosted three Modal functions (tier2_bulk_enqueue, tier2_complete,
+# tier2_fail) bridging the Cowork `bulk_orchestrator` skill to the production
+# DB. Removed alongside orchestrator_runtime/tier2.py.
 #
-# Cowork-side flow (per scheduled cadence):
-#   1. Resolve a list of asset_ids due (per fda_assets.watch_priority).
-#   2. Modal call: tier2_bulk_enqueue(asset_ids) → for each asset, creates a
-#      pending orchestrator_runs row (tier=2) AND returns the input blob the
-#      skill consumes. Single round-trip.
-#   3. For each asset, run the bulk_orchestrator skill against the blob.
-#   4. Modal call: tier2_complete(run_id, payload) per success → validates,
-#      persists tier=2 convergence_assessments, applies §Escalation rule
-#      (high conviction / direction change / new primary doc), enqueues
-#      tier1 escalation if triggered, marks the run completed.
-#   5. Modal call: tier2_fail(run_id, error) per skill error → marks failed.
+# Replacement: under v4, re-analysis is purely event-driven via the reactor's
+# new_doc / cross_source / operator_refresh triggers → orchestrator_drain_queue.
+# Scheduled bulk re-runs are not needed when nothing has changed; when
+# something has changed, the reactor catches it. See ~/.claude/plans/proud-
+# booping-seal.md §Phase 6.
 #
-# All deterministic logic (validator, persister, escalation rule) lives in
-# orchestrator_runtime/tier2.py — these endpoints are thin glue.
+# The fda_assets.watch_priority column stays (still useful for prioritizing
+# operator attention in dashboards), but the cadence routine that drained it
+# into tier2_bulk_enqueue is gone.
 # ============================================================================
 
-@app.function(
-    image=image,
-    timeout=120,
-    secrets=[supabase_secrets],
-)
-def tier2_bulk_enqueue(asset_ids: list) -> Dict[str, Any]:
-    """Phase 4B: enqueue Tier-2 scheduled bulk runs. Thin wrapper around
-    `orchestrator_runtime.tier2.enqueue_tier2_bulk` — see that function for
-    the full contract."""
-    from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import enqueue_tier2_bulk
 
-    return enqueue_tier2_bulk(SupabaseClient(), asset_ids)
+# ============================================================================
+# Phase 3a / 3b / 4 — calendar + audit + harvest workers.
+#
+# These are plain @app.function workers (no fastapi_endpoint) that
+# compute_v3_dispatch spawns fire-and-forget so the multiplex endpoint
+# returns in <1s while the actual job runs up to its own timeout. Pattern
+# mirrors orchestrator_drain_queue / feedback_loop_kickoff.
+#
+# The pg_cron jobs in 20260605000050 (earnings), 20260605000060 (FOMC),
+# and 20260612000020 (harvest) POST to compute_v3_dispatch with the
+# corresponding action — that's the only entrypoint operators need.
+# ============================================================================
 
 
 @app.function(
     image=image,
-    timeout=120,
-    secrets=[supabase_secrets],
+    timeout=900,  # 15min: ~400 tickers × ~100ms/ticker + 2s/batch-of-50
+    secrets=[supabase_secrets, scanner_secrets],
 )
-def tier2_complete(
-    run_id: str,
-    payload: Dict[str, Any],
-    cost_usd: float = 0.0,
-    latency_ms: Optional[int] = None,
+def phase3a_earnings_calendar_fetch_worker(
+    window_days: int = 7,
+    forward_days: int = 90,
+    tickers: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Phase 4B: Cowork posts a completed Tier-2 skill run here. Thin
-    wrapper around `orchestrator_runtime.tier2.complete_tier2_run`."""
+    """Daily refresh of public.earnings_calendar via yfinance (primary) +
+    Polygon (fallback). Targets the tradeable-filter-passed universe by
+    default. Phase 3a — Q1 audit feeder."""
     from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import complete_tier2_run
+    from modal_workers.fetchers.universe.earnings_calendar import (
+        fetch, load_tradeable_tickers,
+    )
 
-    return complete_tier2_run(
-        SupabaseClient(), run_id, payload,
-        cost_usd=cost_usd, latency_ms=latency_ms,
+    sb = SupabaseClient()
+    targets = tickers if tickers else load_tradeable_tickers(sb)
+    return fetch(
+        sb,
+        tickers=targets,
+        lookback_days=window_days,
+        forward_days=forward_days,
+        dry_run=False,
     )
 
 
 @app.function(
     image=image,
-    timeout=15,
+    timeout=60,  # single HTTP fetch + parse
     secrets=[supabase_secrets],
 )
-def tier2_fail(run_id: str, error_message: str) -> Dict[str, Any]:
-    """Phase 4B: Cowork reports a Tier-2 skill error. Thin wrapper around
-    `orchestrator_runtime.tier2.fail_tier2_run`."""
+def phase3a_fomc_calendar_refresh_worker(year: Optional[int] = None) -> Dict[str, Any]:
+    """Monthly refresh of public.fomc_calendar via federalreserve.gov
+    scrape. Phase 3a — Q1 audit feeder."""
     from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import fail_tier2_run
+    from modal_workers.fetchers.universe.fomc_calendar import fetch
 
-    return fail_tier2_run(SupabaseClient(), run_id, error_message)
+    return fetch(SupabaseClient(), year=year, dry_run=False)
+
+
+@app.function(
+    image=image,
+    timeout=600,  # 10min: bounded by Polygon SPY pulls per event
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def q1_audit_run_worker(re_audit: bool = False) -> Dict[str, int]:
+    """WI-5 Q1 confounder + coverage audit across eval_harness rows.
+    Re-audits in place when re_audit=True."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_event_data_quality import _audit_all
+
+    return _audit_all(SupabaseClient(), re_audit=re_audit, apply=True)
+
+
+@app.function(
+    image=image,
+    timeout=120,  # single cohort aggregation
+    secrets=[supabase_secrets],
+)
+def q2_audit_run_worker(profile: str = "binary_catalyst") -> Dict[str, Any]:
+    """WI-6 Q2 sample-balance audit for the q1_verdict='clean' cohort.
+    Persists a row in eval_sample_balance_audits and returns the verdict
+    + axes summary."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.audit_sample_balance import (
+        audit_cohort, persist_q2_verdict,
+    )
+
+    sb = SupabaseClient()
+    verdict = audit_cohort(sb, profile=profile)
+    persist_q2_verdict(sb, verdict)
+    return {
+        "verdict": verdict.verdict,
+        "cohort_hash": verdict.cohort_hash,
+        "cohort_size": verdict.cohort_size,
+        "phase5_triggers": verdict.phase5_triggers,
+        "axes": {k: v.as_dict() for k, v in verdict.axes.items()},
+    }
+
+
+@app.function(
+    image=image,
+    timeout=1800,
+    secrets=[supabase_secrets],
+)
+def calibration_refit_run_worker(
+    min_n: int = 200,
+    bootstrap_resamples: int = 10000,
+    enable_promotion: bool = False,
+    training_source: str = "post_mortem_queue",
+) -> Dict[str, Any]:
+    """Run the D-103 calibration refit gate in explicit manual-promotion mode."""
+    from dataclasses import asdict
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.nightly_calibration_refit import run_nightly_refit
+
+    result = run_nightly_refit(
+        sb=SupabaseClient(),
+        min_n=min_n,
+        bootstrap_resamples=bootstrap_resamples,
+        enable_promotion=enable_promotion,
+        training_source=training_source,
+    )
+    return asdict(result)
+
+
+@app.function(
+    image=image,
+    timeout=900,  # 15min: openFDA paging over a daily window
+    secrets=[supabase_secrets, scanner_secrets],
+)
+def fda_event_harvest_daily_worker(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """WI-7 M1 FDA-only ongoing harvest. Defaults to (latest_checkpoint+1d
+    ... today). After harvest, sweeps fda_assets.next_catalyst_date from
+    the new fda_regulatory_events rows."""
+    from datetime import date, timedelta
+    from dataclasses import asdict
+
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.harvest_fda_events import (
+        harvest, latest_checkpoint,
+    )
+
+    sb = SupabaseClient()
+    today = date.today()
+    if end_date:
+        end = date.fromisoformat(end_date)
+    else:
+        end = today
+    if start_date:
+        start = date.fromisoformat(start_date)
+    else:
+        last = latest_checkpoint(sb, "openfda")
+        start = (last + timedelta(days=1)) if last else (today - timedelta(days=7))
+
+    result = harvest(sb, start_date=start, end_date=end,
+                    sources=("openfda",), dry_run=False)
+    return asdict(result)
+
+
+@app.function(
+    image=image,
+    timeout=300,  # 5min: one bulk fetch + grouped upsert; small dataset today
+    secrets=[supabase_secrets],
+)
+def bc_class_precedent_refresh_worker(
+    lookback_years: int = 10,
+    apply: bool = True,
+) -> Dict[str, Any]:
+    """WI-2 follow-up — refresh `fda_class_precedent_base_rates` from
+    `fda_regulatory_events`. Reactor reads the resulting rows to fill the
+    class_precedent input in the BC convergence pre-gate (was stubbed to 0
+    in v1). See `modal_workers/scripts/bc_class_precedent_refresher.py`."""
+    from modal_workers.shared.supabase_client import SupabaseClient
+    from modal_workers.scripts.bc_class_precedent_refresher import refresh
+
+    return refresh(
+        SupabaseClient(),
+        lookback_years=lookback_years,
+        apply=apply,
+    )
 
 
 # ============================================================================
@@ -839,25 +975,23 @@ def bc_class_precedent_refresh_worker(
 # 401 on mismatch, 500 on server misconfiguration).
 #
 # Action contract:
-#   tier2_bulk_enqueue: args={asset_ids: [str, ...]}
-#   tier2_complete:    args={run_id, payload, cost_usd?, latency_ms?}
-#   tier2_fail:        args={run_id, error_message}
 #   ic_memo_run:       args={assessment_id, question?, persist?}
 #
 # Asset linking and fact extraction intentionally are not exposed here. They
 # are local skill workflows now, so production cannot spend the Modal Anthropic
 # API key on background extraction/classification.
 #
+# Tier-2 actions (tier2_bulk_enqueue / tier2_complete / tier2_fail) were
+# removed in v4 Phase 6b — the Cowork bulk_orchestrator pipeline is sunset.
+# Re-analysis under v4 is purely event-driven via the reactor.
+#
 # Each action's response shape matches the underlying runtime helper's
-# return value verbatim — see orchestrator_runtime.tier2 / ic_memo_runner
-# for the per-action contracts.
+# return value verbatim — see orchestrator_runtime/ic_memo_runner.py for the
+# per-action contract.
 # ============================================================================
 
 # Importable for tests (without spinning up Modal at import time).
 COMPUTE_V3_ACTIONS = frozenset({
-    "tier2_bulk_enqueue",
-    "tier2_complete",
-    "tier2_fail",
     "ic_memo_run",
     "feedback_loop_kickoff",
     "orchestrator_drain_queue",
@@ -867,6 +1001,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "fomc_calendar_refresh",
     "q1_audit_run",
     "q2_audit_run",
+    "calibration_refit_run",
     "fda_event_harvest_daily",
     "bc_class_precedent_refresh",
 })
@@ -882,6 +1017,7 @@ _SPAWN_ONLY_ACTIONS: Dict[str, str] = {
     "fomc_calendar_refresh": "phase3a_fomc_calendar_refresh_worker",
     "q1_audit_run": "q1_audit_run_worker",
     "q2_audit_run": "q2_audit_run_worker",
+    "calibration_refit_run": "calibration_refit_run_worker",
     "fda_event_harvest_daily": "fda_event_harvest_daily_worker",
     "bc_class_precedent_refresh": "bc_class_precedent_refresh_worker",
 }
@@ -1013,6 +1149,18 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         handle = fn.spawn(**kwargs)
         return {"spawned": True, "function_call_id": handle.object_id}
 
+    if action == "calibration_refit_run":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "calibration_refit_run_worker",
+        )
+        kwargs = {}
+        for k in ("min_n", "bootstrap_resamples", "enable_promotion",
+                  "training_source"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
     if action == "fda_event_harvest_daily":
         fn = modal.Function.from_name(
             "conan-v3-orchestrator", "fda_event_harvest_daily_worker",
@@ -1036,27 +1184,14 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         return {"spawned": True, "function_call_id": handle.object_id}
 
     from modal_workers.shared.supabase_client import SupabaseClient
-    from orchestrator_runtime.tier2 import (
-        complete_tier2_run,
-        enqueue_tier2_bulk,
-        fail_tier2_run,
-    )
     from orchestrator_runtime.ic_memo_runner import run_ic_memo
 
     sb = SupabaseClient()
-    if action == "tier2_bulk_enqueue":
-        return enqueue_tier2_bulk(sb, args["asset_ids"])
-    if action == "tier2_complete":
-        return complete_tier2_run(
-            sb,
-            args["run_id"],
-            args["payload"],
-            cost_usd=args.get("cost_usd", 0.0),
-            latency_ms=args.get("latency_ms"),
-        )
-    if action == "tier2_fail":
-        return fail_tier2_run(sb, args["run_id"], args.get("error_message", ""))
-    # ic_memo_run
+    # Only ic_memo_run remains as an inline (non-spawn) action — the Tier-2
+    # tier2_bulk_enqueue / tier2_complete / tier2_fail actions were deleted
+    # in v4 Phase 6b. Everything else routes via the spawn-only branches
+    # above (feedback_loop_kickoff, orchestrator_drain_queue, calendar +
+    # audit + harvest workers, seed_fda_asset_aliases_refresh).
     return run_ic_memo(
         sb,
         args["assessment_id"],

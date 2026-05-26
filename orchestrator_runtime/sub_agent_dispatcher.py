@@ -63,18 +63,26 @@ DISPATCH_TOOL_DEF: Dict[str, Any] = {
         "moat analysis; 'regulatory_history' for prior AdComms / analogous "
         "approvals / FDA-staff concerns; 'options_microstructure' for "
         "straddle-implied move + IV term + OI concentration before the catalyst "
-        "date. Issue parallel tool_use blocks for independent topics. Each call "
-        "returns a JSON object validated against the sub-agent's _v1 schema; on "
-        "schema failure the result has schema_pass=false and the error in "
-        "errors[]. Do NOT retry on schema_pass=false — flag the gap in your "
-        "uncertainties output instead."
+        "date; 'commercial_opportunity' (v4 only) for TAM, standard-of-care drugs "
+        "+ their side effects, unmet-need severity, and regulatory incentives. "
+        "Issue parallel tool_use blocks for independent topics. Each call returns "
+        "a JSON object validated against the sub-agent's _v1 schema; on schema "
+        "failure the result has schema_pass=false and the error in errors[]. Do "
+        "NOT retry on schema_pass=false — flag the gap in your uncertainties "
+        "output instead."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "role": {
                 "type": "string",
-                "enum": ["literature", "competitive", "regulatory_history", "options_microstructure"],
+                "enum": [
+                    "literature",
+                    "competitive",
+                    "regulatory_history",
+                    "options_microstructure",
+                    "commercial_opportunity",
+                ],
             },
             "question": {
                 "type": "string",

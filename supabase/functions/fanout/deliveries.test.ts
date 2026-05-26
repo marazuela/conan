@@ -124,6 +124,51 @@ Deno.test("assessment email gate sends first immediate assessment", () => {
   assert(decision.reason === "first_assessment_for_recipient_asset", "reason should explain first-send path");
 });
 
+Deno.test("assessment email gate suppresses failed constitutional gate", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    gate_status: "pass",
+    constitutional_pass: false,
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    expected_value_bps: 250,
+    target_type: "price_move",
+    label_rule: "forward_return_t30_calendar",
+  }, null);
+  assert(decision.send === false, "failed constitutional check must suppress email");
+  assert(decision.reason === "constitutional_not_passed", "reason should identify constitutional gate");
+});
+
+Deno.test("assessment email gate suppresses non-positive expected value", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    gate_status: "pass",
+    constitutional_pass: true,
+    thesis_direction: "long",
+    conviction_pct_calibrated: 82,
+    expected_value_bps: 0,
+    target_type: "price_move",
+    label_rule: "forward_return_t30_calendar",
+  }, null);
+  assert(decision.send === false, "non-positive EV must suppress email");
+  assert(decision.reason === "non_positive_expected_value", "reason should identify EV gate");
+});
+
+Deno.test("assessment email gate suppresses explicit alert gate reasons", () => {
+  const decision = shouldSendAssessmentImmediateEmail({
+    asset_id: "asset-1",
+    band: "immediate",
+    alert_gate_status: "suppress",
+    alert_gate_reasons: ["unsupported_claims_present"],
+    thesis_direction: "long",
+  }, null);
+  assert(decision.send === false, "alert_gate_status=suppress must suppress email");
+  assert(decision.reason === "unsupported_claims_present", "reason should preserve first gate reason");
+});
+
+
 Deno.test("assessment email gate suppresses unchanged evidence without material change", () => {
   const prior = {
     asset_id: "asset-1",

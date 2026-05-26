@@ -82,6 +82,11 @@ interface ConvergenceAssessmentRow {
   expected_value_bps: number | null;
   market_implied_move: number | null;
   options_iv: number | null;
+  gate_status: string | null;
+  alert_gate_status: string | null;
+  alert_gate_reasons: string[] | null;
+  target_type: string | null;
+  label_rule: string | null;
   superseded_by: string | null;
   document_set_hash: string | null;
   created_at: string;
@@ -912,6 +917,7 @@ async function dispatchAssessmentImmediate(row: ConvergenceAssessmentRow) {
     const currentState = assessmentEmailStateFromRow(row);
     const gate = shouldSendAssessmentImmediateEmail(currentState, prior);
     if (!gate.send) {
+      await recordAssessmentSuppression(row, to, gate.reason);
       asset_dedupe_skipped += 1;
       continue;
     }
@@ -1005,12 +1011,52 @@ function assessmentEmailStateFromRow(row: ConvergenceAssessmentRow): AssessmentE
   return {
     asset_id: row.asset_id,
     band: row.band,
+    gate_status: row.gate_status,
+    alert_gate_status: row.alert_gate_status,
+    alert_gate_reasons: row.alert_gate_reasons,
+    constitutional_pass: row.constitutional_pass,
     document_set_hash: row.document_set_hash,
     thesis_direction: row.thesis_direction,
     conviction_pct: row.conviction_pct,
     conviction_pct_calibrated: row.conviction_pct_calibrated,
+    ensemble_dispersion: row.ensemble_dispersion,
+    evidence_quality: row.evidence_quality,
+    expected_value_bps: row.expected_value_bps,
+    target_type: row.target_type,
+    label_rule: row.label_rule,
     created_at: row.created_at,
   };
+}
+
+async function recordAssessmentSuppression(
+  row: ConvergenceAssessmentRow,
+  target: string,
+  reason: string,
+) {
+  try {
+    await sb.from("assessment_alert_suppressions").insert({
+      assessment_id: row.id,
+      target,
+      reason,
+      evidence: {
+        asset_id: row.asset_id,
+        band: row.band,
+        gate_status: row.gate_status,
+        alert_gate_status: row.alert_gate_status,
+        alert_gate_reasons: row.alert_gate_reasons,
+        constitutional_pass: row.constitutional_pass,
+        evidence_quality: row.evidence_quality,
+        ensemble_dispersion: row.ensemble_dispersion,
+        expected_value_bps: row.expected_value_bps,
+        target_type: row.target_type,
+        label_rule: row.label_rule,
+        document_set_hash: row.document_set_hash,
+      },
+    });
+  } catch {
+    // Suppression ledger is audit-only; never turn a suppressed email into a
+    // webhook failure that Supabase retries.
+  }
 }
 
 async function loadPriorAssessmentEmailState(

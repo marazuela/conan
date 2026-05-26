@@ -250,7 +250,27 @@ class SubAgentRunner:
         Opt out via ORCH_SUB_AGENT_DISABLE_PROMPT_CACHE=1 if upstream caching
         misbehaves on a particular role.
         """
-        block: Dict[str, Any] = {"type": "text", "text": skill_text}
+        schema_block = ""
+        if self.schema_filename:
+            try:
+                schema = _load_schema(self.schema_filename)
+                schema_block = (
+                    "\n\n## Runtime JSON Schema Contract\n\n"
+                    "Your final answer MUST validate against this exact Draft-7 "
+                    "schema. Do not invent top-level keys that are not allowed "
+                    "by the schema. If a provider/tool is unavailable, emit the "
+                    "schema's degraded/partial-output shape instead of a "
+                    "plausible narrative substitute.\n\n"
+                    "```jsonschema\n"
+                    f"{json.dumps(schema, indent=2, sort_keys=True)}\n"
+                    "```"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sub_agent[%s] could not embed schema %s: %s",
+                    self.role, self.schema_filename, exc,
+                )
+        block: Dict[str, Any] = {"type": "text", "text": skill_text + schema_block}
         if os.environ.get("ORCH_SUB_AGENT_DISABLE_PROMPT_CACHE") != "1":
             block["cache_control"] = {"type": "ephemeral"}
         return [block]

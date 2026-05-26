@@ -20,10 +20,19 @@ export const ASSESSMENT_EMAIL_MATERIAL_CONVICTION_DELTA = 5;
 export interface AssessmentEmailState {
   asset_id: string;
   band?: string | null;
+  gate_status?: string | null;
+  alert_gate_status?: string | null;
+  alert_gate_reasons?: string[] | null;
+  constitutional_pass?: boolean | null;
   document_set_hash?: string | null;
   thesis_direction?: string | null;
   conviction_pct?: number | null;
   conviction_pct_calibrated?: number | null;
+  ensemble_dispersion?: number | null;
+  evidence_quality?: number | null;
+  expected_value_bps?: number | null;
+  target_type?: string | null;
+  label_rule?: string | null;
   created_at?: string | null;
 }
 
@@ -143,6 +152,44 @@ export function shouldSendAssessmentImmediateEmail(
 ): AssessmentEmailGateDecision {
   if (current.band !== "immediate") {
     return { send: false, reason: "not_immediate" };
+  }
+  if (current.gate_status !== undefined && current.gate_status !== null && current.gate_status !== "pass") {
+    return { send: false, reason: "gate_status_not_pass" };
+  }
+  if (current.alert_gate_status !== undefined && current.alert_gate_status !== null && current.alert_gate_status !== "pass") {
+    return {
+      send: false,
+      reason: current.alert_gate_reasons?.[0] ?? "alert_gate_suppressed",
+    };
+  }
+  if (current.constitutional_pass !== undefined && current.constitutional_pass !== null && current.constitutional_pass !== true) {
+    return { send: false, reason: "constitutional_not_passed" };
+  }
+  if (current.target_type !== undefined && !current.target_type) {
+    return { send: false, reason: "missing_prediction_target" };
+  }
+  if (current.label_rule !== undefined && !current.label_rule) {
+    return { send: false, reason: "missing_label_rule" };
+  }
+  if (
+    current.evidence_quality !== undefined &&
+    current.evidence_quality !== null &&
+    current.evidence_quality < 0.45
+  ) {
+    return { send: false, reason: "low_evidence_quality" };
+  }
+  if (
+    current.ensemble_dispersion !== undefined &&
+    current.ensemble_dispersion !== null &&
+    current.ensemble_dispersion > 15
+  ) {
+    return { send: false, reason: "high_ensemble_dispersion" };
+  }
+  if (
+    current.expected_value_bps !== undefined &&
+    (current.expected_value_bps === null || current.expected_value_bps <= 0)
+  ) {
+    return { send: false, reason: "non_positive_expected_value" };
   }
   if (!prior) {
     return { send: true, reason: "first_assessment_for_recipient_asset" };

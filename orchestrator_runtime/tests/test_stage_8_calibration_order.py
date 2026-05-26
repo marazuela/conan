@@ -55,10 +55,14 @@ def _baseline_ctx() -> Dict[str, Any]:
              "fact_type": "trial_result", "fact_text": "Endpoint met",
              "evidence_quote": "p<0.001", "confidence": 0.95},
         ],
-        "documents": [],
+        "documents": [
+            {"id": "dd44ee55ff66aabb", "source": "fixture", "doc_type": "primary"},
+        ],
         "memory_text": None,
         "reference_class_anchor": None,
-        "asset_doc_links": [],
+        "asset_doc_links": [
+            {"document_id": "dd44ee55ff66aabb", "link_type": "primary", "is_material": True},
+        ],
     }
 
 
