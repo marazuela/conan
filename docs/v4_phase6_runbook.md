@@ -1,6 +1,6 @@
 # v4 Phase 6 runbook
 
-Status update 2026-05-26: Phase 6c has landed in code. The `ORCH_V4=0`
+Status update 2026-05-27: Phase 6c has landed in code. The `ORCH_V4=0`
 rollback branch and retired v3 modules (`hypothesis.py`, `premortem.py`,
 `constitutional.py`, `ensemble.py`) are removed. Treat the Phase 6c section
 below as historical rollout guidance; rollback is now git revert.

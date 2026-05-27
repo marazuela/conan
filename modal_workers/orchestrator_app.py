@@ -75,6 +75,14 @@ image = (
         "../conan-cowork-skills/schemas",
         "/conan-cowork-skills/schemas",
     )
+    # v4 Phase 6a: flip ORCH_V4 default to 1 so production runs the v4
+    # single-pass FDA+commercial pipeline by default (collapsed stages,
+    # commercial_opportunity sub-agent, deterministic citation validator).
+    # Reversible by setting ORCH_V4=0 in a function-level env or Modal
+    # secret — no redeploy needed for rollback. Phase 6c will delete the
+    # v3 codepath and remove this env entirely once observation period
+    # passes.
+    .env({"ORCH_V4": "1"})
 )
 
 # Secrets
