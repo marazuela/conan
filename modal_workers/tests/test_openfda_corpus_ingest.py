@@ -315,3 +315,143 @@ def test_scan_routes_to_deep_sweep_on_sunday():
     assert result.run_metrics["mode"] == "deep"
     assert result.fetched_records == 300
     assert result.signals == []
+
+
+# ---------------------------------------------------------------------------
+# fda_assets.mechanism back-seeding from label MoA
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_APP_NUMBERS = ["NDA216403"]
+
+
+def _label_with_moa(
+    *,
+    set_id: str = "set_moa_01",
+    effective_time: str = "20260501",
+    application_numbers: list[str] | None = None,
+    mechanism: list[str] | str | None = (
+        "Sparsentan is a dual endothelin angiotensin receptor antagonist."
+    ),
+) -> dict:
+    apps = _DEFAULT_APP_NUMBERS if application_numbers is None else application_numbers
+    return {
+        "set_id": set_id,
+        "version": "1",
+        "effective_time": effective_time,
+        "openfda": {
+            "brand_name": ["FILSPARI"],
+            "application_number": apps,
+        },
+        "indications_and_usage": "for testing.",
+        "mechanism_of_action": mechanism,
+    }
+
+
+def test_extract_mechanism_from_label_joins_list_and_caps_length():
+    long_blob = "x" * 2000
+    out = openfda_ingest.extract_mechanism_from_label(
+        {"mechanism_of_action": ["first paragraph.", long_blob]})
+    assert out.startswith("first paragraph. ")
+    assert len(out) == 1024
+
+
+def test_extract_mechanism_from_label_returns_empty_when_missing():
+    assert openfda_ingest.extract_mechanism_from_label({}) == ""
+    assert openfda_ingest.extract_mechanism_from_label(
+        {"mechanism_of_action": None}) == ""
+    assert openfda_ingest.extract_mechanism_from_label(
+        {"mechanism_of_action": []}) == ""
+
+
+def test_label_ingest_patches_mechanism_for_matching_assets_with_null():
+    """Happy path: label with MoA + application_number → PATCH issued with
+    mechanism=is.null filter so a populated value is never overwritten."""
+    writer = _make_mock_writer()
+    fake_client = MagicMock()
+    fake_client._rest_with_retry.return_value = [{"id": "asset-1"}]
+    writer.client = fake_client
+
+    label = _label_with_moa(application_numbers=["NDA216403"])
+    outcome = openfda_ingest._ingest_label_record(label, writer)
+
+    assert outcome.written is True
+    # Exactly one PATCH should have been issued.
+    patch_calls = [c for c in fake_client._rest_with_retry.call_args_list
+                   if c.args and c.args[0] == "PATCH"]
+    assert len(patch_calls) == 1
+    args, kwargs = patch_calls[0]
+    assert args[1] == "fda_assets"
+    params = kwargs["params"]
+    assert params["mechanism"] == "is.null"
+    assert params["application_number"] == 'in.("NDA216403")'
+    assert kwargs["json_body"]["mechanism"].startswith(
+        "Sparsentan is a dual endothelin")
+
+
+def test_label_ingest_skips_patch_when_moa_missing():
+    """No mechanism_of_action on the label → no PATCH to fda_assets."""
+    writer = _make_mock_writer()
+    fake_client = MagicMock()
+    writer.client = fake_client
+
+    label = _label_with_moa(mechanism=None)
+    openfda_ingest._ingest_label_record(label, writer)
+
+    patch_calls = [c for c in fake_client._rest_with_retry.call_args_list
+                   if c.args and c.args[0] == "PATCH"]
+    assert patch_calls == []
+
+
+def test_label_ingest_skips_patch_when_application_number_missing():
+    """openFDA labels without an application_number cannot link to fda_assets
+    (no other reliable selector) — skip the PATCH entirely."""
+    writer = _make_mock_writer()
+    fake_client = MagicMock()
+    writer.client = fake_client
+
+    label = _label_with_moa(application_numbers=[])
+    openfda_ingest._ingest_label_record(label, writer)
+
+    patch_calls = [c for c in fake_client._rest_with_retry.call_args_list
+                   if c.args and c.args[0] == "PATCH"]
+    assert patch_calls == []
+
+
+def test_label_ingest_mechanism_patch_filter_protects_existing_values():
+    """The PostgREST filter must include `mechanism=is.null` so an operator-
+    curated mechanism value cannot be clobbered by an automated label sweep.
+    This is the contract the unit test guards — even if the future
+    refactor changes call shape, the filter must stay."""
+    writer = _make_mock_writer()
+    fake_client = MagicMock()
+    # Simulate "no rows matched" (every asset already has mechanism set).
+    fake_client._rest_with_retry.return_value = []
+    writer.client = fake_client
+
+    label = _label_with_moa(application_numbers=["NDA216403", "BLA125514"])
+    openfda_ingest._ingest_label_record(label, writer)
+
+    patch_calls = [c for c in fake_client._rest_with_retry.call_args_list
+                   if c.args and c.args[0] == "PATCH"]
+    assert len(patch_calls) == 1
+    params = patch_calls[0].kwargs["params"]
+    assert params["mechanism"] == "is.null"
+    # application_numbers should be sorted+deduped into the IN-clause.
+    assert params["application_number"] == 'in.("BLA125514","NDA216403")'
+
+
+def test_label_ingest_patch_failure_does_not_fail_document_write():
+    """If the PATCH raises (transient PostgREST error, RLS, etc.), the
+    document write outcome must still report success. Mechanism seeding is
+    best-effort."""
+    writer = _make_mock_writer()
+    fake_client = MagicMock()
+    fake_client._rest_with_retry.side_effect = RuntimeError("boom")
+    writer.client = fake_client
+
+    label = _label_with_moa()
+    outcome = openfda_ingest._ingest_label_record(label, writer)
+
+    assert outcome.written is True
+    assert outcome.error is False
