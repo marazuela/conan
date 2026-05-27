@@ -48,6 +48,9 @@ VALID_CATALYST_TYPES = frozenset({
     "litigation_verdict",
     "take_private_announce", "take_private_close",
     "phase3_readout",
+    "adcomm",
+    "drug_shortage",
+    "drug_enforcement",
 })
 
 VALID_MATERIAL_OUTCOMES = frozenset({"yes", "no", "unclear"})
