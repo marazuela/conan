@@ -112,10 +112,18 @@ def fetch(
     skipped_no_asset = 0
     errors: List[Dict[str, Any]] = []
     seen_accessions: set[str] = set()
+    # Track per-query outcomes so we can distinguish "EDGAR returned nothing"
+    # (legitimate quiet period) from "2 of 3 queries silently dropped after
+    # retries exhausted". Without this counter the run envelope reports
+    # status='ok' even when most of the query plan failed (observed 2026-05-19).
+    query_failed: Dict[str, str] = {}
+    query_succeeded: List[str] = []
 
     session = _session()
     for q in _PDUFA_QUERIES:
         offset = 0
+        first_page_failed = (offset == 0)
+        query_had_error = False
         while True:
             params = {
                 "q": q,
@@ -128,7 +136,13 @@ def fetch(
             body, err = _efts_get_with_retry(session, params)
             if err is not None:
                 errors.append({"query": q, "offset": offset, "error": err[:400]})
+                # Only count as a fully-failed query if the FIRST page errored;
+                # mid-pagination failures still landed earlier pages.
+                if first_page_failed:
+                    query_failed[q] = err[:200]
+                query_had_error = True
                 break
+            first_page_failed = False
 
             hits = (body.get("hits") or {}).get("hits") or []
             if not hits:
@@ -180,6 +194,18 @@ def fetch(
                 break
             time.sleep(EDGAR_POLITE_SLEEP_S)
 
+        if not query_had_error:
+            query_succeeded.append(q)
+
+    partial_query_failures = len(query_failed)
+    if partial_query_failures:
+        logger.warning(
+            "edgar_8k_pdufa: %d of %d queries failed after retries; "
+            "succeeded=%s failed=%s",
+            partial_query_failures, len(_PDUFA_QUERIES),
+            query_succeeded, list(query_failed.keys()),
+        )
+
     return {
         "fetched": fetched,
         "upserted": upserted,
@@ -188,6 +214,9 @@ def fetch(
         "skipped_no_cik": skipped_no_cik,
         "skipped_no_asset": skipped_no_asset,
         "errors": errors,
+        "partial_query_failures": partial_query_failures,
+        "queries_total": len(_PDUFA_QUERIES),
+        "queries_failed": list(query_failed.keys()),
         "window": {"start": start_date.isoformat(), "end": end_date.isoformat()},
     }
 

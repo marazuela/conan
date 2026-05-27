@@ -82,8 +82,6 @@ def replay_assessment(
     sb,
     trigger_type: str = "replay",
     model: Optional[str] = None,
-    enable_premortem: bool = True,
-    run_constitutional: bool = True,
 ) -> ReplayOutput:
     """Replay one case from a cassette. No live Anthropic calls. Stage 10
     is skipped via dry_run=True — sb is read-only for the duration."""
@@ -98,10 +96,6 @@ def replay_assessment(
             sb, cassette, asset_id,
             trigger_type=trigger_type,
             model=model or DEFAULT_MODEL,
-            ensemble_n=1,
-            ensemble_mode="streaming",
-            run_constitutional=run_constitutional,
-            enable_premortem=enable_premortem,
             dry_run=True,
             hard_kill_usd=None,
             parsed_out=parsed_out,
@@ -132,8 +126,6 @@ def record_assessment(
     a_client: Optional[OrchestratorClient] = None,
     trigger_type: str = "replay_record",
     model: Optional[str] = None,
-    enable_premortem: bool = True,
-    run_constitutional: bool = True,
     persist: bool = False,
 ) -> ReplayOutput:
     """Record one case to a cassette. Calls run_one() with the live
@@ -152,10 +144,6 @@ def record_assessment(
             sb, cassette, asset_id,
             trigger_type=trigger_type,
             model=model or DEFAULT_MODEL,
-            ensemble_n=1,
-            ensemble_mode="streaming",
-            run_constitutional=run_constitutional,
-            enable_premortem=enable_premortem,
             dry_run=not persist,
             hard_kill_usd=None,
             parsed_out=parsed_out,

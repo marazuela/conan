@@ -67,6 +67,7 @@ import {
   scoreBcPregate,
 } from "./bc-pregate.ts";
 import { fetchWithRetry } from "./fetch-retry.ts";
+import { formatErrorForDlq } from "../_shared/errors.ts";
 
 type Direction = "long" | "short" | "neutral" | null | undefined;
 type Band = "immediate" | "watchlist" | "archive" | "discard";
@@ -207,7 +208,7 @@ Deno.serve(async (req: Request) => {
         headers: { "content-type": "application/json" },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorForDlq(err);
       await sb.from("failed_reactor_events").insert({
         signal_id: null,
         payload: payload as unknown as Record<string, unknown>,
@@ -268,7 +269,7 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     // DLQ the event so Supabase's webhook retry + our own inspection both work.
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorForDlq(err);
     await sb.from("failed_reactor_events").insert({
       signal_id: sig?.signal_id ?? null,
       payload: payload as unknown as Record<string, unknown>,

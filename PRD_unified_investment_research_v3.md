@@ -43,10 +43,10 @@ New v3 user surface: `/eval` (case list + run trends), `/eval/[caseId]` (per-cas
 
 These are settled (DECISIONS.md D-100..D-127). The Claude Code session should not relitigate; surface concerns before any unilateral change.
 
-**Three-tier hybrid runtime.**
-- **Tier 1** — API SDK direct, 10-stage pipeline (Stages 0–10 per `~/.claude/plans/confirm-orchestrator-cuddly-bubble.md`), 4 specialist sub-agents fanned out in parallel via `dispatch_sub_agent` tool, Stage 6 N=7 ensemble, Stage 7 Sonnet constitutional check, Stage 8 isotonic calibration. Triggered by `new_doc`, `cross_source`, `operator_refresh`, `tier2_escalation`, `manual`. Cost envelope $10–15 / run, P50 latency <4 min hot.
-- **Tier 2** — Cowork-fired bulk skill (`bulk_orchestrator.md`), single Sonnet pass, no parallel fan-out, no ensemble, no constitutional check. Triggered by `scheduled` cadence per `fda_assets.watch_priority` (=1 daily, =2 weekly, =3-5 event-only). Escalates to Tier 1 when `conviction_pct >= 60` OR direction-change OR new primary doc. Cost envelope $0.30–0.80 / run.
-- **Tier 3** — reserved (multi-day Opus pure research). Deferred.
+**v4 AI-first runtime.**
+- **Live path** — API SDK direct, single-pass FDA + commercial Stage 1 synthesis, Stage 9 structured extraction, deterministic citation validation, isotonic calibration, market-side gate, and Stage 10 persistence/memory writeback. The former Stage 2 hypothesis module, Stage 3 premortem module, Stage 6 ensemble module, and semantic Stage 7 constitutional module were removed in the Phase 6c cleanup. Triggered by `new_doc`, `cross_source`, `operator_refresh`, `manual`, and scheduled drain events. Cost envelope is governed by the per-run hard kill in `orchestrator_runtime/client.py`.
+- **Eval-only sidecar** — `.claude/skills/assess-fda-binary-catalyst/SKILL.md` can produce single-shot Opus assessment artifacts for replay comparison. It is not a production writer in Phases 0-2; promotion requires eval evidence.
+- **Retired** — Tier-2 Cowork `bulk_orchestrator` and the v3 `ORCH_V4=0` rollback branch are sunset.
 
 **Sub-agents (5 roles, all under `modal_workers/sub_agents/`).** Each runner subclasses `SubAgentRunner` (D-124), exposes a Sonnet 4.5 tool-use loop wired to in-process MCP equivalents, validates output against a JSON Schema (Draft-7) at `conan-cowork-skills/schemas/<role>_v1.json`, raises `SubAgentSchemaError` on failure (DLQs to `failed_reactor_events` with `source='sub_agent.<role>'`). Per-role kill switches via `ORCH_DISABLE_<ROLE>=1`. Stage 1 dispatch global flag `ORCH_ENABLE_SUB_AGENTS=0` (default off; flips at Phase 2C).
 
@@ -106,15 +106,16 @@ Authoritative spec lives in the migration files. This is orientation only.
 Modal scanner → documents INSERT → asset_linker (pass1+pass2)
                                    → extracted_facts populate
                                    → orchestrator_run trigger
-                                       → Tier 1: Stage 0..10 with sub-agent fan-out, ensemble, calibration
+                                       → v4: load evidence + reference anchor
+                                           → AI thesis synthesis
+                                           → structured extraction
+                                           → deterministic citation validation
+                                           → calibration + market gate
                                        → convergence_assessments INSERT
                                           → reactor edge fn dispatches to fanout (if band=immediate)
                                           → fanout sends email + Realtime broadcast
                                        → memory_files append
                                        → post_mortem_queue INSERT (window-end scheduled)
-
-Daily / weekly cadence → Cowork bulk_orchestrator → convergence_assessments INSERT (tier=2)
-                                                  → escalation check → maybe enqueue Tier 1
 
 Window-end resolution → post_mortem_runner → realized_outcome INSERT into post_mortem_queue
                                            → reference_class_base_rates UPSERT (Wilson CI)
@@ -127,7 +128,7 @@ Nightly (≥10 new resolved) → nightly_calibration_refit
                               → if gate.passed AND ENABLE_PROMOTION: flip is_active
                               → INSERT eval_runs (audit)
 
-Operator → /fda/[id] → review IC memo + 4 specialist panels + citation graph
+Operator → /fda/[id] → review assessment + citation graph + optional IC memo
                      → promote via fda_signal_promote_to_thesis(event_id, ic_memo_review_id, note)
                        → signals INSERT (signal_id 'v3:<event_id>')
                        → thesis_writer pipeline runs unchanged

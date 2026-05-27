@@ -116,14 +116,18 @@ def test_run_scanner_warns_when_finalization_still_fails_after_retries():
 def test_run_scanner_separates_errors_warnings_and_metrics():
     client = FakeClient()
 
+    # fetched_records=0 keeps the run on the 'ok' path. The original test used
+    # fetched_records=7 + zero signals, which now correctly flips to 'partial'
+    # under the silent-filter guard (see test_run_scanner_flips_to_partial_on_
+    # zero_signal_with_fetched_records below).
     def scan_fn(cfg: ScannerConfig) -> ScannerResult:
         return ScannerResult(
             scanner=cfg.name,
             status="ok",
             signals=[],
             warnings=["non-fatal upstream warning"],
-            fetched_records=7,
-            run_metrics={"records_seen": 7},
+            fetched_records=0,
+            run_metrics={"records_seen": 0},
         )
 
     result = run_scanner("test_scanner", scan_fn, client=client)
@@ -131,7 +135,32 @@ def test_run_scanner_separates_errors_warnings_and_metrics():
     assert result.status == "ok"
     assert client.closed[0]["errors"] == []
     assert client.closed[0]["warnings"] == ["non-fatal upstream warning"]
-    assert client.closed[0]["run_metrics"] == {"records_seen": 7}
+    assert client.closed[0]["run_metrics"] == {"records_seen": 0}
+
+
+def test_run_scanner_flips_to_partial_on_zero_signal_with_fetched_records():
+    """A scanner that pulled upstream records but emitted zero signals is the
+    canonical silent-filter failure (observed 2026-05-26 for fda_pdufa_pipeline
+    + edgar_8k_pdufa: status='ok', last_run_signals=0). run_scanner must flip
+    such runs to 'partial' so the scanner_liveness watchdog catches them."""
+    client = FakeClient()
+
+    def scan_fn(cfg: ScannerConfig) -> ScannerResult:
+        return ScannerResult(
+            scanner=cfg.name,
+            status="ok",
+            signals=[],
+            warnings=[],
+            fetched_records=7,
+            run_metrics={"records_seen": 7},
+        )
+
+    result = run_scanner("test_scanner", scan_fn, client=client)
+
+    assert result.status == "partial"
+    errors = client.closed[0]["errors"]
+    assert any(e.get("kind") == "zero_signal_with_fetched_records" for e in errors)
+    assert any(e.get("fetched_records") == 7 for e in errors)
 
 
 # ----------------------------------------------------------------------

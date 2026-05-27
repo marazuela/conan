@@ -298,22 +298,11 @@ def seed_fda_asset_aliases_refresh(
 def orchestrator_run_one(
     asset_id: str,
     trigger_type: str = "manual",
-    ensemble_n: int = 1,
-    ensemble_mode: str = "streaming",
-    constitutional: bool = True,
-    constitutional_deterministic_only: bool = False,
-    enable_premortem: bool = True,
     enable_sub_agents: bool = False,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Produce one convergence_assessment for the given asset.
 
-    ensemble_n=1: single-shot synthesis
-    ensemble_n=3+ + ensemble_mode=streaming: N concurrent live calls
-    ensemble_n=3+ + ensemble_mode=batch: N via Messages Batches API
-    enable_premortem: run Stage 2 (hypothesis enumeration) + Stage 3
-        (adversarial pre-mortem). Default True. Disable to fall back to
-        v0.2 behavior (Stage 1 + 9 + 7 + 10) if a regression is found.
     enable_sub_agents: when True, sets ORCH_ENABLE_SUB_AGENTS=1 in process
         env BEFORE orchestrator_runtime imports, which flips the Stage 1
         dispatch_sub_agent tool on. Sub-agents (literature, competitive,
@@ -323,9 +312,8 @@ def orchestrator_run_one(
         Phase 2C"). Operator opt-in only until prompt + schema lock.
     dry_run: if True, skip Stage 10 persist — runs the full pipeline
         (Anthropic costs incurred) but does NOT write convergence_assessments,
-        hypothesis_enumeration, premortem_assessments, post_mortem_queue rows
-        and does NOT trigger reactor fanout. Use to smoke-test prompt /
-        sub-agent changes without disturbing live state. Returns
+        post_mortem_queue rows and does NOT trigger reactor fanout. Use to
+        smoke-test prompt / sub-agent changes without disturbing live state. Returns
         {"assessment_id": null, "dry_run": true}.
     """
     # Stage 1 dispatch flag is read at orchestrator_runtime import time, so
@@ -352,11 +340,6 @@ def orchestrator_run_one(
         trigger_type=trigger_type,
         model=DEFAULT_MODEL,
         extractor_model=DEFAULT_EXTRACTOR_MODEL,
-        ensemble_n=ensemble_n,
-        ensemble_mode=ensemble_mode,
-        run_constitutional=constitutional,
-        constitutional_skip_semantic=constitutional_deterministic_only,
-        enable_premortem=enable_premortem,
         dry_run=dry_run,
         hard_kill_usd=hard_kill,
     )
@@ -463,10 +446,6 @@ def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
                 trigger_type=trigger,
                 model=DEFAULT_MODEL,
                 extractor_model=DEFAULT_EXTRACTOR_MODEL,
-                ensemble_n=3 if trigger in {"cross_source", "market_move",
-                                            "operator_refresh"} else 1,
-                ensemble_mode="streaming",
-                run_constitutional=True,
                 run_id=run_id,
                 hard_kill_usd=PER_RUN_HARD_KILL_USD,
             )

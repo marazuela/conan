@@ -157,16 +157,71 @@ PROB_MIN, PROB_MAX = 0.0, 0.95
 _WATCHLIST_KEY = "pdufa_watchlist.json"
 
 
+_RESOLVED_STATUSES = frozenset({
+    "approved", "resolved_crl", "killed", "excluded", "non_tradeable",
+})
+_GARBAGE_DRUG_NAMES = frozenset({"(auto-discovered)", "unknown", "n/a", "tbd", "tba"})
+
+
+def _is_garbage_watchlist_entry(entry: dict) -> Optional[str]:
+    """Return a short reason string when this watchlist entry should be dropped
+    on read, or None when it's usable. Reasons are aggregated and logged once
+    per load so operators can see why entries silently disappear.
+
+    Garbage rules (kept tight on purpose — anything not in this list is preserved
+    even if low-confidence, because demoting a real PDUFA is more expensive than
+    carrying a noise entry through one extra scan):
+      - missing pdufa_date or non-ISO format → cannot proximity-score
+      - status in {approved, resolved_crl, killed, excluded, non_tradeable}
+        → already terminal, no live alerting value
+      - drug_name in the garbage set OR matching the EX-99 / Exhibit regex
+        → 8-K parsing residue, never resolves to an asset
+      - ticker absent → cannot route to a signal
+    """
+    if not isinstance(entry, dict):
+        return "not_dict"
+    pdufa = entry.get("pdufa_date")
+    if not pdufa or not isinstance(pdufa, str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", pdufa):
+        return "missing_or_bad_pdufa_date"
+    status = (entry.get("status") or "").lower()
+    if status in _RESOLVED_STATUSES:
+        return f"status_{status}"
+    drug = (entry.get("drug_name") or "").strip().lower()
+    if drug in _GARBAGE_DRUG_NAMES:
+        return "garbage_drug_name"
+    if re.match(r"^ex[-_]?\d", drug) or re.match(r"^exhibit\b", drug):
+        return "exhibit_number_as_drug"
+    if not (entry.get("ticker") or "").strip():
+        return "missing_ticker"
+    return None
+
+
 def _load_watchlist(client: SupabaseClient) -> List[dict]:
     raw = client.read_cache("fda", _WATCHLIST_KEY)
     if raw is None:
         return []
     try:
         data = json.loads(raw)
-        return data if isinstance(data, list) else []
     except (ValueError, UnicodeDecodeError):
         logger.warning("pdufa_watchlist.json could not be decoded; treating as empty")
         return []
+    if not isinstance(data, list):
+        return []
+    kept: List[dict] = []
+    dropped: Dict[str, int] = {}
+    for entry in data:
+        reason = _is_garbage_watchlist_entry(entry)
+        if reason is None:
+            kept.append(entry)
+        else:
+            dropped[reason] = dropped.get(reason, 0) + 1
+    if dropped:
+        logger.info(
+            "pdufa_watchlist sanitizer dropped %d entries on load: %s",
+            sum(dropped.values()),
+            ", ".join(f"{k}={v}" for k, v in sorted(dropped.items())),
+        )
+    return kept
 
 
 def _save_watchlist(client: SupabaseClient, entries: List[dict]) -> None:

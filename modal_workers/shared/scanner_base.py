@@ -429,18 +429,42 @@ def run_scanner(
         # Final status resolution:
         #   error   — the bulk insert itself raised (nothing landed, upstream broken)
         #   partial — insert landed but some per-signal errors happened (dup rejections
-        #             from ON CONFLICT, or per-signal entity-resolution failures)
+        #             from ON CONFLICT, or per-signal entity-resolution failures), OR
+        #             the scanner pulled records from upstream but emitted zero signals
+        #             with no declared error (silent-filter failure, observed
+        #             2026-05-26 for fda_pdufa_pipeline + edgar_8k_pdufa).
         #   ok      — clean run, no errors anywhere
         # Previously a failed bulk insert with zero per_signal_errors left status='ok'
         # with signals_emitted=0, so dashboards showed a green scanner that was
         # silently down.
         final_status = result.status
+        final_signals_emitted = len(inserted)
         if bulk_insert_failed:
             final_status = "error"
         elif per_signal_errors and final_status == "ok":
             final_status = "partial"
+        elif (
+            final_status == "ok"
+            and final_signals_emitted == 0
+            and result.fetched_records is not None
+            and result.fetched_records > 0
+        ):
+            # Fetched upstream rows but emitted nothing — a silent filter failure
+            # (matching gate too tight, scoring rejected everything, dedup ate
+            # everything, etc.). Surface as 'partial' so the scanner_liveness
+            # watchdog catches it instead of letting dashboards show green.
+            final_status = "partial"
+            per_signal_errors.append({
+                "phase": "post_emit",
+                "kind": "zero_signal_with_fetched_records",
+                "fetched_records": result.fetched_records,
+                "note": "scanner pulled records but emitted zero signals — investigate filters",
+            })
+            logger.warning(
+                "scanner %s status flipped to 'partial': fetched=%d signals_emitted=0",
+                scanner_name, result.fetched_records,
+            )
 
-        final_signals_emitted = len(inserted)
         final_errors = per_signal_errors
         final_warnings = list(result.warnings or [])
         final_run_metrics = dict(result.run_metrics or {})
