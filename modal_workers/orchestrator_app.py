@@ -286,10 +286,18 @@ def seed_fda_asset_aliases_refresh(
 # Orchestrator — single assessment
 # ============================================================================
 
+# Phase 2C prep: 5-role sub-agent pipeline (literature + competitive +
+# regulatory_history + options_microstructure + commercial_opportunity) blew
+# the 200k aggregate cap on the 2026-05-27 VRDN dry-run — regulatory_history
+# saw only 18,521 tokens remaining and short-circuited. `env=` here wins over
+# the same key in `anthropic-orchestrator` secret, so this is the canonical
+# place to tune the cap going forward. Bump target lifted from
+# memory/sub_agent_schema_drift_2026-05-23.md S-3.
 @app.function(
     image=image,
     timeout=3600,
     secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
+    env={"ORCH_SUB_AGENT_BUDGET_TOKENS": "350000"},
 )
 def orchestrator_run_one(
     asset_id: str,
