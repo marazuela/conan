@@ -22,11 +22,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_url,
+)
 from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
-OPENFDA_BASE = "https://api.fda.gov"
 LABEL_TIMEOUT_S = 20.0
 
 
@@ -125,8 +128,8 @@ def _openfda_label_search(search_clause: str) -> Optional[Dict[str, Any]]:
     """Issue one openFDA /drug/label search and return the first result, or None."""
     try:
         r = requests.get(
-            f"{OPENFDA_BASE}/drug/label.json",
-            params={"search": search_clause, "limit": 1},
+            openfda_url("drug/label.json"),
+            params={"search": search_clause, "limit": 1, **openfda_auth_params()},
             timeout=LABEL_TIMEOUT_S,
         )
     except requests.exceptions.RequestException as exc:

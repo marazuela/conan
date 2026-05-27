@@ -43,11 +43,15 @@ import requests
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
+from modal_workers.shared.openfda_client import (  # noqa: E402
+    openfda_auth_query_suffix,
+    openfda_url,
+)
 from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-OPENFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+OPENFDA_URL = openfda_url("drug/drugsfda.json")
 REQUEST_TIMEOUT_S = 30
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_MAX_PAGES = 100
@@ -167,7 +171,10 @@ def _harvest_openfda(
 
     for page in range(max_pages):
         skip = page * page_size
-        url = f"{OPENFDA_URL}?search={search_enc}&limit={page_size}&skip={skip}"
+        url = (
+            f"{OPENFDA_URL}?search={search_enc}&limit={page_size}&skip={skip}"
+            f"{openfda_auth_query_suffix()}"
+        )
         try:
             r = requests.get(url, timeout=REQUEST_TIMEOUT_S)
             if r.status_code == 404:

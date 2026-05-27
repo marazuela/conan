@@ -40,11 +40,13 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_url,
+)
 from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger(__name__)
-
-OPENFDA_BASE = "https://api.fda.gov"
 
 # submission_class_code values worth ingesting (openFDA uses uppercase TYPE).
 # TYPE 1 = New Molecular Entity. TYPE 4 = combination. BLA = any biologic.
@@ -112,8 +114,9 @@ def fetch_openfda_approvals(
             ),
             "limit": page_size,
             "skip": skip,
+            **openfda_auth_params(),
         }
-        url = f"{OPENFDA_BASE}/drug/drugsfda.json"
+        url = openfda_url("drug/drugsfda.json")
         try:
             r = requests.get(url, params=params, timeout=30.0)
         except requests.exceptions.RequestException as exc:
