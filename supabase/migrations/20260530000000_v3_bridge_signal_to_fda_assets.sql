@@ -197,11 +197,27 @@ BEGIN
   );
   v_source_url := NULLIF(p_sig.raw_payload ->> 'source_url', '');
 
-  -- Detect EDGAR exhibit-number false positives ("EX-99", "EX-99.1", etc.)
-  -- These come from naive 8-K text parsing and are not real drug names.
+  -- Detect non-drug-name garbage that leaks in from naive 8-K text parsing
+  -- and watchlist auto-discovery. The asset-resolution path uses lower(drug_name)
+  -- equality, so any of these strings would either silently fail to match (best
+  -- case) or worse, falsely match an auto-seeded stub that an earlier garbage
+  -- run created. Strip them before resolution; the bridge then falls back to
+  -- entity-only matching or the operator_flag triage path.
+  --   ^ex[-_]?\d           EDGAR exhibit numbers (EX-99, EX_99.1, EX99)
+  --   ^exhibit\b           "Exhibit 99.1" expanded form
+  --   (auto-discovered)    sentinel string the watchlist enters when an 8-K
+  --                        mentions a ticker but no drug name was extracted
+  --   ^(unknown|n/?a|tbd|tba)$  human-shorthand placeholders
+  --   length < 2 or all non-alpha  pure-punctuation / single-char residue
   v_drug_name_is_garbage := (
     v_drug_name IS NOT NULL
-    AND v_drug_name ~* '^ex[-_]?\d'
+    AND (
+      v_drug_name ~* '^ex[-_]?\d'
+      OR v_drug_name ~* '^exhibit\b'
+      OR lower(v_drug_name) = '(auto-discovered)'
+      OR v_drug_name ~* '^\s*\(?(unknown|n/?a|tbd|tba|none|null)\)?\s*$'
+      OR length(regexp_replace(v_drug_name, '[^[:alpha:]]', '', 'g')) < 2
+    )
   );
   IF v_drug_name_is_garbage THEN
     v_drug_name := NULL;
@@ -406,6 +422,45 @@ BEGIN
     true, false
   )
   ON CONFLICT (asset_id, document_id, link_type) DO NOTHING;
+
+  -- Project PDUFA date into extracted_facts so the
+  -- fda_assets_next_catalyst_from_extracted_facts trigger
+  -- (20260521120000_fda_assets_next_catalyst_writer.sql) can refresh
+  -- fda_assets.next_catalyst_date. Without this projection, signals carrying
+  -- a pdufa_date in raw_payload feed an asset_document link but never
+  -- populate the column the catalyst-proximity sweep selects on.
+  --
+  -- extracted_facts NOT NULL columns: document_id, fact_type, fact_text,
+  -- evidence_quote, citation_span (jsonb), confidence, extraction_model.
+  -- No UNIQUE on (document_id, fact_type) exists, so guard with NOT EXISTS
+  -- to keep the trigger idempotent on signal replays.
+  -- ISO-only — the trigger gate requires YYYY-MM-DD shape.
+  IF v_pdufa_date IS NOT NULL
+     AND v_pdufa_date ~ '^\d{4}-\d{2}-\d{2}$' THEN
+    INSERT INTO public.extracted_facts (
+      document_id, asset_id, fact_type, fact_text,
+      evidence_quote, citation_span,
+      confidence, extraction_model
+    )
+    SELECT
+      v_document_id, v_asset_id, 'pdufa_date', v_pdufa_date,
+      format('PDUFA date %s carried in signal %s raw_payload',
+             v_pdufa_date, p_sig.signal_type),
+      jsonb_build_object(
+        'source', 'bridge_signal_to_v3',
+        'signal_id', p_sig.signal_id,
+        'signal_type', p_sig.signal_type,
+        'raw_payload_key', 'pdufa_date'
+      ),
+      v_confidence,
+      'bridge_signal_to_v3'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.extracted_facts ef
+      WHERE ef.document_id = v_document_id
+        AND ef.fact_type = 'pdufa_date'
+        AND ef.fact_text = v_pdufa_date
+    );
+  END IF;
 
   RETURN v_asset_id;
 END;
