@@ -32,6 +32,12 @@
     "boxed_warning_rate": 0.0,
     "median_nda_to_decision_days": 240
   },
+  "sparse_class_warning": {
+    "fires": true,
+    "n_precedents": 1,
+    "threshold": 5,
+    "rationale": "Only one class precedent (teprotumumab); base-rate point estimate is not load-bearing — Stage 5 must widen CI."
+  },
   "sponsor_track_record": {
     "prior_approvals": 0,
     "prior_crls": 0,

@@ -1,4 +1,7 @@
--- 20260527000000_persist_assessment_v3_null_id_fix.sql
+-- 20260527020000_persist_assessment_v3_null_id_fix.sql
+-- (renamed from 20260527000000_* to avoid duplicate-version collision with
+-- 4 sibling 20260527000000_* files — `supabase db push` tracks by version
+-- prefix and silently skips dups. See branch_review_bundle_split_workflow.md.)
 --
 -- Bug: persist_assessment_v3 INSERTs into convergence_assessments using
 -- jsonb_populate_record(NULL::public.convergence_assessments, v_assessment).
