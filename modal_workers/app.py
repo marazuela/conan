@@ -677,11 +677,12 @@ def sec_8k_mna_once() -> dict:
 
 @app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
 def fed_register_adcom_once() -> dict:
-    """Federal Register FDA AdComm meeting notices → fda_regulatory_events
-    (event_type='adcom', event_status='pending'). Lookup-only asset resolution
-    via fda_assets.sponsor_name / entities.name; emits no events for sponsors
-    absent from the curated fda_assets set. 30-day look-back captures notices
-    typically published 30–90d before meeting date."""
+    """Federal Register FDA AdComm meeting notices → catalyst_universe
+    (profile='binary_catalyst', catalyst_type='adcomm'). Reuses the
+    fda_advisory_calendar helper for body-text drug-name extraction;
+    ticker resolution is deferred to a downstream entity_linker pass.
+    30-day look-back captures notices typically published 30–90d before
+    meeting date."""
     return _run_fetcher("fed_register_adcom", days_back=30)
 
 
