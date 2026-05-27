@@ -473,7 +473,7 @@ def _run(scanner_name: str) -> dict:
 
 
 def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
-    """Runner for catalyst_universe fetchers (modal_workers/fetchers/universe/*).
+    """Runner for date-windowed catalyst_universe fetchers (universe/*).
 
     Fetchers don't use scanner_base/scanner_runs — they write directly to
     catalyst_universe. Contract: `fetch(client, *, start_date, end_date) -> dict`.
@@ -486,6 +486,18 @@ def _run_fetcher(fetcher_module: str, *, days_back: int = 7) -> dict:
     end = date.today()
     start = end - timedelta(days=days_back)
     return mod.fetch(SupabaseClient(), start_date=start, end_date=end)
+
+
+def _run_fetcher_snapshot(fetcher_module: str) -> dict:
+    """Runner for snapshot-style catalyst_universe fetchers — sources that
+    return *current state* with no notion of a date window (e.g. openFDA's
+    /drug/shortages and /drug/enforcement). Contract: `fetch(client) -> dict`.
+    """
+    from importlib import import_module
+    from modal_workers.shared.supabase_client import SupabaseClient
+
+    mod = import_module(f"modal_workers.fetchers.universe.{fetcher_module}")
+    return mod.fetch(SupabaseClient())
 
 
 # ==========================================================================
@@ -683,6 +695,16 @@ def edgar_8k_pdufa_once() -> dict:
     return _run_fetcher("edgar_8k_pdufa", days_back=14)
 
 
+@app.function(image=image, timeout=300, secrets=[scanner_secrets, supabase_secrets])
+def openfda_drug_shortages_once() -> dict:
+    """openFDA /drug/shortages (status=Current) → catalyst_universe (drug_shortage).
+    Snapshot-style fetcher: pulls the full active-shortage list each run, dedupes
+    on (brand_or_generic, status) so strength variants don't fan out, resolves
+    against fda_assets via application_number then proprietary_name ilike, and
+    upserts. Skips rows that don't match the curated fda_assets set."""
+    return _run_fetcher_snapshot("openfda_drug_shortages")
+
+
 # ==========================================================================
 # reporting_weekly — spec §7.3 + §7.7 integrity sweep. Sunday 12:00 UTC cron.
 #   1. SQL RPC `reporting_integrity_sweep()` (migration 23) — UPSERTs
@@ -744,7 +766,8 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa", "sec_8k_mna", "fed_register_adcom", "edgar_8k_pdufa"],
+    13: ["fda_adcomm_pdufa", "sec_8k_mna", "fed_register_adcom", "edgar_8k_pdufa",
+         "openfda_drug_shortages"],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top
