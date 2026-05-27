@@ -66,6 +66,10 @@ image = (
         "lxml>=5.0",
         "curl_cffi>=0.6",
     )
+    # v4 Phase 6c (PR #152) deleted the v3 codepath entirely, so the
+    # ORCH_V4 env var that Phase 6a (#150) injected here is now dead config.
+    # Modal client v1.4.2+ also rejects `.env()` after `add_local_*` as an
+    # out-of-order build step, so the line had become a deploy blocker.
     .add_local_python_source("modal_workers", "orchestrator_runtime")
     # Sub-agent JSON schemas live in the sibling conan-cowork-skills repo and
     # are resolved at runtime via Path(__file__).resolve().parents[3] in
@@ -75,14 +79,6 @@ image = (
         "../conan-cowork-skills/schemas",
         "/conan-cowork-skills/schemas",
     )
-    # v4 Phase 6a: flip ORCH_V4 default to 1 so production runs the v4
-    # single-pass FDA+commercial pipeline by default (collapsed stages,
-    # commercial_opportunity sub-agent, deterministic citation validator).
-    # Reversible by setting ORCH_V4=0 in a function-level env or Modal
-    # secret — no redeploy needed for rollback. Phase 6c will delete the
-    # v3 codepath and remove this env entirely once observation period
-    # passes.
-    .env({"ORCH_V4": "1"})
 )
 
 # Secrets
