@@ -2121,6 +2121,31 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         constitutional_result.n_citations_checked,
     )
     if not constitutional_result.pass_:
+        # Diagnostic dump: when Stage 7 blocks, print which specific shorts
+        # failed plus a small window of the cited_prose around the first
+        # unresolved cite. Without this it's impossible to tell if the model
+        # is hallucinating, truncating, or cross-citing from a stale context.
+        # Printed to stderr (Modal captures stdout/stderr but the logger
+        # config doesn't always surface logger.warning in `modal app logs`).
+        import sys as _sys
+        bad_shorts = [f.affected_id for f in constitutional_result.findings
+                      if f.affected_id]
+        _sys.stderr.write(
+            f"[STAGE_7_DIAG] unresolved_shorts={bad_shorts} "
+            f"n_facts_in_ctx={len(ctx['facts'])} "
+            f"n_docs_in_ctx={len(ctx['documents'])} "
+            f"first_5_fact_short_ids={[str(f['id'])[:8] for f in ctx['facts'][:5]]}\n"
+        )
+        # Show a 120-char window around the first bad short in cited_prose
+        if bad_shorts and cited_prose:
+            for s in bad_shorts[:3]:
+                idx = cited_prose.lower().find(s.lower())
+                if idx >= 0:
+                    window = cited_prose[max(0, idx-60):idx+len(s)+60]
+                    _sys.stderr.write(
+                        f"[STAGE_7_DIAG] context around '{s}': ...{window!r}...\n"
+                    )
+        _sys.stderr.flush()
         raise ConstitutionalFailure(constitutional_result.findings)
 
     # Phase 4A (D-127): expose parsed payload to the replay harness before
