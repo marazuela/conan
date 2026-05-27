@@ -1,34 +1,18 @@
-"""Orchestrator runtime — MVP single-stage assessment.
+"""Orchestrator runtime — v4 AI-first assessment.
 
 Reads (asset, extracted_facts, key documents, market context, prior memory)
 and emits one `convergence_assessments` row.
 
-This is a SIMPLIFIED v0.3 implementation of the plan's 10-stage pipeline. The
-fully-built pipeline (Stages 0-10 with sub-agent dispatch + Citations API +
-memory tool + isotonic calibration) is the next-iteration deliverable. v0.3
-demonstrates the core synthesis loop with hypothesis-grounded reasoning
-end-to-end on the VRDN / AXS-05 MVP.
+The v4 runtime keeps judgment in one cited AI synthesis pass and keeps code on
+evidence integrity, calibration, market gates, cost, persistence, and memory.
 
-What v0.3 includes:
-  Stage 0  — load asset metadata + extracted_facts (no full memory hierarchy)
-  Stage 1  — Sonnet synthesis (cited prose, fact_id-anchored)
-  Stage 2  — hypothesis enumeration ({bull, base, bear} + kill_conditions)
-  Stage 3  — adversarial pre-mortem (per-hypothesis verdict, cap on all_falsified)
+Pipeline:
+  Stage 0  — load asset metadata + extracted_facts + memory hierarchy
+  Stage 1  — FDA + commercial Sonnet synthesis (cited prose)
   Stage 4  — reference-class anchoring (base rate + similar resolved cases)
-  Stage 6  — Batch / streaming ensemble + dispersion (when ensemble_n > 1)
-  Stage 7  — Sonnet constitutional pass with citation-resolution check
-             (extended in v0.3 to walk Stage 2/3 citations)
+  Stage 7  — deterministic citation-resolution check
   Stage 9  — Sonnet structured-output extraction → schema-validated JSON
-             (post-hoc cap: conviction_pct ≤ 30 when Stage 3 returns all_falsified)
-  Stage 10 — write convergence_assessments row + hypothesis_enumeration +
-             premortem_assessments + post_mortem_queue stub
-
-What v0.3 skips (next iteration):
-  Stage 5   — Phase 5 sub-agents (literature / competitive / regulatory_history /
-              options_microstructure) dispatched from Stage 1
-  Stage 8   — isotonic calibration (curve-fitting math lives in
-              modal_workers.shared.compute; no curve fitted yet —
-              conviction_pct_calibrated == raw_conviction_pct until refit)
+  Stage 10 — write convergence_assessments row + post_mortem_queue stub
 
 Run:
   ANTHROPIC_API_KEY=... SUPABASE_URL=... \\
@@ -42,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -60,20 +45,7 @@ from orchestrator_runtime.client import (
     DEFAULT_EXTRACTOR_MODEL,
     DEFAULT_MODEL,
     OrchestratorClient,
-    estimate_cost,
     parse_json_or_none,
-)
-from orchestrator_runtime.ensemble import (
-    EnsembleResult,
-    run_role_diverse_ensemble,
-    run_batch_ensemble,
-    run_streaming_ensemble,
-)
-from orchestrator_runtime.constitutional import (
-    SEMANTIC_SYSTEM_PROMPT,
-    ConstitutionalFinding,
-    ConstitutionalResult,
-    run_constitutional_check,
 )
 from orchestrator_runtime.memory import MemoryStore, MemoryBlobs
 from orchestrator_runtime.sub_agent_dispatcher import (
@@ -82,21 +54,10 @@ from orchestrator_runtime.sub_agent_dispatcher import (
     reset_budget as reset_sub_agent_budget,
 )
 from orchestrator_runtime.evidence_packet import validate_evidence_packet
-from orchestrator_runtime.hypothesis import (
-    STAGE_2_SYSTEM,
-    HypothesisResult,
-    renormalize_priors,
-    run_hypothesis_enumeration,
-)
-from orchestrator_runtime.premortem import (
-    STAGE_3_SYSTEM,
-    PreMortemResult,
-    run_premortem,
-)
 
 logger = logging.getLogger(__name__)
 
-ORCHESTRATOR_VERSION = "orch-v0.4.0-mvp"
+ORCHESTRATOR_VERSION = "orch-v4.0"
 
 # Stream 3.6: Stage 1 sub-agent dispatch is feature-flagged. When ON, Stage 1
 # runs an Anthropic tool-use loop with `dispatch_sub_agent` available. Default
@@ -128,10 +89,6 @@ CACHEABLE_PREFIX_HEADER = (
     "Treat them as fixed reference; per-stage instructions follow in the "
     "next system block.\n"
 )
-
-# Stage 9 post-hoc cap: when Stage 3 returns all_falsified, conviction_pct
-# is forced to ≤ this ceiling. Plan §"D2: All-falsified handling".
-ALL_FALSIFIED_CONVICTION_CEILING = 30.0
 
 # Per-asset doc-buffer construction caps (keep below Tier-1 rate limit
 # of 30k input tokens/min on the new API key)
@@ -217,6 +174,27 @@ class EvidencePacketError(RuntimeError):
     """Raised when Tier-1 would synthesize without enough grounded evidence."""
 
 
+@dataclass
+class ConstitutionalFinding:
+    severity: str
+    check: str
+    detail: str
+    affected_id: Optional[str] = None
+
+
+@dataclass
+class ConstitutionalResult:
+    pass_: bool
+    findings: List[ConstitutionalFinding] = field(default_factory=list)
+    n_citations_checked: int = 0
+    n_citations_resolved: int = 0
+    semantic_check_used: bool = False
+    semantic_input_tokens: int = 0
+    semantic_output_tokens: int = 0
+    semantic_cost_usd: float = 0.0
+    semantic_latency_ms: int = 0
+
+
 class ConstitutionalFailure(RuntimeError):
     """Raised when Stage 7 blocks persistence of an assessment."""
 
@@ -238,6 +216,71 @@ class ConstitutionalFailure(RuntimeError):
 
 class Stage9ParseError(RuntimeError):
     """Raised when Stage 9 fails to emit valid structured JSON."""
+
+
+CITE_FACT_RE = re.compile(r"\[F:([0-9a-f]{6,12})\]", re.IGNORECASE)
+CITE_DOC_RE = re.compile(r"\[D:([0-9a-f]{6,12})\]", re.IGNORECASE)
+
+
+def _validate_citations(
+    *,
+    cited_prose: str,
+    facts: List[Dict[str, Any]],
+    document_ids: List[str],
+) -> ConstitutionalResult:
+    """Deterministically verify Stage 1 cites resolve to visible evidence.
+
+    Phase 6c removes the semantic constitutional reviewer but keeps this
+    invariant: every [F:short] and [D:short] in the persisted thesis must map
+    to an extracted fact or source document shown to the model.
+    """
+    fact_short_set = {str(f["id"])[:8].lower() for f in facts if f.get("id")}
+    doc_short_set = {str(d)[:8].lower() for d in document_ids if d}
+    cited_facts = {
+        m.group(1).lower() for m in CITE_FACT_RE.finditer(cited_prose or "")
+    }
+    cited_docs = {
+        m.group(1).lower() for m in CITE_DOC_RE.finditer(cited_prose or "")
+    }
+
+    findings: List[ConstitutionalFinding] = []
+    n_total = len(cited_facts) + len(cited_docs)
+    n_resolved = 0
+
+    for short in cited_facts:
+        if short in fact_short_set:
+            n_resolved += 1
+        else:
+            findings.append(ConstitutionalFinding(
+                severity="error",
+                check="unresolved_fact_id",
+                detail=(
+                    f"Cited fact_id [F:{short}] does not resolve to any fact "
+                    "in the assessment's fact_ids list"
+                ),
+                affected_id=short,
+            ))
+
+    for short in cited_docs:
+        if short in doc_short_set:
+            n_resolved += 1
+        else:
+            findings.append(ConstitutionalFinding(
+                severity="error",
+                check="unresolved_doc_id",
+                detail=(
+                    f"Cited doc_id [D:{short}] does not resolve to any "
+                    "document in the assessment's document_ids list"
+                ),
+                affected_id=short,
+            ))
+
+    return ConstitutionalResult(
+        pass_=all(f.severity != "error" for f in findings),
+        findings=findings,
+        n_citations_checked=n_total,
+        n_citations_resolved=n_resolved,
+    )
 
 
 # ===========================================================================
@@ -482,69 +525,10 @@ def stage_1_rag_retrieve(
 # Stage 1 — Sonnet synthesis
 # ===========================================================================
 
-STAGE_1_SYSTEM = """You are an FDA-event analyst producing an investment thesis on \
-one tracked drug asset. You synthesize from a structured fact layer + raw \
-document excerpts + (when available) prior assessment memory.
-
-Your output is CITED PROSE — every material claim references a fact_id from \
-the structured layer (in [F:<fact_id_short>] notation, e.g. [F:abc123]) or a \
-document_id (in [D:<doc_id_short>]). Uncited claims will be rejected by the \
-constitutional check.
-
-Required output structure (verbatim section headers, in this order):
-
-## Asset summary
-2-3 sentences identifying the asset, indication, and current regulatory state.
-
-## Catalyst landscape
-The pending catalyst (PDUFA date, AdComm, readout, etc.) and what's known \
-about it. Cite specific facts.
-
-## Evidence for approval / positive direction
-Bullet list. Each bullet cites the specific fact(s) that support it.
-
-## Evidence for CRL / negative direction
-Bullet list. Each bullet cites contradicting facts. If you cannot find \
-contrary evidence, say "no contrary evidence found in the document set" \
-explicitly.
-
-## Key uncertainties
-Bullet list of open questions where the evidence is ambiguous. Each \
-uncertainty: what's unknown, why it matters, what would resolve it.
-
-## Reasoning trace
-3-5 sentences walking through how you weighted the evidence to reach your \
-direction + conviction.
-
-## Conclusion
-- thesis_direction: long | short | neutral | straddle
-- conviction_pct: 0-100 (probability your direction is correct)
-- evidence_quality: 0.0-1.0 (how confident are you in the underlying \
-evidence base — separate from direction)
-
-Direction calibration:
-  long: expect approval / positive market move
-  short: expect CRL / negative market move
-  neutral: outcome is too uncertain to take directional position
-  straddle: expect large move but cannot determine direction; bet on \
-volatility
-
-Conviction calibration:
-  90+: strong consensus across multiple primary sources, no material \
-contradicting evidence
-  70-89: clear lean, minor uncertainties manageable
-  50-69: meaningful uncertainty, lean is plausible but contestable
-  30-49: highly uncertain, lean is weak
-  <30: should be 'neutral' — don't force a direction"""
-
-
-# v4 (Phase 2a): FDA + commercial dual-mandate Stage 1 prompt. Activated when
-# ORCH_V4=1 env var is set. Keeps the same cited-prose contract as v3 but adds
-# a required "Commercial opportunity" section covering TAM, standard of care,
-# unmet need, side-effect profile of current therapies, regulatory incentives,
-# and competitive landscape. Phase 2c will inline hypothesis enumeration +
-# adversarial premortem here (deleting the separate Stage 2/3 calls).
-STAGE_1_V4_SYSTEM = """You are a biotech investment analyst producing a complete \
+# Canonical v4 Stage 1 prompt: FDA + commercial dual-mandate synthesis. This
+# prompt absorbs the old separate hypothesis enumeration, adversarial pre-mortem,
+# ensemble, and semantic constitutional-review concerns into one cited AI pass.
+STAGE_1_SYSTEM = """You are a biotech investment analyst producing a complete \
 thesis on one tracked drug asset. You evaluate two parallel dimensions:
 
 1. REGULATORY — approval probability anchored in trial-data forensics, AdCom \
@@ -659,9 +643,9 @@ def stage_1_synthesize(
     tool_result blocks and Claude continues until it produces final cited
     prose.
 
-    Phase 2a: `system_prompt` defaults to the v3 STAGE_1_SYSTEM. The v4
-    codepath (`_run_one_inner` with `ORCH_V4=1`) passes STAGE_1_V4_SYSTEM
-    here, which adds the required Commercial opportunity section.
+    The canonical v4 prompt includes the required Commercial opportunity
+    section and the inline reasoning discipline that replaced the old Stage
+    2/3/6/semantic-7 chain.
     """
     user_content = _build_stage_1_user_content(ctx)
     facts = ctx["facts"]
@@ -833,51 +817,9 @@ def _stage_1_synthesize_with_dispatch(
 # Stage 9 — extraction (structured outputs)
 # ===========================================================================
 
+# Canonical v4 Stage 9 schema. The commercial_dimensions block is part of the
+# production output contract and persists to convergence_assessments.
 STAGE_9_SYSTEM = """You convert a cited-prose investment thesis into a strict \
-JSON object matching the schema below. Do not add commentary; emit JSON only.
-
-Schema:
-{
-  "thesis_direction": "long" | "short" | "neutral" | "straddle",
-  "conviction_pct": <number 0-100>,
-  "prediction_target": {
-    "target_type": "price_move" | "regulatory_outcome" | "event_outcome",
-    "horizon_days": <integer or null>,
-    "event_anchor": "<event id/name or null>",
-    "label_rule": "forward_return_t30_calendar" | "approval_decision" | "adcom_recommendation"
-  },
-  "evidence_quality": <number 0.0-1.0>,
-  "thesis_summary": "<1-3 sentence summary>",
-  "key_facts": [
-    {"text": "<short claim>", "fact_id_short": "<8-char id from [F:...] cite>"}
-  ],
-  "uncertainties": [
-    {"question": "<what's unknown>", "why_matters": "<short>", "how_to_resolve": "<short>"}
-  ],
-  "cited_prose_blocks": [
-    {"section": "<section header>", "text": "<paragraph>", "fact_citations": ["<8-char id>"], "doc_citations": ["<8-char id>"]}
-  ],
-  "reasoning_summary": "<2-3 sentence reasoning trace>"
-}
-
-Rules:
-- thesis_direction MUST be one of the four values
-- conviction_pct + evidence_quality MUST be numeric (no strings)
-- prediction_target is required. Use price_move + horizon_days=30 + \
-label_rule=forward_return_t30_calendar unless the prose explicitly predicts a \
-regulatory or event outcome.
-- key_facts: 5-15 items, each grounded in a [F:...] cite from the prose
-- uncertainties: 2-5 items
-- cited_prose_blocks: one per section header in the prose; preserve all \
-[F:...] / [D:...] cites you find
-- Output ONLY the JSON object — no markdown fences, no commentary"""
-
-
-# v4 (Phase 2a): Stage 9 schema extended with `commercial_dimensions` so the
-# new Commercial opportunity section of the v4 Stage 1 prose lands in
-# convergence_assessments.commercial_dimensions (jsonb column added by the
-# Phase 1 migration). Everything else is identical to STAGE_9_SYSTEM.
-STAGE_9_V4_SYSTEM = """You convert a cited-prose investment thesis into a strict \
 JSON object matching the schema below. Do not add commentary; emit JSON only.
 
 Schema:
@@ -945,9 +887,7 @@ def stage_9_extract(
 ) -> tuple[Optional[Dict[str, Any]], StageMetric]:
     """Stage 9 structured extraction.
 
-    Phase 2a: `system_prompt` defaults to STAGE_9_SYSTEM. The v4 codepath
-    passes STAGE_9_V4_SYSTEM here, which extends the schema with
-    `commercial_dimensions`.
+    The canonical v4 schema includes `commercial_dimensions`.
     """
     user_content = f"Cited prose to extract:\n\n{cited_prose}"
     result = a_client.call(
@@ -1068,13 +1008,12 @@ def build_claim_ledger(
     *,
     cited_prose_blocks: List[Dict[str, Any]],
     key_facts: List[Dict[str, Any]],
-    hypothesis_result: Optional[HypothesisResult],
 ) -> List[Dict[str, Any]]:
     """Normalize alertable model claims into a compact evidence ledger.
 
-    This is intentionally derived from already-hydrated Stage 9 / Stage 2
-    structures so it cannot introduce new claims. Downstream alert gates can
-    require at least one supported claim without reparsing free-form prose.
+    This is intentionally derived from already-hydrated Stage 9 structures so
+    it cannot introduce new claims. Downstream alert gates can require at
+    least one supported claim without reparsing free-form prose.
     """
     claims: List[Dict[str, Any]] = []
     for idx, block in enumerate(cited_prose_blocks or []):
@@ -1115,24 +1054,6 @@ def build_claim_ledger(
             "source_index": idx,
         })
 
-    if hypothesis_result is not None:
-        for h in hypothesis_result.hypotheses:
-            claims.append({
-                "claim_id": f"C{len(claims) + 1}",
-                "claim_type": f"hypothesis_{h.label}",
-                "section": "hypotheses",
-                "claim_text": h.claim[:800],
-                "supporting_fact_ids": h.supporting_fact_ids,
-                "contradicting_fact_ids": h.contradicting_fact_ids,
-                "document_ids": [],
-                "kill_conditions": h.kill_conditions,
-                "verifier_status": (
-                    "supported"
-                    if h.supporting_fact_ids or h.contradicting_fact_ids
-                    else "unsupported"
-                ),
-                "model_origin": "stage_2_hypothesis_enumeration",
-            })
     return claims
 
 
@@ -1362,11 +1283,6 @@ def _build_stage_10_secondaries(
     run: AssessmentRun,
     ctx: Dict[str, Any],
     parsed: Dict[str, Any],
-    *,
-    hypothesis_result: Optional[HypothesisResult],
-    premortem_result: Optional[PreMortemResult],
-    short_to_full: Dict[str, str],
-    short_to_full_doc: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     stage_metrics = [
         {
@@ -1385,49 +1301,6 @@ def _build_stage_10_secondaries(
         for m in run.stage_metrics
     ]
 
-    hypotheses: List[Dict[str, Any]] = []
-    if hypothesis_result is not None and hypothesis_result.hypotheses:
-        for h in hypothesis_result.hypotheses:
-            hypotheses.append({
-                "hypothesis_id": h.hypothesis_id,
-                "label": h.label,
-                "claim": h.claim,
-                "mechanism": h.mechanism,
-                "direction": h.direction,
-                "supporting_fact_ids": [
-                    short_to_full[s.lower()]
-                    for s in h.supporting_fact_ids
-                    if s.lower() in short_to_full
-                ],
-                "contradicting_fact_ids": [
-                    short_to_full[s.lower()]
-                    for s in h.contradicting_fact_ids
-                    if s.lower() in short_to_full
-                ],
-                "kill_conditions": h.kill_conditions,
-                "prior_estimate_pct": h.prior_estimate_pct,
-                "prior_estimate_pct_pre_anchor": h.prior_estimate_pct_pre_anchor,
-            })
-
-    premortem_verdicts: List[Dict[str, Any]] = []
-    if premortem_result is not None and premortem_result.verdicts:
-        for v in premortem_result.verdicts:
-            premortem_verdicts.append({
-                "hypothesis_id": v.hypothesis_id,
-                "verdict": v.verdict,
-                "failure_modes": [
-                    {
-                        "description": fm.description,
-                        "severity": fm.severity,
-                        "evidence_fact_ids": fm.evidence_fact_ids,
-                        "speculative": fm.speculative,
-                    }
-                    for fm in v.failure_modes
-                ],
-                "disconfirming_searches": v.disconfirming_searches,
-                "update_triggers": v.update_triggers,
-            })
-
     direction = parsed.get("thesis_direction") or "neutral"
     try:
         predicted_pct = float(parsed.get("conviction_pct") or 50.0)
@@ -1436,8 +1309,8 @@ def _build_stage_10_secondaries(
 
     return {
         "stage_metrics": stage_metrics,
-        "hypotheses": hypotheses,
-        "premortem_verdicts": premortem_verdicts,
+        "hypotheses": [],
+        "premortem_verdicts": [],
         "post_mortem_stub": {
             "asset_id": run.asset_id,
             "predicted_outcome": _direction_to_outcome(direction),
@@ -1478,26 +1351,16 @@ def stage_10_persist(
     ctx: Dict[str, Any],
     model: str,
     extractor_model: str,
-    ensemble_payload: Optional[Dict[str, Any]] = None,
     constitutional_result: Optional[ConstitutionalResult] = None,
-    hypothesis_result: Optional[HypothesisResult] = None,
-    premortem_result: Optional[PreMortemResult] = None,
     *,
-    is_v4: bool = False,
     signal_category: Optional[str] = None,
     commercial_dimensions: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Persist one convergence_assessment row.
 
-    Phase 2a v4 kwargs (keyword-only so v3 callers are unaffected):
-      is_v4: stamps `orchestrator_version_v4=true` on the row for A/B
-             partitioning during the Phase 6 flag-flip observation window.
-      signal_category: stamps `signal_category` column; Phase 7 groups
-             accuracy metrics by this. v4 default is the trigger_type;
-             Phase 4 scanners will pass real category strings.
-      commercial_dimensions: stamps `commercial_dimensions` jsonb column
-             with the v4 Stage 9 commercial output (TAM, SoC, unmet need,
-             etc.). NULL for v3 rows.
+    v4 stamps `orchestrator_version_v4=true` unconditionally. The legacy
+    v3 hypothesis, premortem, and ensemble side payloads are no longer produced;
+    their historical columns remain nullable for old rows.
     """
     fact_ids = [f["id"] for f in ctx["facts"]]
     document_ids = [d["id"] for d in ctx["documents"]]
@@ -1530,16 +1393,7 @@ def stage_10_persist(
 
     conviction = float(parsed.get("conviction_pct") or 50.0)
     conviction = max(0.0, min(100.0, conviction))
-    # D-117: when Stage 3 capped the conviction, raw_conviction_pct should
-    # record the pre-cap (Stage 5/6) value, not the capped one.
-    pre_cap_conviction = ctx.get("pre_premortem_conviction")
-    if pre_cap_conviction is not None:
-        try:
-            raw_conviction = max(0.0, min(100.0, float(pre_cap_conviction)))
-        except (TypeError, ValueError):
-            raw_conviction = conviction
-    else:
-        raw_conviction = conviction
+    raw_conviction = conviction
     direction = parsed.get("thesis_direction") or "neutral"
     if direction not in {"long", "short", "neutral", "straddle"}:
         direction = "neutral"
@@ -1561,9 +1415,6 @@ def stage_10_persist(
     else:
         calibrated = raw_conviction
         calibration_curve_version = None
-    if ctx.get("conviction_capped_by_premortem"):
-        calibrated = min(calibrated, ALL_FALSIFIED_CONVICTION_CEILING)
-
     band = derive_band(calibrated)
     raw_prediction_target = parsed.get("prediction_target")
     prediction_target_explicit = isinstance(raw_prediction_target, dict)
@@ -1572,23 +1423,6 @@ def stage_10_persist(
     )
     if not prediction_target_explicit:
         ctx["prediction_target_defaulted"] = True
-
-    # Dispersion-based abstain. When the ensemble actively disagrees on
-    # direction or convictions diverge wildly, downgrade an immediate band
-    # to watchlist so we don't email a noisy signal. Records the abstain
-    # reason in ensemble_payload so downstream observability can attribute
-    # the downgrade. Only meaningful when N≥2; at N=1 the call is a no-op.
-    from orchestrator_runtime.ensemble import compute_dispersion_abstain
-    band, dispersion_abstain_reason = compute_dispersion_abstain(
-        ensemble_payload, band
-    )
-    if dispersion_abstain_reason is not None and ensemble_payload is not None:
-        ensemble_payload = dict(ensemble_payload)
-        ensemble_payload["dispersion_abstain_reason"] = dispersion_abstain_reason
-        logger.info(
-            "Dispersion abstain: band downgraded to %s — %s",
-            band, dispersion_abstain_reason,
-        )
 
     market_context, band, market_gate_reason = compute_market_side_context(
         sb,
@@ -1621,56 +1455,6 @@ def stage_10_persist(
     total_cost = sum(m.cost_usd for m in run.stage_metrics)
     total_latency = sum(m.latency_ms for m in run.stage_metrics)
 
-    # Stage 2/3 denormalized payloads for the convergence_assessments row
-    # (structured per-hypothesis rows live in hypothesis_enumeration +
-    # premortem_assessments).
-    hypotheses_summary: Optional[List[Dict[str, Any]]] = None
-    pre_mortem_summary: Optional[str] = None
-    adversarial_summary: Optional[List[Dict[str, Any]]] = None
-    pre_mortem_verdict_value: Optional[str] = None
-    surviving_ids_value: List[str] = []
-    if hypothesis_result is not None:
-        hypotheses_summary = [
-            {
-                "hypothesis_id": h.hypothesis_id,
-                "label": h.label,
-                "claim": h.claim,
-                "direction": h.direction,
-                "kill_conditions": h.kill_conditions,
-                "prior_estimate_pct": h.prior_estimate_pct,
-            }
-            for h in hypothesis_result.hypotheses
-        ]
-    if premortem_result is not None:
-        pre_mortem_verdict_value = premortem_result.overall_verdict
-        surviving_ids_value = list(premortem_result.surviving_hypothesis_ids)
-        adversarial_summary = [
-            {
-                "hypothesis_id": v.hypothesis_id,
-                "verdict": v.verdict,
-                "n_failure_modes": len(v.failure_modes),
-                "kill_count": sum(1 for fm in v.failure_modes if fm.severity == "kill"),
-                "weaken_count": sum(1 for fm in v.failure_modes if fm.severity == "weaken"),
-                "tail_count": sum(1 for fm in v.failure_modes if fm.severity == "tail"),
-            }
-            for v in premortem_result.verdicts
-        ]
-        # Plain-text pre_mortem narrative for dashboard rendering.
-        # D-120: cap each failure-mode line at 500 chars and the total at
-        # 8000 to avoid pathological "1MB pre_mortem text" rows.
-        lines: List[str] = [f"Overall verdict: {premortem_result.overall_verdict}"]
-        if surviving_ids_value:
-            lines.append(f"Surviving: {', '.join(surviving_ids_value)}")
-        for v in premortem_result.verdicts:
-            lines.append(f"\n[{v.hypothesis_id}] {v.verdict}")
-            for fm in v.failure_modes:
-                tag = "[spec]" if fm.speculative else ""
-                line = f"  - ({fm.severity}){tag} {fm.description}"
-                lines.append(line[:500])
-        pre_mortem_summary = "\n".join(lines)[:8000]
-    elif hypothesis_result is not None:
-        pre_mortem_verdict_value = "skipped"
-
     convergence_signature = compute_convergence_signature(
         direction=direction,
         calibrated_conviction_pct=calibrated,
@@ -1695,8 +1479,6 @@ def stage_10_persist(
         "n_facts": len(fact_ids),
         "n_documents": len(document_ids),
         "fact_types_covered": sorted(set(f["fact_type"] for f in ctx["facts"])),
-        "conviction_capped_by_premortem": bool(
-            ctx.get("conviction_capped_by_premortem", False)),
         "evidence_packet": ctx.get("evidence_packet"),
         "prediction_target_explicit": prediction_target_explicit,
     }
@@ -1706,7 +1488,6 @@ def stage_10_persist(
     claim_ledger = build_claim_ledger(
         cited_prose_blocks=hydrated_blocks,
         key_facts=hydrated_key_facts,
-        hypothesis_result=hypothesis_result,
     )
     unsupported_claim_count = sum(
         1 for claim in claim_ledger
@@ -1767,11 +1548,11 @@ def stage_10_persist(
         "horizon_days": prediction_target["horizon_days"],
         "event_anchor": prediction_target["event_anchor"],
         "label_rule": prediction_target["label_rule"],
-        "ensemble_n": (ensemble_payload or {}).get("n", 1),
-        "ensemble_runs": (ensemble_payload or {}).get("runs"),
-        "ensemble_mean": (ensemble_payload or {}).get("raw_mean", conviction),
-        "ensemble_dispersion": (ensemble_payload or {}).get("dispersion", 0.0),
-        "shrinkage_factor": (ensemble_payload or {}).get("shrinkage_factor", 0.0),
+        "ensemble_n": 1,
+        "ensemble_runs": None,
+        "ensemble_mean": conviction,
+        "ensemble_dispersion": 0.0,
+        "shrinkage_factor": 0.0,
         "constitutional_pass": (
             constitutional_result.pass_ if constitutional_result else None),
         "constitutional_findings": (
@@ -1781,19 +1562,17 @@ def stage_10_persist(
             if constitutional_result else None),
         # PR-5: explicit gate outcome. Tier-1 rows always carry a non-NULL
         # gate_status; bulk_v0 rows set 'tier2_skipped' in tier2.py. The
-        # ConstitutionalFailure abort at runtime.py:~1916 means 'fail' here is
-        # only reachable when run_constitutional=False AND a prior gate raised
-        # findings — practically, live Tier-1 rows persist with 'pass' or
-        # 'not_evaluated' (Stage 7 skipped via --no-constitutional).
+        # ConstitutionalFailure aborts before persistence when deterministic
+        # citation validation fails, so persisted live rows should be 'pass'.
         "gate_status": (
             ("pass" if constitutional_result.pass_ else "fail")
             if constitutional_result else "not_evaluated"
         ),
-        "hypotheses": hypotheses_summary,
-        "pre_mortem": pre_mortem_summary,
-        "adversarial_challenges": adversarial_summary,
-        "pre_mortem_verdict": pre_mortem_verdict_value,
-        "surviving_hypothesis_ids": surviving_ids_value,
+        "hypotheses": None,
+        "pre_mortem": None,
+        "adversarial_challenges": None,
+        "pre_mortem_verdict": None,
+        "surviving_hypothesis_ids": [],
         "reference_class": reference_class_value,
         "reference_class_base_rate": (
             round(base_rate_value, 3) if base_rate_value is not None else None),
@@ -1821,10 +1600,7 @@ def stage_10_persist(
         # set is unchanged from the last completed synthesis.
         "document_set_hash": compute_document_set_hash(sb, asset_id),
         "convergence_signature": convergence_signature,
-        # v4 (Phase 2a) — A/B partition flag + category + commercial payload.
-        # Columns added by 20260613000000_v4_foundation_assessment_schema.sql.
-        # v3 rows persist defaults (false / NULL / NULL).
-        "orchestrator_version_v4": is_v4,
+        "orchestrator_version_v4": True,
         "signal_category": signal_category,
         "commercial_dimensions": commercial_dimensions,
     }
@@ -1833,10 +1609,6 @@ def stage_10_persist(
         run,
         ctx,
         {**parsed, "conviction_pct": calibrated, "thesis_direction": direction},
-        hypothesis_result=hypothesis_result,
-        premortem_result=premortem_result,
-        short_to_full=short_to_full,
-        short_to_full_doc=short_to_full_doc,
     )
     outcome_window_end, catalyst_marker = _resolve_catalyst_window(sb, asset_id)
     secondaries["post_mortem_stub"]["predicted_conviction_pct"] = calibrated
@@ -2200,11 +1972,6 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
             asset_id: str, trigger_type: str = "manual",
             model: str = DEFAULT_MODEL,
             extractor_model: str = DEFAULT_EXTRACTOR_MODEL,
-            ensemble_n: int = 1,
-            ensemble_mode: str = "streaming",     # streaming | batch
-            run_constitutional: bool = True,
-            constitutional_skip_semantic: bool = False,
-            enable_premortem: bool = True,
             dry_run: bool = False,
             run_id: Optional[str] = None,
             hard_kill_usd: Optional[float] = 15.0,
@@ -2229,9 +1996,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
     try:
         return _run_one_inner(
             sb, a_client, asset_id, trigger_type, model, extractor_model,
-            ensemble_n, ensemble_mode, run_constitutional,
-            constitutional_skip_semantic, enable_premortem, dry_run,
-            parsed_out,
+            dry_run, parsed_out,
         )
     finally:
         if hard_kill_usd is not None:
@@ -2241,48 +2006,12 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
 def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    asset_id: str, trigger_type: str,
                    model: str, extractor_model: str,
-                   ensemble_n: int, ensemble_mode: str,
-                   run_constitutional: bool,
-                   constitutional_skip_semantic: bool,
-                   enable_premortem: bool,
                    dry_run: bool,
                    parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    # v4 (Phase 2a + 2c + 6a): env-driven flag. v4 is now the default;
-    # ORCH_V4=0 is the explicit rollback to the v3 multi-stage pipeline
-    # (no code change required — env var update + Modal redeploy).
-    #
-    # When v4 is active (default):
-    #   - Stage 1 uses STAGE_1_V4_SYSTEM (FDA + commercial dual mandate; the
-    #     prompt absorbs hypothesis enumeration + adversarial premortem inline
-    #     and self-caps conviction_pct ≤30 if all hypotheses falsify).
-    #   - Stage 9 uses STAGE_9_V4_SYSTEM (schema extended with
-    #     commercial_dimensions).
-    #   - Stage 2 (hypothesis), Stage 3 (premortem), and Stage 7 semantic
-    #     adversarial pass are SKIPPED — their concerns are inlined into the
-    #     Stage 1 prompt. Stage 7 deterministic citation-resolution still
-    #     runs via constitutional_skip_semantic=True.
-    #   - Stage 6 ensemble is forced to single-shot (ensemble_n=1). Variance
-    #     reduction is no longer the default; opt-in for backtest cohorts.
-    # Persist stamps orchestrator_version_v4=true + signal_category +
-    # commercial_dimensions. Phase 6c deletes this whole branch + the bypassed
-    # Stage 2/3/6/7 code paths after the flag-flip observation period
-    # (~14 days) confirms v4 quality + cost are stable.
-    is_v4 = os.environ.get("ORCH_V4", "1") != "0"
-    stage_1_prompt = STAGE_1_V4_SYSTEM if is_v4 else STAGE_1_SYSTEM
-    stage_9_prompt = STAGE_9_V4_SYSTEM if is_v4 else STAGE_9_SYSTEM
-    if is_v4:
-        logger.info(
-            "v4 path active (default): commercial dual-mandate prompts; "
-            "stages 2/3/6/semantic-7 collapsed",
-        )
-        ensemble_n = 1
-        enable_premortem = False
-        constitutional_skip_semantic = True
-    else:
-        logger.warning(
-            "v4 path DISABLED via ORCH_V4=0 — running v3 multi-stage pipeline. "
-            "This is the Phase 6 rollback path; re-enable by unsetting the env var.",
-        )
+    logger.info(
+        "v4 path active: commercial dual-mandate prompts; retired "
+        "stage 2/3/6/semantic-7 code paths removed",
+    )
 
     run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
 
@@ -2329,302 +2058,60 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     shared_prefix = build_shared_system_prefix(ctx)
     static_prefix = build_static_prefix(ctx)
     stage_1_system_blocks = build_system_blocks(
-        shared_prefix, stage_1_prompt, static_prefix=static_prefix,
+        shared_prefix, STAGE_1_SYSTEM, static_prefix=static_prefix,
     )
 
-    if ensemble_n > 1:
-        logger.info("=== Stage 1+9 ensemble (%s, n=%d) ===", ensemble_mode, ensemble_n)
-        if ROLE_DIVERSE_ENSEMBLE_ENABLED:
-            ensemble = run_role_diverse_ensemble(
-                a_client,
-                stage_1_system=stage_1_system_blocks,
-                stage_1_user_content=user_content,
-                stage_9_system=stage_9_prompt,
-                model=model,
-                extractor_model=extractor_model,
-            )
-        elif ensemble_mode == "batch":
-            ensemble = run_batch_ensemble(
-                a_client,
-                stage_1_system=stage_1_system_blocks,
-                stage_1_user_content=user_content,
-                stage_9_system=stage_9_prompt,
-                n=ensemble_n,
-                model=model,
-                extractor_model=extractor_model,
-            )
-        else:
-            ensemble = run_streaming_ensemble(
-                a_client,
-                stage_1_system=stage_1_system_blocks,
-                stage_1_user_content=user_content,
-                stage_9_system=stage_9_prompt,
-                n=ensemble_n,
-                model=model,
-                extractor_model=extractor_model,
-            )
-        cited_prose = ensemble.cited_prose_winner
-        # Pick the parsed JSON from the run closest to the mean
-        winner_run = min(ensemble.runs,
-                         key=lambda r: abs(r.conviction_pct - ensemble.raw_mean_conviction))
-        parsed = winner_run.parsed_json
-        # Override fields with aggregated values
-        parsed["thesis_direction"] = ensemble.direction
-        parsed["conviction_pct"] = ensemble.final_conviction
-        if ensemble.evidence_quality_mean is not None:
-            parsed["evidence_quality"] = ensemble.evidence_quality_mean
-        # Aggregated facts + uncertainties
-        parsed["key_facts"] = ensemble.aggregated_key_facts
-        parsed["uncertainties"] = ensemble.aggregated_uncertainties
+    logger.info("=== Stage 1: synthesis (%s) ===", model)
+    cited_prose, m1 = stage_1_synthesize(
+        a_client, ctx, model, system_prompt=STAGE_1_SYSTEM,
+    )
+    run.stage_metrics.append(m1)
+    logger.info("Stage 1: %dms / %d in / %d out / $%.3f",
+                m1.latency_ms, m1.input_tokens, m1.output_tokens, m1.cost_usd)
 
-        run.stage_metrics.append(StageMetric(
-            stage_name=f"stage_1_synthesis_x{ensemble.n}",
-            model=model,
-            input_tokens=ensemble.total_input_tokens,
-            output_tokens=ensemble.total_output_tokens,
-            thinking_tokens=ensemble.total_thinking_tokens,
-            cache_read_tokens=ensemble.total_cache_read_tokens,
-            cache_creation_tokens=ensemble.total_cache_creation_tokens,
-            cost_usd=ensemble.total_cost_usd,
-            latency_ms=ensemble.total_latency_ms,
-            notes={
-                "ensemble_n": ensemble.n,
-                "ensemble_mode": ensemble.mode,
-                "role_diverse": ROLE_DIVERSE_ENSEMBLE_ENABLED,
-                "direction_distribution": ensemble.direction_distribution,
-                "raw_mean_conviction": ensemble.raw_mean_conviction,
-                "dispersion": ensemble.dispersion,
-                "shrinkage_factor": ensemble.shrinkage_factor,
-                "final_conviction": ensemble.final_conviction,
-            },
-        ))
-        logger.info("Ensemble: dist=%s mean=%.1f dispersion=%.1f final=%.1f cost=$%.3f",
-                    ensemble.direction_distribution, ensemble.raw_mean_conviction,
-                    ensemble.dispersion, ensemble.final_conviction,
-                    ensemble.total_cost_usd)
-        # Stash ensemble_runs payload for Stage 10
-        run_ensemble_payload = {
-            "n": ensemble.n,
-            "mode": ensemble.mode,
-            "direction_distribution": ensemble.direction_distribution,
-            "raw_mean": ensemble.raw_mean_conviction,
-            "dispersion": ensemble.dispersion,
-            "shrinkage_factor": ensemble.shrinkage_factor,
-            "final_conviction": ensemble.final_conviction,
-            "runs": [
-                {"run_idx": r.run_idx, "direction": r.direction,
-                 "conviction_pct": r.conviction_pct,
-                 "evidence_quality": r.evidence_quality,
-                 "role": getattr(r, "role", None)}
-                for r in ensemble.runs
+    logger.info("=== Stage 9: structured extraction (%s) ===", extractor_model)
+    parsed, m9 = stage_9_extract(
+        a_client, cited_prose, extractor_model,
+        system_prompt=STAGE_9_SYSTEM,
+    )
+    run.stage_metrics.append(m9)
+    if not parsed:
+        logger.error("Stage 9 failed to parse JSON; aborting")
+        raise Stage9ParseError("Stage 9 failed to parse JSON")
+    logger.info("Stage 9: %dms / %d in / %d out / $%.3f / direction=%s conviction=%s",
+                m9.latency_ms, m9.input_tokens, m9.output_tokens, m9.cost_usd,
+                parsed.get("thesis_direction"), parsed.get("conviction_pct"))
+
+    logger.info("=== Stage 7: deterministic citation validation ===")
+    constitutional_result = _validate_citations(
+        cited_prose=cited_prose,
+        facts=ctx["facts"],
+        document_ids=[d["id"] for d in ctx["documents"]],
+    )
+    run.stage_metrics.append(StageMetric(
+        stage_name="stage_7_citation_validation",
+        model="deterministic",
+        status="completed" if constitutional_result.pass_ else "failed",
+        notes={
+            "pass": constitutional_result.pass_,
+            "n_findings": len(constitutional_result.findings),
+            "n_citations_checked": constitutional_result.n_citations_checked,
+            "n_citations_resolved": constitutional_result.n_citations_resolved,
+            "findings": [
+                {"severity": f.severity, "check": f.check,
+                 "detail": f.detail[:200]}
+                for f in constitutional_result.findings
             ],
-        }
-    else:
-        logger.info("=== Stage 1: synthesis (%s) ===", model)
-        cited_prose, m1 = stage_1_synthesize(
-            a_client, ctx, model, system_prompt=stage_1_prompt,
-        )
-        run.stage_metrics.append(m1)
-        logger.info("Stage 1: %dms / %d in / %d out / $%.3f",
-                    m1.latency_ms, m1.input_tokens, m1.output_tokens, m1.cost_usd)
-
-        logger.info("=== Stage 9: structured extraction (%s) ===", extractor_model)
-        parsed, m9 = stage_9_extract(
-            a_client, cited_prose, extractor_model,
-            system_prompt=stage_9_prompt,
-        )
-        run.stage_metrics.append(m9)
-        if not parsed:
-            logger.error("Stage 9 failed to parse JSON; aborting")
-            raise Stage9ParseError("Stage 9 failed to parse JSON")
-        logger.info("Stage 9: %dms / %d in / %d out / $%.3f / direction=%s conviction=%s",
-                    m9.latency_ms, m9.input_tokens, m9.output_tokens, m9.cost_usd,
-                    parsed.get("thesis_direction"), parsed.get("conviction_pct"))
-        run_ensemble_payload = None
-
-    # ===========================================================================
-    # Stage 2 — hypothesis enumeration (post-Stage 1 / Stage 6 winner)
-    # Stage 3 — adversarial pre-mortem
-    # ===========================================================================
-    hypothesis_result: Optional[HypothesisResult] = None
-    premortem_result: Optional[PreMortemResult] = None
-    if enable_premortem:
-        logger.info("=== Stage 2: hypothesis enumeration (%s) ===", model)
-        hypothesis_result = run_hypothesis_enumeration(
-            a_client,
-            cited_prose=cited_prose,
-            parsed_json=parsed,
-            ctx=ctx,
-            model=model,
-            system_blocks=build_system_blocks(
-                shared_prefix, STAGE_2_SYSTEM, static_prefix=static_prefix,
-            ),
-        )
-        # D-118: post-Stage-2 prior renormalization. Blend model priors toward
-        # the empirical base rate from Stage 4, weighted by (1 - evidence_quality).
-        # PR-1: shadow mode (default) computes the renorm and surfaces deltas in
-        # renorm_debug without mutating priors. Operator flips
-        # internal_config.renormalize_priors_dry_run = 'false' to activate.
-        try:
-            eq_for_anchor = parsed.get("evidence_quality")
-            eq_for_anchor = float(eq_for_anchor) if eq_for_anchor is not None else None
-        except (TypeError, ValueError):
-            eq_for_anchor = None
-        _, renorm_debug = renormalize_priors(
-            hypothesis_result.hypotheses, anchor, eq_for_anchor,
-        )
-        run.stage_metrics.append(StageMetric(
-            stage_name="stage_2_hypothesis_enumeration",
-            model=model,
-            input_tokens=hypothesis_result.input_tokens,
-            output_tokens=hypothesis_result.output_tokens,
-            cache_read_tokens=hypothesis_result.cache_read_tokens,
-            cache_creation_tokens=hypothesis_result.cache_creation_tokens,
-            cost_usd=hypothesis_result.cost_usd,
-            latency_ms=hypothesis_result.latency_ms,
-            status="completed" if hypothesis_result.pass_ else "failed",
-            notes={
-                "pass": hypothesis_result.pass_,
-                "n_hypotheses": len(hypothesis_result.hypotheses),
-                "labels": [h.label for h in hypothesis_result.hypotheses],
-                "n_findings": len(hypothesis_result.findings),
-                "renormalize": renorm_debug,
-                # D-120: persist a head of the raw model response for audit;
-                # full text is lost otherwise (no separate raw_response store).
-                "raw_response_head": (hypothesis_result.raw_response or "")[:4000],
-                "findings": [
-                    {"severity": f.severity, "check": f.check,
-                     "detail": f.detail[:200]}
-                    for f in hypothesis_result.findings
-                ],
-            },
-        ))
-        logger.info(
-            "Stage 2: pass=%s n_hypotheses=%d labels=%s findings=%d cost=$%.3f "
-            "renorm=%s",
-            hypothesis_result.pass_, len(hypothesis_result.hypotheses),
-            [h.label for h in hypothesis_result.hypotheses],
-            len(hypothesis_result.findings), hypothesis_result.cost_usd,
-            renorm_debug.get("applied"),
-        )
-
-        if hypothesis_result.hypotheses:
-            logger.info("=== Stage 3: pre-mortem (%s) ===", model)
-            premortem_result = run_premortem(
-                a_client,
-                hypothesis_result=hypothesis_result,
-                ctx=ctx,
-                model=model,
-                system_blocks=build_system_blocks(
-                    shared_prefix, STAGE_3_SYSTEM, static_prefix=static_prefix,
-                ),
-            )
-            run.stage_metrics.append(StageMetric(
-                stage_name="stage_3_premortem",
-                model=model,
-                input_tokens=premortem_result.input_tokens,
-                output_tokens=premortem_result.output_tokens,
-                cache_read_tokens=premortem_result.cache_read_tokens,
-                cache_creation_tokens=premortem_result.cache_creation_tokens,
-                cost_usd=premortem_result.cost_usd,
-                latency_ms=premortem_result.latency_ms,
-                status="completed" if premortem_result.pass_ else "failed",
-                notes={
-                    "pass": premortem_result.pass_,
-                    "overall_verdict": premortem_result.overall_verdict,
-                    "surviving": premortem_result.surviving_hypothesis_ids,
-                    "n_findings": len(premortem_result.findings),
-                    # D-120: persist head of raw model response for audit.
-                    "raw_response_head": (premortem_result.raw_response or "")[:4000],
-                    "findings": [
-                        {"severity": f.severity, "check": f.check,
-                         "detail": f.detail[:200]}
-                        for f in premortem_result.findings
-                    ],
-                },
-            ))
-            logger.info(
-                "Stage 3: overall=%s surviving=%s findings=%d cost=$%.3f",
-                premortem_result.overall_verdict,
-                premortem_result.surviving_hypothesis_ids,
-                len(premortem_result.findings), premortem_result.cost_usd,
-            )
-
-            # Apply Stage 9 post-hoc cap on all_falsified.
-            # IMPORTANT: stash the pre-cap value so Stage 10 records the
-            # genuine raw_conviction_pct (per schema comment "Stage 5/6
-            # output"). The cap flows into conviction_pct_calibrated /
-            # conviction_pct only. D-117.
-            if premortem_result.overall_verdict == "all_falsified":
-                try:
-                    raw_conv = float(parsed.get("conviction_pct") or 0.0)
-                except (TypeError, ValueError):
-                    raw_conv = 0.0
-                capped = min(raw_conv, ALL_FALSIFIED_CONVICTION_CEILING)
-                if capped < raw_conv:
-                    logger.warning(
-                        "Stage 3 all_falsified: capping conviction_pct %.1f -> %.1f",
-                        raw_conv, capped,
-                    )
-                    ctx["pre_premortem_conviction"] = raw_conv
-                    ctx["conviction_capped_by_premortem"] = True
-                parsed["conviction_pct"] = capped
-        else:
-            logger.warning("Stage 2 emitted no hypotheses; skipping Stage 3.")
-
-    # Stage 7 constitutional check
-    constitutional_result: Optional[ConstitutionalResult] = None
-    if run_constitutional:
-        logger.info("=== Stage 7: constitutional check ===")
-        try:
-            conviction_for_check = float(parsed.get("conviction_pct") or 50.0)
-        except (TypeError, ValueError):
-            conviction_for_check = 50.0
-        constitutional_result = run_constitutional_check(
-            a_client,
-            cited_prose=cited_prose,
-            facts=ctx["facts"],
-            document_ids=[d["id"] for d in ctx["documents"]],
-            thesis_direction=parsed.get("thesis_direction") or "neutral",
-            conviction_pct=conviction_for_check,
-            reference_class=asset.get("reference_class_signature"),
-            reference_class_base_rate=(
-                anchor.base_rate.approval_rate if anchor.base_rate else None),
-            model=extractor_model,
-            skip_semantic=constitutional_skip_semantic,
-            hypothesis_result=hypothesis_result,
-            premortem_result=premortem_result,
-            semantic_system_blocks=build_system_blocks(
-                shared_prefix, SEMANTIC_SYSTEM_PROMPT, static_prefix=static_prefix,
-            ),
-        )
-        run.stage_metrics.append(StageMetric(
-            stage_name="stage_7_constitutional",
-            model=extractor_model if not constitutional_skip_semantic else "deterministic",
-            input_tokens=constitutional_result.semantic_input_tokens,
-            output_tokens=constitutional_result.semantic_output_tokens,
-            cost_usd=constitutional_result.semantic_cost_usd,
-            latency_ms=constitutional_result.semantic_latency_ms,
-            status="completed" if constitutional_result.pass_ else "failed",
-            notes={
-                "pass": constitutional_result.pass_,
-                "n_findings": len(constitutional_result.findings),
-                "n_citations_checked": constitutional_result.n_citations_checked,
-                "n_citations_resolved": constitutional_result.n_citations_resolved,
-                "findings": [
-                    {"severity": f.severity, "check": f.check,
-                     "detail": f.detail[:200]}
-                    for f in constitutional_result.findings
-                ],
-            },
-        ))
-        logger.info("Stage 7: pass=%s findings=%d (citations: %d/%d resolved) cost=$%.3f",
-                    constitutional_result.pass_, len(constitutional_result.findings),
-                    constitutional_result.n_citations_resolved,
-                    constitutional_result.n_citations_checked,
-                    constitutional_result.semantic_cost_usd)
-        if not constitutional_result.pass_:
-            raise ConstitutionalFailure(constitutional_result.findings)
+        },
+    ))
+    logger.info(
+        "Stage 7: pass=%s findings=%d (citations: %d/%d resolved)",
+        constitutional_result.pass_, len(constitutional_result.findings),
+        constitutional_result.n_citations_resolved,
+        constitutional_result.n_citations_checked,
+    )
+    if not constitutional_result.pass_:
+        raise ConstitutionalFailure(constitutional_result.findings)
 
     # Phase 4A (D-127): expose parsed payload to the replay harness before
     # the persistence gate. dict.update() preserves the caller's reference
@@ -2640,34 +2127,19 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         logger.info("  evidence_quality: %s", parsed.get("evidence_quality"))
         logger.info("  thesis_summary: %s", parsed.get("thesis_summary"))
         logger.info("  band: %s", derive_band(float(parsed.get("conviction_pct") or 50.0)))
-        if hypothesis_result:
-            logger.info("  hypotheses: %d (%s)",
-                        len(hypothesis_result.hypotheses),
-                        [h.label for h in hypothesis_result.hypotheses])
-        if premortem_result:
-            logger.info("  pre_mortem_verdict: %s surviving: %s",
-                        premortem_result.overall_verdict,
-                        premortem_result.surviving_hypothesis_ids)
-        if constitutional_result:
-            logger.info("  constitutional_pass: %s", constitutional_result.pass_)
+        logger.info("  citation_validation_pass: %s", constitutional_result.pass_)
         return None
 
     logger.info("=== Stage 10: persist ===")
-    # v4 metadata for the new convergence_assessments columns. Phase 4 will
-    # refine signal_category to use the actual scanner emitter category; until
-    # then we use trigger_type as a coarse fallback (better than NULL for
-    # Phase 7 per-category aggregation).
-    v4_commercial = parsed.get("commercial_dimensions") if is_v4 else None
-    v4_signal_category = run.trigger_type if is_v4 else None
+    # Phase 4 will refine signal_category to use the actual scanner emitter
+    # category; until then trigger_type is a coarse fallback.
+    commercial = parsed.get("commercial_dimensions")
+    signal_category = run.trigger_type
     assessment_id = stage_10_persist(
         sb, asset_id, run, cited_prose, parsed, ctx, model, extractor_model,
-        ensemble_payload=run_ensemble_payload,
         constitutional_result=constitutional_result,
-        hypothesis_result=hypothesis_result,
-        premortem_result=premortem_result,
-        is_v4=is_v4,
-        signal_category=v4_signal_category,
-        commercial_dimensions=v4_commercial,
+        signal_category=signal_category,
+        commercial_dimensions=commercial,
     )
     logger.info("Persisted assessment: %s", assessment_id)
     return assessment_id
@@ -2682,21 +2154,6 @@ def main(argv: List[str] | None = None) -> int:
                             "backtest", "manual"])
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL)
-    p.add_argument("--ensemble-n", type=int, default=1,
-                   help="N parallel synthesis runs (1=single-shot, 3+ enables ensemble)")
-    p.add_argument("--ensemble-mode", default="streaming",
-                   choices=["streaming", "batch"],
-                   help="streaming = N concurrent live calls (rate-limit risk); "
-                        "batch = Messages Batches API (50%% cost, ~1h latency)")
-    p.add_argument("--no-constitutional", action="store_true",
-                   help="Skip Stage 7 constitutional check entirely")
-    p.add_argument("--constitutional-deterministic-only", action="store_true",
-                   help="Run only the deterministic citation-resolution checks "
-                        "(no Sonnet adversarial pass)")
-    p.add_argument("--no-premortem", action="store_true",
-                   help="Skip Stage 2 (hypothesis enumeration) + Stage 3 "
-                        "(pre-mortem). Useful for cost-bounded backtests or "
-                        "if a regression is found in either stage.")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
 
@@ -2716,11 +2173,6 @@ def main(argv: List[str] | None = None) -> int:
         trigger_type=args.trigger_type,
         model=args.model,
         extractor_model=args.extractor_model,
-        ensemble_n=args.ensemble_n,
-        ensemble_mode=args.ensemble_mode,
-        run_constitutional=not args.no_constitutional,
-        constitutional_skip_semantic=args.constitutional_deterministic_only,
-        enable_premortem=not args.no_premortem,
         dry_run=args.dry_run,
     )
     return 0 if (aid is not None or args.dry_run) else 1

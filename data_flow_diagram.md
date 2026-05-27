@@ -113,50 +113,27 @@ flowchart LR
 
 ---
 
-## 3. v3 Orchestrator Pipeline — 10 Stages
+## 3. v4 Orchestrator Pipeline — AI-First Single Pass
 
 ```mermaid
 flowchart TB
     START([orchestrator_runs pending<br/>trigger: new_doc / cross_source /<br/>operator_refresh / tier2_escalation])
 
     S0[Stage 0: Document load + memory read<br/>Loads asset corpus + memory_files + RAG context]
-    S1[Stage 1: RAG hybrid search<br/>🤖 Voyage-3-large embed + rerank-2.5<br/>top-20 chunks per corpus]
-    S2[Stage 2: Sub-agent dispatch · 4 PARALLEL]
+    S4[Stage 4: Reference-class anchor<br/>base rate + similar resolved cases]
+    RAG[Optional RAG retrieval<br/>Voyage embed + rerank over targeted corpora]
+    S1[Stage 1: AI thesis synthesis<br/>FDA + commercial judgment, hypotheses, kill criteria inline]
+    S9[Stage 9: Structured extraction<br/>JSON + commercial_dimensions]
+    S7[Stage 7: Deterministic citation validation<br/>no LLM spend]
+    CAL[Calibration + market gate<br/>isotonic curve, EV check]
+    S10[Stage 10: Persist + memory append<br/>convergence_assessments + post_mortem_queue]
 
-    subgraph SA["Sub-agents (each: 🤖 Sonnet 4.5 + MCP tool loops)"]
-        SA1[literature<br/>MCPs: pubmed, biorxiv]
-        SA2[competitive<br/>MCPs: clinicaltrials, openfda]
-        SA3[regulatory_history<br/>MCPs: openfda, fda_adcomm]
-        SA4[options_microstructure<br/>MCP: polygon]
-    end
+    DONE([convergence_assessments INSERT<br/>+ assessment_stage_metrics])
 
-    S3[Stage 3: Hypothesis synthesis<br/>🤖 Sonnet 4.5<br/>→ bull/base/bear scenarios<br/>+ kill_conditions]
-    S4[Stage 4: Constitutional prep]
-    S5[Stage 5: Ensemble N=7<br/>🤖 Sonnet 4.5 ×7 parallel votes]
-    S6[Stage 6: Ensemble summary<br/>median + percentile CI<br/>→ conviction_pct_raw, dispersion σ]
-    S7[Stage 7: Constitutional review<br/>🤖 Sonnet 4.5<br/>pass/fail + redaction]
-    S8[Stage 8: Isotonic calibration<br/>scipy.isotonic · active curve<br/>→ conviction_pct]
-    S9[Stage 9: Market snapshot<br/>Polygon API · EV%, IV, options_liquidity]
-    S10[Stage 10: Memory append + IC memo<br/>🤖 Sonnet 4.5 synthesis<br/>→ fda_agent_reviews ic_memo]
+    START --> S0 --> S4 --> RAG --> S1 --> S9 --> S7 --> CAL --> S10 --> DONE
 
-    DONE([convergence_assessments INSERT<br/>+ assessment_stage_metrics<br/>+ sub_agent_calls])
-
-    START --> S0 --> S1 --> S2
-    S2 --> SA1 --> S3
-    S2 --> SA2 --> S3
-    S2 --> SA3 --> S3
-    S2 --> SA4 --> S3
-    S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> DONE
-
-    BUDGET{{"💰 Cost gate: $15 Tier 1, $1.50 Tier 2<br/>orchestrator_runtime/pricing.py<br/>hard-kill on exceed"}}
-    BUDGET -.-> S5
-
-    style S0 fill:#e3f2fd
-    style S1 fill:#fff3e0
-    style SA fill:#f3e5f5
-    style S5 fill:#ffebee
-    style S8 fill:#e8f5e9
-    style S10 fill:#fce4ec
+    BUDGET{{"Cost gate: per-run hard kill<br/>orchestrator_runtime/pricing.py"}}
+    BUDGET -.-> S1
 ```
 
 ---
@@ -215,19 +192,14 @@ flowchart LR
 | 2 | **asset_linker pass-2** | pg_cron `:10,:40` | Haiku 4.5 | Modal | $2 |
 | 3 | **fact_extractor** | pg_cron `:20 hourly` | Sonnet 4.5 | Modal | $30 |
 | 4 | **Stage 1 RAG** | orchestrator_run_one | Voyage-3-large + rerank-2.5 | Modal | embed cost |
-| 5 | **Stage 2 sub-agent: literature** | orchestrator_run_one | Sonnet 4.5 + MCP loops | Modal | budgeted |
-| 6 | **Stage 2 sub-agent: competitive** | orchestrator_run_one | Sonnet 4.5 + MCP loops | Modal | budgeted |
-| 7 | **Stage 2 sub-agent: regulatory_history** | orchestrator_run_one | Sonnet 4.5 + MCP loops | Modal | budgeted |
-| 8 | **Stage 2 sub-agent: options_microstructure** | orchestrator_run_one | Sonnet 4.5 + MCP loops | Modal | budgeted |
-| 9 | **Stage 3 hypothesis** | post sub-agents | Sonnet 4.5 | Modal in-proc | low |
-| 10 | **Stage 5 ensemble vote ×7** | post hypothesis | Sonnet 4.5 (×7 parallel) | Modal | bulk of Tier 1 spend |
-| 11 | **Stage 7 constitutional** | post ensemble | Sonnet 4.5 | Modal | low |
-| 12 | **Stage 10 IC memo synthesis** | post Stage 9 | Sonnet 4.5 | Modal | medium |
+| 5 | **Stage 1 thesis synthesis** | orchestrator_run_one | Sonnet 4.5/4.6 | Modal | main analysis spend |
+| 6 | **Stage 9 structured extraction** | post Stage 1 | Sonnet/Haiku extractor | Modal | low |
+| 7 | **Stage 7 citation validation** | post Stage 9 | deterministic Python | Modal | none |
+| 8 | **Stage 10 IC memo synthesis** | operator-triggered | Sonnet 4.5 | Modal | medium |
 | 13 | **signal_resolver** (v2) | Cowork daily | Sonnet 4.5 (rescore_with_dims) | Cowork→Modal endpoint | shared budget |
 | 14 | **candidate_aging** (v2) | Cowork weekly | Sonnet 4.5 (assess_thesis_v2) | Cowork→Modal endpoint | Tier 2 |
 | 15 | **thesis_writer** | thesis_jobs.INSERT | Claude API (Immediate band) | Cowork (JGoror) | 15/day external cap |
-| 16 | **bulk_orchestrator** (Tier 2) | Cowork daily/weekly per watch_priority | Sonnet 4.5 single-pass | Cowork skill | $0.30–0.80 |
-| 17 | **nightly calibration refit** | pg_cron `02:00 UTC` | scipy.isotonic (no LLM) | Modal | compute-only |
+| 12 | **nightly calibration refit** | pg_cron `02:00 UTC` | scipy.isotonic (no LLM) | Modal | compute-only |
 
 ---
 

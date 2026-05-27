@@ -223,6 +223,11 @@ def test_run_one_invokes_stage_1_rag_retrieve_when_env_enabled(monkeypatch):
 
     monkeypatch.setattr(runtime, "stage_0_load", stub_load)
     monkeypatch.setattr(runtime, "stage_4_anchor", stub_anchor)
+    monkeypatch.setattr(
+        runtime,
+        "require_tier1_evidence_packet",
+        lambda _ctx: {"ok": True, "counts": {}},
+    )
 
     # Halt the pipeline immediately after the RAG call by raising a known
     # signal from the next downstream call we can intercept cleanly.
@@ -237,9 +242,7 @@ def test_run_one_invokes_stage_1_rag_retrieve_when_env_enabled(monkeypatch):
         runtime._run_one_inner(
             sb=object(), a_client=object(), asset_id="asset-1",
             trigger_type="manual", model="x", extractor_model="x",
-            ensemble_n=1, ensemble_mode="streaming",
-            run_constitutional=False, constitutional_skip_semantic=True,
-            enable_premortem=False, dry_run=True,
+            dry_run=True,
         )
     except RuntimeError as exc:
         assert str(exc) == "__halt_after_rag__"

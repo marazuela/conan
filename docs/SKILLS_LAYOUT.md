@@ -15,11 +15,11 @@ A skill belongs here iff its frontmatter has:
 - `trigger:` describing a recurring schedule
 - usually a `quota:` field (per-UTC-day soft cap)
 
-Current residents (10): `signal_resolver`, `thesis_writer`, `candidate_aging`, `bulk_orchestrator_run`, `thesis_challenger`, `coverage_auditor`, `challenger_retro`, `fda_medical_review`, `fda_microstructure_review`, `fda_regulatory_review`.
+Current residents exclude the retired Tier-2 `bulk_orchestrator_run`. Cron-backed skills should now be limited to operational follow-up work such as thesis writing, aging, coverage audit, and feedback retrospectives.
 
 ### `conan-fda-orchestrator-plugin/skills/` — Claude Code plugin
 
-Inside the `marazuela/conan` repo. Bundled with `.claude-plugin/plugin.json`, 8 MCP servers under `mcp_servers/`, and `hooks/`. Loaded by the v3 orchestrator runtime (`orchestrator_runtime/tier2.py`, `orchestrator_runtime/rag_handle.py`) and the Modal sub-agent workers (`modal_workers/sub_agents/*.py`).
+Inside the `marazuela/conan` repo. Bundled with `.claude-plugin/plugin.json`, MCP servers under `mcp_servers/`, and `hooks/`. The live v4 orchestrator no longer loads plugin skills as production sub-agent stages; these files are retained for diagnostics, IC memo polish, and eval-only sidecar experiments.
 
 A skill belongs here iff its frontmatter has:
 
@@ -28,7 +28,7 @@ A skill belongs here iff its frontmatter has:
 - `allowed-tools:` (MCP-server tool list)
 - no `host:` field
 
-Current residents (6): `bulk_orchestrator` (inner Tier-2 synthesis), `ic_memo_polish`, `sub_agent_competitive_landscape`, `sub_agent_literature_reviewer`, `sub_agent_options_microstructure`, `sub_agent_regulatory_history`.
+Current residents: `ic_memo_polish`, `sub_agent_competitive_landscape`, `sub_agent_literature_reviewer`, `sub_agent_options_microstructure`, `sub_agent_regulatory_history`. The old `bulk_orchestrator` Tier-2 skill is retired and should not be scheduled.
 
 ## `.claude/skills` is a symlink
 
