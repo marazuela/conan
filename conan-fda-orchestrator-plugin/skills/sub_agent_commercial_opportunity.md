@@ -55,7 +55,7 @@ A `commercial_opportunity_v1.json` payload. The runtime injects the canonical JS
 - **`soc_side_effects`**: pull from openFDA label `adverse_reactions` sections of the SoC drugs. Severity bands and frequency bands are enums — don't invent new buckets.
 - **`unmet_need_severity_1_5`**: integer 1-5. 5 = no adequate therapy / mortality-driving; 4 = poor options with major AE burden; 3 = adequate options but improvement clearly valuable; 2 = mild incremental; 1 = crowded category with strong options.
 - **`regulatory_incentives`**: array of FDA designation strings the asset has or is likely to receive (breakthrough, fast_track, orphan_drug, priority_review, accelerated_approval, rmat). Use `["none"]` if no designations apply — never empty.
-- **`competitive_landscape_summary`**: one-paragraph headline + a differentiation read. Detailed competitor enumeration is the `competitive` sub-agent's responsibility; this is the commercial context.
+- **`competitive_landscape_summary`**: one-paragraph headline (target ~2000 chars, hard cap 5000) + a differentiation read. Keep it as a single concise paragraph — do NOT emit multi-paragraph essays here. Detailed competitor enumeration is the `competitive` sub-agent's responsibility; this is the commercial context.
 - **`sourcing_completeness_pct`**: how much of the schema was grounded in retrieved evidence vs prior-knowledge inference. Drives Stage 1's `evidence_quality`.
 
 ## Methodology
