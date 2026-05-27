@@ -64,6 +64,11 @@ from modal_workers.shared.biotech_base_rates import (
     load_base_rates,
     map_conditions_to_base_key,
 )
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_auth_query_suffix,
+    openfda_url,
+)
 from modal_workers.shared.scanner_base import MissingAuthError, Signal, ScannerResult
 from modal_workers.shared.supabase_client import (
     EntityHints,
@@ -81,7 +86,7 @@ logger = logging.getLogger(NAME)
 # ---------------------------------------------------------------------------
 
 CLINICALTRIALS_URL = "https://clinicaltrials.gov/api/v2/studies"
-OPENFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+OPENFDA_URL = openfda_url("drug/drugsfda.json")
 EDGAR_EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 
 REQUEST_TIMEOUT = 15
@@ -970,6 +975,7 @@ def _search_drug_approvals(drug_name: str, client: SupabaseClient,
     params = {
         "search": f'openfda.brand_name:"{drug_name}"',
         "limit": max_results,
+        **openfda_auth_params(),
     }
     try:
         resp = requests.get(OPENFDA_URL, params=params, timeout=REQUEST_TIMEOUT)
@@ -1027,6 +1033,7 @@ def _check_fda_approval_status(drug_name: str, user_agent: str,
             "search": f'openfda.generic_name:"{clean_name}" OR '
                       f'openfda.brand_name:"{clean_name}"',
             "limit": 5,
+            **openfda_auth_params(),
         }, headers={"User-Agent": user_agent}, timeout=REQUEST_TIMEOUT)
         if r.status_code != 200:
             return None
@@ -1363,7 +1370,10 @@ def _count_sponsor_prior_p3(client: SupabaseClient,
         f'sponsor_name:"{sponsor_clean}" '
         'AND submissions.submission_type:"NDA"'
     )
-    url = f"https://api.fda.gov/drug/drugsfda.json?search={quote(search)}&limit=100"
+    url = (
+        f"{openfda_url('drug/drugsfda.json')}?search={quote(search)}&limit=100"
+        f"{openfda_auth_query_suffix()}"
+    )
     n_prior_nda: Optional[int] = None
     try:
         resp = requests.get(url, timeout=REQUEST_TIMEOUT)

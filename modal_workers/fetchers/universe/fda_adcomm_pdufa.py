@@ -1,7 +1,11 @@
 """FDA drug-approval fetcher for catalyst_universe.
 
-Source: openFDA's /drug/drugsfda endpoint (public, no auth, 240 req/min).
+Source: openFDA's /drug/drugsfda endpoint
   https://api.fda.gov/drug/drugsfda.json
+
+Auth (api_key) is centralized in modal_workers.shared.openfda_client. Without
+it the per-IP cap is 240 req/min AND 1,000 req/day; with it the daily cap
+rises to 120,000.
 
 Maps each AP (Approved) or TA (Tentative Approval) submission with a
 submission_status_date in the window to a catalyst_universe row at
@@ -36,8 +40,12 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from modal_workers.shared.supabase_client import SupabaseClient, SupabaseError  # noqa: E402
 from modal_workers.shared.emissions_ledger import upsert_catalyst_universe_row  # noqa: E402
+from modal_workers.shared.openfda_client import (  # noqa: E402
+    openfda_auth_query_suffix,
+    openfda_url,
+)
 
-OPENFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+OPENFDA_URL = openfda_url("drug/drugsfda.json")
 SOURCE_FEED = "openfda_drugsfda"
 
 
@@ -72,7 +80,10 @@ def fetch(
 
     for page in range(max_pages):
         skip = page * page_size
-        url = f"{OPENFDA_URL}?search={search_enc}&limit={page_size}&skip={skip}"
+        url = (
+            f"{OPENFDA_URL}?search={search_enc}&limit={page_size}&skip={skip}"
+            f"{openfda_auth_query_suffix()}"
+        )
         try:
             r = requests.get(url, timeout=30)
             if r.status_code == 404:

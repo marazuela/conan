@@ -57,6 +57,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_url,
+)
 from modal_workers.shared.supabase_client import SupabaseClient
 
 logger = logging.getLogger("seed_fda_asset_aliases")
@@ -82,7 +86,6 @@ LOW_INFORMATION_CODE_TERMS = (
     "vehicle",
 )
 
-OPENFDA_BASE = "https://api.fda.gov"
 CT_BASE = "https://clinicaltrials.gov/api/v2"
 DEFAULT_HTTP_TIMEOUT_S = 20.0
 INTER_REQUEST_SLEEP_S = 0.25  # gentle pacing to stay under public-tier limits
@@ -162,9 +165,10 @@ def make_candidate(asset_id: str, alias: str, kind: str, source: str,
 def _openfda_get(path: str, params: Dict[str, Any],
                  session: requests.Session,
                  *, attempts: int = 3) -> Optional[Dict[str, Any]]:
-    url = f"{OPENFDA_BASE}/{path.lstrip('/')}"
+    url = openfda_url(path)
+    merged_params = {**params, **openfda_auth_params()}
     for attempt in range(attempts):
-        r = session.get(url, params=params, timeout=DEFAULT_HTTP_TIMEOUT_S)
+        r = session.get(url, params=merged_params, timeout=DEFAULT_HTTP_TIMEOUT_S)
         if r.status_code == 404:
             return None
         if r.status_code in (429,) or r.status_code >= 500:

@@ -59,6 +59,10 @@ from modal_workers.shared.biotech_base_rates import (
     load_base_rates as _load_base_rates,
     map_conditions_to_base_key as _map_conditions_to_base_key,
 )
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_url,
+)
 from modal_workers.shared.scanner_base import Signal, ScannerResult
 from modal_workers.shared.sec_issuer_lookup import IssuerIndex, IssuerMatch
 from modal_workers.shared.supabase_client import (
@@ -83,7 +87,7 @@ REQUEST_TIMEOUT = 15
 # same sponsor (DLQ batch 2026-04-27: AbbVie / Sanofi MenQuadfi / AstraZeneca
 # all scored 31–36 and were correctly killed by the thesis_writer for
 # insufficient_signal — no asymmetry on a megacap with an approved drug).
-OPENFDA_DRUGSFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+OPENFDA_DRUGSFDA_URL = openfda_url("drug/drugsfda.json")
 APPROVED_CHECK_TIMEOUT = 10
 APPROVED_CACHE_TTL_S = 7 * 24 * 3600  # 7d — Orange Book changes slowly
 
@@ -332,6 +336,7 @@ def _fetch_drug_approvals(drug_name: str,
             f' OR openfda.substance_name:"{drug_name}")'
         ),
         "limit": 5,
+        **openfda_auth_params(),
     }
     try:
         resp = requests.get(

@@ -16,9 +16,10 @@ JSON API. For the orchestrator we ingest:
 For the MVP we ingest drugsfda + label. event ingestion is deferred until the
 orchestrator is wiring real assessments.
 
-All openFDA endpoints are public, unauthenticated, and rate-limited at
-240 req/min anonymous (40k req/day). We respect those via per-request
-backoff; no shared rate limiter needed.
+openFDA's public rate limit is dual-cap (per egress IP): 240 req/min AND
+1,000 req/day unauthenticated. With the `OPENFDA_API_KEY` Modal secret set,
+the daily cap lifts to 120,000. Auth is centralized in
+`modal_workers.shared.openfda_client` — never hand-build openFDA URLs here.
 """
 
 from __future__ import annotations
@@ -32,11 +33,14 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from modal_workers.shared.document_writer import DocumentWriter, WriteResult
+from modal_workers.shared.openfda_client import (
+    openfda_auth_params,
+    openfda_url,
+)
 from modal_workers.shared.sponsor_resolver import resolve_sponsor
 
 logger = logging.getLogger(__name__)
 
-OPENFDA_BASE = "https://api.fda.gov"
 DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_PAGE_LIMIT = 100  # openFDA caps at 1000 per request, but smaller pages
                           # play better with the rate limit + give incremental progress
@@ -76,11 +80,12 @@ def _openfda_get(path: str, params: Dict[str, Any], *,
                  attempts: int = 3, backoff_s: float = 0.5,
                  session: Optional[requests.Session] = None) -> Optional[Dict[str, Any]]:
     sess = session or requests.Session()
-    url = f"{OPENFDA_BASE}/{path.lstrip('/')}"
+    url = openfda_url(path)
+    merged_params = {**params, **openfda_auth_params()}
     last_exc: Optional[Exception] = None
     for attempt in range(attempts):
         try:
-            r = sess.get(url, params=params, timeout=DEFAULT_TIMEOUT_S)
+            r = sess.get(url, params=merged_params, timeout=DEFAULT_TIMEOUT_S)
         except requests.exceptions.RequestException as exc:
             last_exc = exc
             if attempt < attempts - 1:
@@ -251,7 +256,9 @@ def _ingest_drugsfda_record(app: Dict[str, Any], writer: DocumentWriter) -> "_In
             doc_type="drugsfda_application",
             raw_text=raw_text,
             published_at=published_at,
-            url=f"{OPENFDA_BASE}/drug/drugsfda.json?search=application_number:{application_number}",
+            # Stored display URL for the documents row; no api_key — persisting it
+            # would leak the secret into the DB.
+            url=f"{openfda_url('drug/drugsfda.json')}?search=application_number:{application_number}",
             title=f"{sponsor or 'Unknown sponsor'} — {', '.join(drug_names) or application_number}",
             is_pdf=False,
             extensions=extensions,
