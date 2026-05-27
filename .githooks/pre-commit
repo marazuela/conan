@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Pre-commit hook — validate new Supabase migration filenames.
+#
+# Enforces the convention documented in docs/MIGRATIONS.md:
+#   1. Filename version is exactly 14 digits (YYYYMMDDHHMMSS)
+#   2. Not the legacy YYYYMMDD000000 block convention
+#   3. No collision with another local file (this commit + already-tracked)
+#   4. No collision with the remote schema_migrations table (best-effort)
+#
+# Bypass for emergencies: git commit --no-verify
+# To install:                git config core.hooksPath .githooks
+
+set -euo pipefail
+
+# Collect newly added migration files in this commit (not modifications;
+# renaming or editing an existing applied migration is its own can of worms
+# that the audit doc covers, but isn't this hook's job).
+NEW_MIGRATIONS=$(git diff --cached --name-only --diff-filter=A 2>/dev/null \
+    | grep -E '^supabase/migrations/[0-9]+_.+\.sql$' || true)
+
+if [ -z "$NEW_MIGRATIONS" ]; then
+  exit 0
+fi
+
+EXIT_CODE=0
+FAIL_REASONS=()
+
+# Snapshot all migration filenames visible on disk under supabase/migrations/
+# (covers committed + just-staged + working-tree-only). Each file appears
+# exactly once, so duplicate version numbers across two files surface as
+# duplicate entries in the version list.
+ALL_VERSIONS=$(
+  ls supabase/migrations/ 2>/dev/null \
+  | grep -E '^[0-9]+_.+\.sql$' \
+  | sed -E 's|^([0-9]+)_.*$|\1|' \
+  | sort
+)
+
+while IFS= read -r path; do
+  [ -z "$path" ] && continue
+  filename=$(basename "$path")
+  version=$(echo "$filename" | sed -E 's|^([0-9]+)_.*$|\1|')
+
+  # Rule 1: exactly 14 digits
+  if [ "${#version}" -ne 14 ]; then
+    FAIL_REASONS+=("  $filename — version is ${#version} digits, must be exactly 14 (YYYYMMDDHHMMSS)")
+    EXIT_CODE=1
+    continue
+  fi
+
+  # Rule 2: not YYYYMMDD000000 (the legacy block convention)
+  if [[ "$version" =~ ^[0-9]{8}000000$ ]]; then
+    FAIL_REASONS+=("  $filename — uses the legacy YYYYMMDD000000 block convention; run \`date -u +%Y%m%d%H%M%S\` and rename")
+    EXIT_CODE=1
+    continue
+  fi
+
+  # Rule 3: collision against other local files (excluding self)
+  collisions=$(echo "$ALL_VERSIONS" \
+    | grep -E "^${version}$" \
+    | wc -l \
+    | tr -d ' ')
+  if [ "$collisions" -gt 1 ]; then
+    # List sibling files at this version (other than the one being checked).
+    # Use shell glob, not grep, so we don't pipefail when nothing matches a
+    # content search inside .sql files.
+    other=""
+    for sib in supabase/migrations/${version}_*.sql; do
+      [ -e "$sib" ] || continue
+      [ "$sib" = "$path" ] && continue
+      other="$other $(basename "$sib")"
+    done
+    FAIL_REASONS+=("  $filename — version $version collides with:$other")
+    EXIT_CODE=1
+    continue
+  fi
+
+  # Rule 4: remote schema_migrations collision (best-effort; needs SUPABASE_DB_URL
+  # or a working `supabase` CLI session). Skip silently when neither is available.
+  if command -v psql >/dev/null 2>&1 && [ -n "${SUPABASE_DB_URL:-}" ]; then
+    remote_hit=$(psql "$SUPABASE_DB_URL" -tAc \
+      "select 1 from supabase_migrations.schema_migrations where version = '$version' limit 1;" \
+      2>/dev/null | tr -d ' ' || true)
+    if [ "$remote_hit" = "1" ]; then
+      FAIL_REASONS+=("  $filename — version $version already exists in remote schema_migrations; pick a fresh timestamp")
+      EXIT_CODE=1
+      continue
+    fi
+  fi
+done <<< "$NEW_MIGRATIONS"
+
+if [ "$EXIT_CODE" -ne 0 ]; then
+  echo "" >&2
+  echo "✗ Migration filename hook rejected this commit:" >&2
+  printf '%s\n' "${FAIL_REASONS[@]}" >&2
+  echo "" >&2
+  echo "See docs/MIGRATIONS.md for the convention." >&2
+  echo "Bypass (emergencies only): git commit --no-verify" >&2
+  echo "" >&2
+fi
+
+exit "$EXIT_CODE"
