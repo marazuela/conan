@@ -233,9 +233,18 @@ def _validate_citations(
     Phase 6c removes the semantic constitutional reviewer but keeps this
     invariant: every [F:short] and [D:short] in the persisted thesis must map
     to an extracted fact or source document shown to the model.
+
+    Prefix-tolerant lookup: the regex accepts 6–12 char shorts, but historically
+    the lookup set was built with [:8] which only matched exact 8-char shorts.
+    The Stage 1 prompt example uses 6-char shorts (`[F:abc123]`) while the
+    in-context facts table shows 8-char shorts, so when the model anchors on
+    the example it emits shorts the validator can't resolve and Stage 7 blocks
+    every run. We compare each cited short against the FULL fact_id / document_id
+    as a prefix. UUID collision risk on a 6-char hex prefix for ≤80 facts is
+    ~1 in 16M — negligible.
     """
-    fact_short_set = {str(f["id"])[:8].lower() for f in facts if f.get("id")}
-    doc_short_set = {str(d)[:8].lower() for d in document_ids if d}
+    fact_ids_lower = [str(f["id"]).lower() for f in facts if f.get("id")]
+    doc_ids_lower = [str(d).lower() for d in document_ids if d]
     cited_facts = {
         m.group(1).lower() for m in CITE_FACT_RE.finditer(cited_prose or "")
     }
@@ -248,7 +257,7 @@ def _validate_citations(
     n_resolved = 0
 
     for short in cited_facts:
-        if short in fact_short_set:
+        if any(fid.startswith(short) for fid in fact_ids_lower):
             n_resolved += 1
         else:
             findings.append(ConstitutionalFinding(
@@ -262,7 +271,7 @@ def _validate_citations(
             ))
 
     for short in cited_docs:
-        if short in doc_short_set:
+        if any(did.startswith(short) for did in doc_ids_lower):
             n_resolved += 1
         else:
             findings.append(ConstitutionalFinding(
@@ -543,8 +552,9 @@ available) prior assessment memory.
 
 Your output is CITED PROSE — every material claim about the drug, the trial, \
 or the sponsor MUST reference a fact_id from the structured layer (in \
-[F:<fact_id_short>] notation, e.g. [F:abc123]) or a document_id (in \
-[D:<doc_id_short>]).
+[F:<fact_id_short>] notation, e.g. [F:abc12345]) or a document_id (in \
+[D:<doc_id_short>]). Use the exact 8-character short shown in the fact table \
+below — do not abbreviate further.
 
 Commercial-dimension claims (TAM, standard of care, unmet need severity, \
 current-therapy side effects) may not have direct fact_id support in the \
