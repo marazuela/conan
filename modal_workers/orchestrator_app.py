@@ -366,14 +366,18 @@ def orchestrator_run_one(
     # conan-v2 already uses all 5. Manual one-shot invocation still works:
     #   modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue
     #
-    # Phase 2C flip (2026-05-27): ORCH_ENABLE_SUB_AGENTS=1 makes the 5-role
-    # sub-agent pipeline (literature, competitive, regulatory_history,
-    # options_microstructure, commercial_opportunity) the default for all
-    # cron-triggered tier-1 drains. Gate evidence: VRDN dry-run #3 produced
-    # zero sub_agent.* DLQ rows = 5/5 schema_pass=true. Budget cap raised
-    # to 350k tokens (sub_agent_schema_drift_2026-05-23.md S-3).
+    # Phase 2C flip (2026-05-27) REVERTED 2026-05-28 — first live-flip day
+    # burned $8.98 / 1.47M tokens for zero usable output. 18/18 sub_agent_calls
+    # had assessment_id=NULL and conv_runs=0 for the day. Three gaps the
+    # original "5/5 schema_pass=true" gate-evidence missed:
+    #   1. literature role: 0/3 schema_pass (PR #140 reconciliation incomplete).
+    #   2. commercial_opportunity: no schema file in conan-cowork-skills.
+    #   3. dispatcher writes sub_agent_calls with assessment_id=NULL even on pass.
+    # Operator flag 4fc126c0 and memory sub_agent_schema_drift_2026-05-23.md
+    # have the full breakdown. Budget cap stays in place so the per-run hard
+    # halt still fires when callers explicitly pass enable_sub_agents=True
+    # (manual dry-runs). Re-enable only after the 3 gaps close + dry-runs pass.
     env={
-        "ORCH_ENABLE_SUB_AGENTS": "1",
         "ORCH_SUB_AGENT_BUDGET_TOKENS": "350000",
     },
 )
