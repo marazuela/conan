@@ -1063,7 +1063,8 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
         kwargs: Dict[str, Any] = {}
         for k in ("drain_batch_size", "monitor_window_days",
-                  "refit_min_n", "refit_bootstrap_resamples"):
+                  "refit_min_n", "refit_bootstrap_resamples",
+                  "category_cohort_days"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)
