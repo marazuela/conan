@@ -1,12 +1,27 @@
-# v4 Phase 6 runbook
+# v4 Phase 6 runbook — HISTORICAL
 
-Status update 2026-05-27: Phase 6c has landed in code. The `ORCH_V4=0`
-rollback branch and retired v3 modules (`hypothesis.py`, `premortem.py`,
-`constitutional.py`, `ensemble.py`) are removed. Treat the Phase 6c section
-below as historical rollout guidance; rollback is now git revert.
+**Closure status 2026-05-28:** Phase 6a (flag flip, 2026-05-26), 6b (Tier-2
+deletion — Modal 2026-05-26 + Cowork 2026-05-28), and 6c (v3 codepath
+removal, PR #152 2026-05-27) all landed in code. The `ORCH_V4=0` rollback
+branch and the retired v3 modules (`hypothesis.py`, `premortem.py`,
+`constitutional.py`, `ensemble.py`) are gone. Rollback is now `git revert`.
+The Cowork-side Phase 6b teardown (Sept 2026-05-28) deleted the
+`bulk_orchestrator_run` skill + wrapper from `conan-cowork-skills@181b9c6`
+and the two scheduled-task directories from Pedro's Mac. See DECISIONS.md
+D-133 for the close-out record.
+
+**What is still NOT closed:** Gate-6 acceptance (50-asset operator review +
+PRD final stamp) cannot run until a successful `orchestrator_version='orch-v4.0'`
+row lands — blocked on Anthropic credit balance (see
+`tasks/v4_phase6_close_blockers.md`).
+
+Below is the **historical** rollout playbook. The 7-day / 14-day observation
+gates between sub-phases were skipped: Phase 6a + 6b were bundled into a
+single Modal-side commit (`fe98972`) and 6c followed the next day. Keep the
+playbook for git-archeology and future plan analogues.
 
 Step-by-step verification + rollback procedures for the three-stage Phase 6
-landing of the v4 architecture simplification. Use this in order:
+landing of the v4 architecture simplification. Originally intended order:
 
   Phase 6a → 7-day observation → Phase 6b → 14-day observation → Phase 6c
 

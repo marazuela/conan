@@ -1,9 +1,11 @@
 # PRD — Unified Investment Research System v3 (FDA Depth)
 
-**Status:** in-flight; closes when Gate 6 of `~/.claude/plans/plan-it-for-optimal-twinkling-bubble.md` lands
-**Date:** 2026-05-07 (initial draft)
+**Status:** Phase 6 closed 2026-05-28 (code-level — see DECISIONS.md D-133). Gate 6 (50-asset operator review + final PRD stamp) blocked on Anthropic credit top-up — see `tasks/v4_phase6_close_blockers.md`.
+**Date:** 2026-05-07 (initial draft) · last amended 2026-05-28 for v4 Phase 6 close-out
 **Author:** Pedro (with Claude Code as architectural collaborator)
 **Predecessor:** [PRD_unified_investment_research_v2.md](PRD_unified_investment_research_v2.md) (frozen at the v3 cutover; do not amend)
+
+> **Reader note (2026-05-28):** the production runtime is **v4**, not v3. The "v4 AI-first runtime" subsection in §5 supersedes the original v3 multi-stage description elsewhere in this PRD. Phase 6a flipped the flag (2026-05-26), Phase 6b deleted Tier-2 (2026-05-26 Modal + 2026-05-28 Cowork), Phase 6c deleted the v3 codepath (2026-05-27, PR #152). Per D-132 and `docs/v4_phase6_runbook.md` the v3 rollback path no longer exists.
 
 ---
 
