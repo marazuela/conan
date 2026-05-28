@@ -1,19 +1,29 @@
 """Curate eval_harness rows from openFDA historical approvals.
 
-Phase 0 deliverable. Pulls NDA/BLA original approvals (TYPE 1 NMEs) and CRL
-records from openFDA for 2023-2024, matches sponsor names against the
-`entities` table for tickers, and inserts fda_assets + eval_harness rows.
+Phase 0 deliverable. Pulls NDA/BLA original approvals (TYPE 1 NMEs) from
+openFDA for 2023-2024, matches sponsor names against the `entities` table
+for tickers, and inserts fda_assets + eval_harness rows.
+
+CRL / rejection coverage:
+  openFDA's /drug/drugsfda index does NOT publish CRL records — its
+  submission_status enum is effectively {AP, TA, historical pre-1998 codes}.
+  An earlier version of this script queried `submission_status:RL`, which
+  matches zero rows (the FDA exposes CRL data only via the quarterly CRL
+  Transparency table at open.fda.gov/apis/transparency/completeresponseletters,
+  which is a PDF dump, not an API). CRL rows for eval_harness are therefore
+  sourced from `curate_crl_from_edgar.py`, which mines CRL disclosures from
+  EDGAR 8-K filing bodies and writes `realized_outcome='crl'` rows directly.
 
 What this DOES:
-  - Source: openFDA /drug/drugsfda for approvals (submission_status='AP') and
-    rejections (submission_status='RL') in 2023-01-01 .. 2024-12-31.
+  - Source: openFDA /drug/drugsfda for approvals (submission_status='AP')
+    in 2023-01-01 .. 2024-12-31.
   - Filters: original submissions (submission_type IN ('ORIG','SUPPL')) with
     NDA/BLA classes (TYPE 1, TYPE 1 / Type 4, BLA, etc. — defined in
     HIGH_SIGNAL_CLASSES below). Excludes LABELING amendments and ANDA generics.
   - Matches sponsor_name against entities.name via ILIKE word-boundary search.
   - Inserts fda_assets row keyed on (ticker, drug_name, application_number) if
     not already present.
-  - Inserts eval_harness row with realized_outcome='approved' or 'crl',
+  - Inserts eval_harness row with realized_outcome='approved',
     reference_assessment_date = approval_date - 30 days, document_set=[].
 
 What this DOES NOT (deferred):
@@ -57,25 +67,26 @@ HIGH_SIGNAL_CLASSES = {
     "BLA",
 }
 
-# submission_type values for "this is the actual approval/CRL moment".
+# submission_type values for "this is the actual approval moment".
 ORIGINAL_TYPES = {"ORIG", "ORIG-1", "SUPPL"}
 
-# submission_status: AP=approved, RL=rejected (CRL or refusal)
+# submission_status: AP=approved. openFDA's drugsfda index does not expose
+# CRL/refusal as a status code (see module docstring); CRL eval rows are
+# sourced separately via curate_crl_from_edgar.py.
 APPROVED_STATUSES = {"AP"}
-REJECTED_STATUSES = {"RL"}
 
 
 @dataclass
 class CandidateApproval:
-    """One openFDA approval/rejection record, post-filtering."""
+    """One openFDA approval record, post-filtering."""
     application_number: str
     sponsor_name: str
     drug_brand: Optional[str]
     drug_generic: Optional[str]
     indication: Optional[str]                # not in drugsfda; resolved later from label
-    submission_status: str                   # 'AP' or 'RL'
+    submission_status: str                   # 'AP' (only AP is queried)
     submission_class_code: str
-    submission_status_date: datetime         # approval/rejection moment
+    submission_status_date: datetime         # approval moment
     raw_record: Dict[str, Any]
 
 
@@ -90,21 +101,20 @@ def fetch_openfda_approvals(
     max_total: int = 100,
     page_size: int = 50,
 ) -> List[CandidateApproval]:
-    """Pull approval (AP) + rejection (RL) records from /drug/drugsfda."""
+    """Pull approval (AP) records from /drug/drugsfda. CRLs are sourced
+    separately via curate_crl_from_edgar.py (openFDA does not index CRL)."""
     candidates: List[CandidateApproval] = []
     skip = 0
 
     # openFDA Lucene search. TYPE 1 (NME) + Type 4 (combination) + BLA capture
     # the highest-signal originals; LABELING / MANUF / REMS amendments are
-    # excluded by the class filter. Status: AP=approved, RL=refused/CRL.
+    # excluded by the class filter.
     class_filter = (
         '(submissions.submission_class_code:"TYPE 1" OR '
         'submissions.submission_class_code:"TYPE 4" OR '
         'submissions.submission_class_code:"BLA")'
     )
-    status_filter = (
-        '(submissions.submission_status:AP OR submissions.submission_status:RL)'
-    )
+    status_filter = 'submissions.submission_status:AP'
 
     while len(candidates) < max_total:
         params = {
@@ -171,7 +181,7 @@ def _candidates_from_record(
     out: List[CandidateApproval] = []
     for s in submissions:
         sub_status = s.get("submission_status")
-        if sub_status not in APPROVED_STATUSES and sub_status not in REJECTED_STATUSES:
+        if sub_status not in APPROVED_STATUSES:
             continue
         sub_type = s.get("submission_type")
         if sub_type not in ORIGINAL_TYPES:
@@ -299,11 +309,9 @@ def insert_eval_harness_row(
 ) -> bool:
     """Insert an eval_harness row for this candidate. Returns True on insert,
     False if dedupe-skipped or failed."""
-    realized_outcome = "approved" if candidate.submission_status in APPROVED_STATUSES else "crl"
-    reference_date = (candidate.submission_status_date.date()
-                      .replace(day=max(1, candidate.submission_status_date.day - 30 % 30)
-                               if candidate.submission_status_date.day > 30 else 1))
-    # Simpler reference date: 30 days before resolution
+    # openFDA drugsfda only yields AP records; CRL eval rows come from
+    # curate_crl_from_edgar.py (see module docstring).
+    realized_outcome = "approved"
     from datetime import timedelta
     reference_date = (candidate.submission_status_date.date() - timedelta(days=30))
 
@@ -402,7 +410,7 @@ def main(argv: List[str] | None = None) -> int:
         since=args.since, until=args.until, max_total=args.max,
     )
     stats.candidates_seen = len(candidates)
-    logger.info("Pulled %d candidate approval/CRL records", len(candidates))
+    logger.info("Pulled %d candidate approval records", len(candidates))
 
     for cand in candidates:
         entity = match_sponsor_to_ticker(cand.sponsor_name, client)
