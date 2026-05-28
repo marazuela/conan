@@ -1,11 +1,13 @@
 """v3 closed feedback loop — Modal app entry point (Stream 2).
 
-Single scheduled chain (`daily_feedback_loop`) that runs three steps in
+Single scheduled chain (`daily_feedback_loop`) that runs four steps in
 order, daily at 02:00 UTC:
 
   1. post_mortem_drain     — drain post_mortem_queue
   2. rollback_monitor      — D-104 Spearman drift check
   3. calibration_refit     — D-103 paired-bootstrap isotonic refit
+  4. category_snapshot     — v4 Phase 7 per-(profile,signal_category,horizon)
+                              accuracy aggregator → feedback_category_metrics
 
 Why one cron not three: Modal free tier caps cron jobs at 5; v2's
 conan-v2 app already uses all 5. Chaining inside one function preserves
@@ -74,13 +76,15 @@ def daily_feedback_loop(
     monitor_window_days: int = 30,
     refit_min_n: int = 200,
     refit_bootstrap_resamples: int = 10000,
+    category_cohort_days: int = 90,
 ) -> Dict[str, Any]:
-    """Daily chain — runs all three feedback-loop steps in order.
+    """Daily chain — runs all four feedback-loop steps in order.
 
     Steps:
       1. post_mortem_drain      — drain post_mortem_queue rows past window_end
       2. rollback_monitor       — D-104 Spearman drift check + auto-rollback
       3. calibration_refit      — D-103 isotonic refit + paired-bootstrap gate
+      4. category_snapshot      — v4 Phase 7 per-category accuracy snapshot
 
     Each step's failure is caught and recorded; later steps still attempt to
     run. Returns a structured summary suitable for Modal logging + ad-hoc
@@ -89,6 +93,8 @@ def daily_feedback_loop(
     from modal_workers.shared.post_mortem_runner import drain_resolved_queue
     from modal_workers.scripts.rollback_monitor import check_drift_and_maybe_rollback
     from modal_workers.scripts.nightly_calibration_refit import run_nightly_refit
+    from modal_workers.feedback.category_accuracy import run_daily_snapshot as run_category_snapshot
+    from modal_workers.shared.supabase_client import SupabaseClient
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -143,6 +149,20 @@ def daily_feedback_loop(
         logging.exception("daily_feedback_loop: refit failed")
         out["refit"] = {"error": f"{type(exc).__name__}:{exc}"}
 
+    # Step 4: v4 Phase 7 per-category accuracy snapshot. Reads resolved
+    # post_mortem_queue rows (joined with convergence_assessments for
+    # signal_category) over a trailing cohort window and persists one row per
+    # (profile, signal_category, horizon_days) cell to
+    # feedback_category_metrics. The weekly feedback_retrospective Cowork
+    # skill reads from that table to propose rubric weight adjustments.
+    try:
+        sb = SupabaseClient()
+        snap = run_category_snapshot(sb, cohort_days=category_cohort_days)
+        out["category_snapshot"] = snap
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("daily_feedback_loop: category_snapshot failed")
+        out["category_snapshot"] = {"error": f"{type(exc).__name__}:{exc}"}
+
     return out
 
 
@@ -188,3 +208,20 @@ def rollback_monitor_dry_run(window_days: int = 30) -> Dict[str, Any]:
         "would_rollback": snapshot.rollback_triggered,
         "reason": snapshot.rollback_reason,
     }
+
+
+@app.function(image=image, timeout=600,
+              secrets=[supabase_secrets, scanner_secrets])
+def category_snapshot_manual(cohort_days: int = 90) -> Dict[str, Any]:
+    """Operator-callable manual fire of the v4 Phase 7 category accuracy
+    snapshot. Writes one row per (profile, signal_category, horizon_days)
+    cell to feedback_category_metrics for the trailing cohort window.
+
+    Idempotent — re-running for the same snapshot_date overwrites prior
+    rows via the (snapshot_date, profile, signal_category, horizon_days)
+    UNIQUE constraint."""
+    from modal_workers.feedback.category_accuracy import run_daily_snapshot
+    from modal_workers.shared.supabase_client import SupabaseClient
+
+    sb = SupabaseClient()
+    return run_daily_snapshot(sb, cohort_days=cohort_days)
