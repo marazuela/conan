@@ -791,3 +791,29 @@ Operator step after deploy: `UPDATE internal_config SET value=<deployed compute-
 **Decision.** Make v4 the only live orchestrator runtime. Keep AI responsible for thesis synthesis, hypothesis/premortem reasoning inline, commercial/regulatory interpretation, and uncertainty framing. Keep code responsible for deterministic evidence invariants: citation resolution, evidence-packet minimums, calibration, market gate, cost ceiling, dedupe, persistence, and replay/eval. Remove the retired v3 stage modules and public knobs (`ensemble_n`, `ensemble_mode`, `enable_premortem`, semantic constitutional toggles). Add Phase 0 baseline capture tooling and Phase 2 eval-sidecar tooling for `.claude/skills/assess-fda-binary-catalyst/SKILL.md`, but do not promote the sidecar to production without eval evidence.
 
 **Consequences.** `orchestrator_runtime/runtime.py` now uses the canonical `STAGE_1_SYSTEM` and `STAGE_9_SYSTEM` prompts, runs deterministic citation validation in-process, persists `orchestrator_version_v4=true`, and leaves historical ensemble/hypothesis/premortem columns nullable for old rows. Deleted modules: `hypothesis.py`, `premortem.py`, `constitutional.py`, and `ensemble.py`; deleted tests that only covered those retired paths. New scripts: `modal_workers/scripts/capture_v4_baseline.py`, `modal_workers/scripts/eval_loop_readiness.py`, and `modal_workers/scripts/run_skill_sidecar_eval.py`. The sidecar remains eval-only until it beats cleaned v4 on Brier/AUC/direction accuracy or matches quality with materially lower complexity/cost.
+
+---
+
+## D-133 — v4 Phase 7 close-out + accept "metadata backfill" gap as no-op (2026-05-28)
+
+**Context.** v4 Phase 7 status review identified four open deliverables:
+1. Wire `category_accuracy.run_daily_snapshot` into `daily_feedback_loop`
+2. Register the weekly `feedback_retrospective` Cowork scheduled task
+3. Dashboard `/operator/rubric-proposals` approve/reject UI
+4. Backfill the "2026-05-26 → 2026-05-27 v4 metadata gap" flagged by `docs/migration_drift_2026-05-27.md`
+
+Items 1-3 landed (conan PR #169, scheduled task `feedback_retrospective` Sun 22:00 local, conan-dashboard PR #20). Item 4 required closer scoping before a fix because the audit doc said v4 rows landed during the foundation-migration drift window without `commercial_dimensions` / `signal_category`, implying a re-run or DECISIONS.md acceptance.
+
+**Decision.** Accept the "gap" as a no-op — there is nothing to backfill — and refile the underlying P0 as a separate operator action.
+
+The audit doc's premise was wrong in fact. Live state (verified 2026-05-28):
+- `convergence_assessments` rows from 2026-05-26 through 2026-05-28: **zero**. Both days have `total=0` in the daily aggregate.
+- Looking back to 2026-05-15, all 40 completed assessments carry `orchestrator_version_v4 = false`. The v4 codepath has never written a row to live.
+- `orchestrator_runs` since the Phase 6c deploy: **8 failed 2026-05-26 / 7 failed 2026-05-27 / 0 completed either day.** The runs that landed before that date pre-date the `is_v4` flag flip, so `false` is correct for them.
+- Root cause of the failures (sampled from `orchestrator_runs.error_message`): Anthropic API returning HTTP 400 `Your credit balance is too low to access the Anthropic API.` on every Stage 1 synthesis call since 2026-05-27 12:00 UTC. The earlier 2026-05-26 failures were a separate `persist_assessment_v3` NULL-id regression (already fixed in commit `44ba41e`); credit exhaustion then took over.
+
+Because no v4 rows were ever written, there is no metadata to backfill. A new `operator_flags` row was inserted (`id=0372c276-c85c-43bd-abdf-fa15237412bc`, severity=critical, source=`orchestrator_cost`, kind=`anthropic_credit_balance_exhausted`) so the credit-exhaustion P0 surfaces in `/operator/flags` and the sidebar critical count. Resolution path: top up the Anthropic account, then verify the next completed orchestrator_run lands with `orchestrator_version_v4=true` + populated `commercial_dimensions` + `signal_category`. The flag auto-resolves on the next non-failed run via the standard `operator_flags.resolved_at` workflow.
+
+**Consequences.** v4 Phase 7 is **closed in code** but not yet **verified in production**. The Sunday 2026-05-31 20:00 UTC weekly retro will execute against an empty `feedback_category_metrics` table (no daily snapshots have run because Step 4 wiring lands with PR #169 redeploy of `conan-v3-feedback-loop`); the skill's §0 preflight + `min_n=30` cohort gate will emit `{processed:0, reason:'cohort_too_thin'}` and stop, which is the correct no-op behavior. First substantive retro will fire once (a) PR #169 is merged + the feedback-loop Modal app is redeployed so daily snapshots start populating the table, AND (b) the credit issue is resolved so the orchestrator starts producing v4 rows with `signal_category` for snapshots to aggregate over.
+
+The migration-drift doc (`docs/migration_drift_2026-05-27.md` §"Critical sub-finding — v4 Phase 6/7 schema NEVER applied") remains accurate as a historical artifact but no longer describes a live data gap; its remediation is closed by this decision.
