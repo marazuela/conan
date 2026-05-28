@@ -66,6 +66,7 @@ image = (
         "openpyxl>=3.1",          # esma_short_scanner (FCA xlsx)
         "yfinance>=0.2",          # sedar_plus_scanner, asx_scanner (ticker→mcap proxies)
         "reportlab>=4.0",         # reporting_weekly (PDF render)
+        "pdfplumber>=0.11",       # fda_crl_transparency (CRL PDF parse)
     )
     .add_local_python_source("modal_workers")
 )
@@ -683,6 +684,32 @@ def edgar_8k_pdufa_once() -> dict:
     return _run_fetcher("edgar_8k_pdufa", days_back=14)
 
 
+@app.function(image=image, timeout=600, memory=2048,
+              secrets=[scanner_secrets, supabase_secrets])
+def fda_crl_transparency_once() -> dict:
+    """openFDA transparency CRL ledger → catalyst_universe (fda_crl).
+
+    Two-stage pull: (1) JSON manifest via api.fda.gov/download.json
+    (results.transparency.crl.partitions[0]) provides the structured
+    metadata (letter_date, application_number, company_name); (2) the
+    approved_CRLs.zip + unapproved_CRLs.zip PDF bundles supply the body
+    text that pdfplumber regex-extracts for drug_name + indication. JSON
+    manifest must be the date source because older filings encode the
+    application filing year (not the CRL date) in the filename.
+
+    Asset resolution: fda_assets.application_number direct match, then
+    fda_asset_resolution_aliases (alias_type='application_number'); ticker
+    NULL otherwise. Cross-validates against EDGAR-derived CRL rows in
+    eval_harness and opens an operator_flag
+    (kind='fda_crl_date_disagreement') when dates diverge by >30 days for
+    the same application_number.
+
+    Timeout/memory bumped: 218 MB PDF zips + ~430 pdfplumber parses bring
+    cold runs to ~4-5 minutes and peak memory near 1.5 GB. Modal default
+    600s timeout / 2 GB memory."""
+    return _run_fetcher("fda_crl_transparency", days_back=0)
+
+
 # ==========================================================================
 # reporting_weekly — spec §7.3 + §7.7 integrity sweep. Sunday 12:00 UTC cron.
 #   1. SQL RPC `reporting_integrity_sweep()` (migration 23) — UPSERTs
@@ -744,7 +771,10 @@ def _load_cadence_names(cadence: str, fallback: List[str]) -> tuple[List[str], O
 # to the 13 UTC (US pre-open) bucket alongside registry-driven daily scanners.
 # Fold in here so dispatch_release_times fires them at the right tick.
 _FETCHERS_AT_HOUR: dict[int, List[str]] = {
-    13: ["fda_adcomm_pdufa", "sec_8k_mna", "fed_register_adcom", "edgar_8k_pdufa"],
+    13: [
+        "fda_adcomm_pdufa", "sec_8k_mna", "fed_register_adcom", "edgar_8k_pdufa",
+        "fda_crl_transparency",
+    ],
 }
 
 # Registry-backed scanners that need a SECOND firing within the same day on top

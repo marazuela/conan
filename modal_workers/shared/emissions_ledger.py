@@ -50,7 +50,7 @@ VALID_CATALYST_TYPES = frozenset({
     "phase3_readout",
 })
 
-VALID_MATERIAL_OUTCOMES = frozenset({"yes", "no", "unclear"})
+VALID_MATERIAL_OUTCOMES = frozenset({"yes", "no", "unclear", "negative"})
 VALID_PRICE_MOVE_WINDOWS = frozenset({"t+1", "t+5", "t+30"})
 
 

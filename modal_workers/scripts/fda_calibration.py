@@ -79,7 +79,7 @@ JOIN public.fda_event_features fef
   ON fef.event_id = re.id
 WHERE cu.catalyst_type IN ('fda_approval','fda_crl','phase3_readout')
   AND cu.catalyst_date >= now() - ($1 || ' days')::interval
-  AND cu.material_outcome IN ('yes','no')
+  AND cu.material_outcome IN ('yes','no','negative')
   AND fef.snapshot_at < cu.catalyst_date
 """
 
@@ -96,7 +96,8 @@ def label_from_row(row: Mapping[str, Any]) -> Optional[int]:
 
     Returns 1 when (catalyst_type='fda_approval' OR 'phase3_readout') AND
     material_outcome='yes'. Returns 0 when catalyst_type='fda_crl' OR
-    material_outcome='no'. Returns None for ambiguous rows (caller drops them).
+    material_outcome IN ('no','negative'). Returns None for ambiguous rows
+    (caller drops them).
     """
     catalyst_type = (row.get("catalyst_type") or "").lower()
     material = (row.get("material_outcome") or "").lower()
@@ -104,7 +105,7 @@ def label_from_row(row: Mapping[str, Any]) -> Optional[int]:
         return 0
     if material == "yes" and catalyst_type in ("fda_approval", "phase3_readout"):
         return 1
-    if material == "no":
+    if material in ("no", "negative"):
         return 0
     return None
 
