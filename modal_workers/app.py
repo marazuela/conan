@@ -707,25 +707,23 @@ def openfda_drug_shortages_once() -> dict:
 
 
 # ==========================================================================
-# reporting_weekly — spec §7.3 + §7.7 integrity sweep. Sunday 12:00 UTC cron.
+# reporting_weekly — spec §7.3 + §7.7 integrity sweep.
 #   1. SQL RPC `reporting_integrity_sweep()` (migration 23) — UPSERTs
 #      operator_flags for orphan alerts, stuck-active candidates, stuck-drafting
 #      thesis_jobs.
 #   2. Render single-page executive PDF (candidates + weekly stats).
 #   3. Upload to reports/<yyyy>/<mm>/<date>_executive_summary.pdf.
+#
+# 2026-05-28: the standalone Sunday cron was folded into `dispatch_weekly`
+# (which moved from Monday 12 UTC to Sunday 12 UTC) to stay under Modal's
+# 5-cron workspace cap once the openfda_drug_shortages + fed_register_adcom
+# fetchers landed. `reporting_weekly_once` below stays as the on-demand path.
 # ==========================================================================
-
-@app.function(image=image, schedule=modal.Cron("0 12 * * 0"), timeout=300,
-              secrets=[supabase_secrets])
-def reporting_weekly_cron() -> dict:
-    """Sunday 12:00 UTC weekly report + integrity sweep."""
-    from modal_workers.reporting import reporting_weekly
-    return reporting_weekly()
-
 
 @app.function(image=image, timeout=300, secrets=[supabase_secrets])
 def reporting_weekly_once() -> dict:
-    """On-demand equivalent; same work as the cron, callable manually via
+    """On-demand weekly report + integrity sweep. Same work as the inline
+    call inside `dispatch_weekly`; callable manually via
     `modal.Function.from_name('conan-v2', 'reporting_weekly_once').remote()`."""
     from modal_workers.reporting import reporting_weekly
     return reporting_weekly()
@@ -905,13 +903,30 @@ def dispatch_release_times() -> dict:
     return envelope
 
 
-@app.function(image=image, schedule=modal.Cron("0 12 * * 1"), timeout=60,
+@app.function(image=image, schedule=modal.Cron("0 12 * * 0"), timeout=300,
               secrets=[scanner_secrets, supabase_secrets])
 def dispatch_weekly() -> dict:
+    """Sunday 12 UTC: spawn weekly-cadence scanners AND run the weekly
+    integrity sweep + executive PDF. Folded together 2026-05-28 to keep the
+    app under Modal's 5-cron workspace cap. Schedule moved Mon→Sun because:
+      - Sunday 12 UTC is the natural end-of-prior-week reporting moment.
+      - takeover_candidate_scanner is a filing sniff (markets closed Sun,
+        scan timing does not affect the data the scanner reads).
+    Timeout bumped 60→300s to give reporting_weekly its prior budget.
+    Reporting failure is logged inside the envelope but does NOT mask
+    dispatch outcomes — the two are independent."""
     names, registry_error = _load_cadence_names("weekly", _DEFAULT_SCANNERS_WEEKLY)
     envelope = _dispatch(names)
     if registry_error:
         envelope["registry_error"] = registry_error
+
+    # Folded reporting_weekly invocation (was its own Sunday 12 UTC cron).
+    try:
+        from modal_workers.reporting import reporting_weekly
+        envelope["reporting"] = reporting_weekly()
+    except Exception as e:  # noqa: BLE001 — never let the report fail the dispatch envelope
+        envelope["reporting_error"] = f"{type(e).__name__}: {e}"
+
     return envelope
 
 
