@@ -1371,7 +1371,25 @@ def stage_10_persist(
     v4 stamps `orchestrator_version_v4=true` unconditionally. The legacy
     v3 hypothesis, premortem, and ensemble side payloads are no longer produced;
     their historical columns remain nullable for old rows.
+
+    Phase 9b: stamps `stage_1_prompt_version_id` / `stage_9_prompt_version_id`
+    via the best-effort `orchestrator_runtime.prompt_registry`. Registry
+    failures yield NULL FKs — assessment still persists.
     """
+    # Phase 9b: best-effort prompt-version registration. Call from inside
+    # stage_10_persist (not module import) because the SupabaseClient
+    # isn't guaranteed available at module-load time during local tests.
+    from orchestrator_runtime.prompt_registry import (
+        STAGE_1 as _STAGE_1_LABEL,
+        STAGE_9 as _STAGE_9_LABEL,
+        register_prompt as _register_prompt,
+    )
+    stage_1_prompt_version_id = _register_prompt(
+        sb, _STAGE_1_LABEL, STAGE_1_SYSTEM,
+    )
+    stage_9_prompt_version_id = _register_prompt(
+        sb, _STAGE_9_LABEL, STAGE_9_SYSTEM,
+    )
     fact_ids = [f["id"] for f in ctx["facts"]]
     document_ids = [d["id"] for d in ctx["documents"]]
 
@@ -1613,6 +1631,11 @@ def stage_10_persist(
         "orchestrator_version_v4": True,
         "signal_category": signal_category,
         "commercial_dimensions": commercial_dimensions,
+        # Phase 9b: per-assessment prompt provenance. NULL on registry
+        # failure or when prompt_versions table isn't yet present (e.g.
+        # local test fixtures without the FK schema applied).
+        "stage_1_prompt_version_id": stage_1_prompt_version_id,
+        "stage_9_prompt_version_id": stage_9_prompt_version_id,
     }
 
     secondaries = _build_stage_10_secondaries(
