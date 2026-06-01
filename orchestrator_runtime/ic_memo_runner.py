@@ -6,10 +6,14 @@ The synthesis sub-agent itself (`modal_workers/sub_agents/ic_memo.py`'s
 `ic_memo_v1.json`. This module is the orchestration layer ABOVE that
 runner: given a `convergence_assessments.id`, it reconstructs the
 `asset_context` from existing DB rows (asset metadata + the four
-specialists' `sub_agent_calls.output` rows + Stage 9 thesis fields +
-reference-class anchor), invokes the runner, persists the output as a
-fifth `sub_agent_calls` row with `role='ic_memo'`, and returns the new
-sub_agent_calls.id.
+specialists' `sub_agent_calls.output` rows OR the Phase-0 3-role
+`fda_agent_reviews` rows via the read-side bridge + Stage 9 thesis
+fields + reference-class anchor), invokes the runner, persists the
+output as an `fda_agent_reviews` row keyed by the asset's pending
+`fda_regulatory_events.id` with `agent_kind='ic_memo'`, and returns
+the new `fda_agent_reviews.id`. Event-scoped persistence (rather than
+the older assessment-scoped `sub_agent_calls` row) is what lets
+`fda_signal_promote_to_thesis()` consume the memo from the dashboard.
 
 This is invoked **on demand** (not part of `runtime.run_one()`):
   - Operator clicks "Generate IC memo" on a watchlist or immediate-band
@@ -24,7 +28,16 @@ new ic_memo_v1.json memo).
 
 Migrations:
   - 20260513000010_v3_phase_4b_sub_agent_calls_ic_memo_role.sql widens
-    `sub_agent_calls.role` CHECK to include 'ic_memo'.
+    `sub_agent_calls.role` CHECK to include 'ic_memo' (legacy; pre-PR #60).
+  - `fda_agent_reviews.agent_kind` CHECK already accepts 'ic_memo'; no
+    migration needed for the PR #60 write-side switch.
+
+Related history:
+  - PR #58 (`8887773`, 2026-05-13) — read-side bridge so the loader
+    falls back to `fda_agent_reviews` Phase-0 3-role rows when
+    `sub_agent_calls` is empty.
+  - PR #60 (`84efa65`, 2026-05-13) — write-side switch: persist to
+    `fda_agent_reviews` event-scoped, not `sub_agent_calls`.
 """
 
 from __future__ import annotations

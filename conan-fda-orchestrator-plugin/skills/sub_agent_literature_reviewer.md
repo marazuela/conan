@@ -168,17 +168,30 @@ Worked example (illustrative shape; substitute your real findings):
 }
 ```
 
-## Internal loop (interleaved thinking, max 6 tool-call turns)
+## Internal loop (interleaved thinking, max 8 tool-call turns)
+
+**Tools actually available to you** (the runner injects exactly these — no others, including no internal-rag tools, no rerank, no preprint PDF fetch):
+
+| Tool | Purpose |
+|---|---|
+| `pubmed_search(query, limit?)` | Returns up to `limit` PMIDs by relevance. Default limit 25. |
+| `pubmed_fetch_abstracts(pmids[])` | Bulk-fetch title/abstract/authors/year/journal/doi/url for ≤50 PMIDs at once. Use this FIRST for any candidate set. |
+| `pubmed_fetch_full_text(pmid)` | Open-access full text from PubMed Central if available; else returns abstract. |
+| `pubmed_citation_graph_expand(pmid, direction='cited_by'|'references', limit?)` | 1-hop citation neighbors. |
+| `biorxiv_search(query, limit?)` | bioRxiv preprint search. v0 stub may return empty — never block on this. |
+
+Do not invent or attempt to call any other tool name. Tool-call failures count against the 8-turn cap.
 
 1. **Memory load.** Read `/memories/sub_agents/literature/<asset_id>.md`. Extract: papers already evaluated (skip in this run), seminal references confirmed in prior runs, prior strength ratings.
 2. **Query planning.** Reason about 3–5 search queries needed: (a) the pivotal-trial publications by NCT ID, (b) the MoA + indication pair, (c) class safety signals, (d) any specific endpoint controversy. Document the planned queries before issuing them — used in memory writeback for future-run de-duplication.
-3. **Hybrid retrieval.** For each query: `internal-rag-mcp.hybrid_search_literature` top-150 → rerank → top-5–10 full-text. Parallel: `pubmed-mcp.search` for canonical PMIDs the internal corpus may have missed. Preprint floor: 1 query → `biorxiv-mcp.search` for unfiled work in the same MoA.
-4. **Endpoint-integrity check** (export P1 §2a–2b methodology). For pivotal-trial publications: did the pre-specified primary endpoint hit? Was alpha-spending controlled? Was hierarchical testing preserved? ITT vs mITT vs PP analysis preference for the FDA division? Sample size powered for the observed effect or surfing good luck? Document each as a structured `key_finding` with verbatim quote.
-5. **Citation-graph expansion.** `pubmed-mcp.citation_graph_expand` 1-hop on the top-3 retrievals. Surface seminal references the index missed (record in `missed_seminal_via_citation_graph`). Limit: do not chase >20 nodes total.
-6. **Strength rating.** Per paper, `evidence_strength`: `strong` = peer-reviewed pivotal in top-tier journal with verbatim primary-endpoint claim quoted; `moderate` = peer-reviewed phase 2 / meta-analysis; `weak` = preprint / industry-sponsored RWE / case series.
-7. **Contradictory findings.** Cross-tabulate: does any pair of papers make claims that cannot both be true? List as contradictions; do NOT pre-resolve them — that's Stage 5's job. Surface them with both sides' supporting PMIDs.
-8. **Schema validation.** Pydantic. Retry 3× on failure. Terminal failure → `validation_pass=false` returned to orchestrator.
-9. **Memory writeback.** Append new papers + new contradictions to memory; record planned-vs-actual queries for next run.
+3. **Retrieval.** For each query: `pubmed_search(query, limit=25)` to get candidate PMIDs. Then ONE batched `pubmed_fetch_abstracts(pmids=[...])` per query — never fetch abstracts one at a time. Score relevance from title+abstract+journal before deciding which to read full-text.
+4. **Full-text on top candidates.** For the top 3–5 papers per query (cap total full-text reads at 8 across all queries to stay in budget), call `pubmed_fetch_full_text(pmid)`. Preprint floor: 1 `biorxiv_search` call for unfiled MoA work — if it returns empty, move on; do not retry.
+5. **Endpoint-integrity check** (export P1 §2a–2b methodology). For pivotal-trial publications: did the pre-specified primary endpoint hit? Was alpha-spending controlled? Was hierarchical testing preserved? ITT vs mITT vs PP analysis preference for the FDA division? Sample size powered for the observed effect or surfing good luck? Document each as a structured `key_finding` with verbatim quote.
+6. **Citation-graph expansion.** `pubmed_citation_graph_expand(pmid, direction='cited_by')` 1-hop on the top-3 retrievals. Surface seminal references the index missed (record in `missed_seminal_via_citation_graph`). Limit: do not chase >20 nodes total.
+7. **Strength rating.** Per paper, `evidence_strength`: `strong` = peer-reviewed pivotal in top-tier journal with verbatim primary-endpoint claim quoted; `moderate` = peer-reviewed phase 2 / meta-analysis; `weak` = preprint / industry-sponsored RWE / case series.
+8. **Contradictory findings.** Cross-tabulate: does any pair of papers make claims that cannot both be true? List as contradictions; do NOT pre-resolve them — that's Stage 5's job. Surface them with both sides' supporting PMIDs.
+
+**Final output.** After tool use, emit the JSON object that validates against the schema above. Required top-level keys: `schema_version` (always `1`), `asset_id` (the uuid from the input), `papers` (array, may be empty if retrieval found nothing), `synthesis` (must include `thesis_alignment` and `summary`), `query_used` (the concrete queries you ran, joined), `retrieved_at` (ISO-8601 UTC timestamp). Missing any required field → hard validation failure → entire call discarded. Emit ONLY the JSON, no surrounding prose, no markdown fences.
 
 ## Confidence accounting
 

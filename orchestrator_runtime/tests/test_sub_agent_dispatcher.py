@@ -166,8 +166,56 @@ def test_dispatch_tool_handler_returns_serializable_dict():
     _json.dumps(result)  # must be JSON-serializable
 
 
-def test_dispatch_tool_def_has_four_roles():
+def test_dispatch_tool_def_has_five_roles():
     enum_roles = disp.DISPATCH_TOOL_DEF["input_schema"]["properties"]["role"]["enum"]
     assert set(enum_roles) == {
         "literature", "competitive", "regulatory_history", "options_microstructure",
+        "commercial_opportunity",
     }
+
+
+# ---------- backfill_assessment_id ----------
+
+
+def test_backfill_assessment_id_updates_rows_by_run_id():
+    captured: Dict[str, Any] = {}
+
+    def _fake_rest(method, table, *, params=None, json_body=None, prefer=None):
+        captured.update(
+            method=method, table=table, params=params or {},
+            json_body=json_body or {}, prefer=prefer,
+        )
+        return [{"id": "row-1"}, {"id": "row-2"}, {"id": "row-3"}]
+
+    with patch.object(disp._client(), "_rest", side_effect=_fake_rest):
+        n = disp.backfill_assessment_id(
+            orchestrator_run_id="run-abc",
+            assessment_id="asmt-xyz",
+        )
+    assert n == 3
+    assert captured["method"] == "PATCH"
+    assert captured["table"] == "sub_agent_calls"
+    assert captured["params"]["orchestrator_run_id"] == "eq.run-abc"
+    assert captured["params"]["assessment_id"] == "is.null"  # don't clobber existing
+    assert captured["json_body"] == {"assessment_id": "asmt-xyz"}
+
+
+def test_backfill_assessment_id_returns_zero_on_rest_failure():
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("supabase 5xx")
+
+    with patch.object(disp._client(), "_rest", side_effect=_raise):
+        n = disp.backfill_assessment_id(
+            orchestrator_run_id="run-abc",
+            assessment_id="asmt-xyz",
+        )
+    assert n == 0  # best-effort: orphans a row but does not unwind the assessment
+
+
+def test_backfill_assessment_id_no_op_on_missing_inputs():
+    # No back-fill if either input is empty — guards against accidental
+    # mass-UPDATEs from a malformed orchestrator_run_id.
+    with patch.object(disp._client(), "_rest") as mock_rest:
+        assert disp.backfill_assessment_id(orchestrator_run_id="", assessment_id="a") == 0
+        assert disp.backfill_assessment_id(orchestrator_run_id="r", assessment_id="") == 0
+        mock_rest.assert_not_called()

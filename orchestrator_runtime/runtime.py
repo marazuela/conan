@@ -50,6 +50,7 @@ from orchestrator_runtime.client import (
 from orchestrator_runtime.memory import MemoryStore, MemoryBlobs
 from orchestrator_runtime.sub_agent_dispatcher import (
     DISPATCH_TOOL_DEF,
+    backfill_assessment_id as backfill_sub_agent_assessment_id,
     dispatch_sub_agent_tool,
     reset_budget as reset_sub_agent_budget,
 )
@@ -642,6 +643,7 @@ def stage_1_synthesize(
     *,
     enable_sub_agents: bool = ENABLE_SUB_AGENTS_DEFAULT,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
     system_prompt: str = STAGE_1_SYSTEM,
 ) -> tuple[str, StageMetric]:
     """Stage 1 synthesis. Single-shot by default.
@@ -697,6 +699,7 @@ def stage_1_synthesize(
     # Tool-use loop variant
     return _stage_1_synthesize_with_dispatch(
         a_client, ctx, model, system_blocks, user_payload, assessment_id,
+        orchestrator_run_id,
     )
 
 
@@ -707,6 +710,7 @@ def _stage_1_synthesize_with_dispatch(
     system_blocks: List[Dict[str, Any]],
     user_payload: Any,
     assessment_id: Optional[str],
+    orchestrator_run_id: Optional[str] = None,
 ) -> tuple[str, StageMetric]:
     from modal_workers.sub_agents.runtime import _block_to_dict as _b2d
 
@@ -783,6 +787,7 @@ def _stage_1_synthesize_with_dispatch(
             try:
                 out = dispatch_sub_agent_tool(
                     inp, asset_context=asset_context, assessment_id=assessment_id,
+                    orchestrator_run_id=orchestrator_run_id,
                 )
                 tool_results.append({
                     "type": "tool_result",
@@ -1588,6 +1593,12 @@ def stage_10_persist(
               "affected_id": f.affected_id}
              for f in constitutional_result.findings]
             if constitutional_result else None),
+        # NOT NULL columns the RPC's jsonb_populate_record pattern doesn't
+        # fall back to column DEFAULTs for — must be supplied explicitly or
+        # the INSERT 23502s. Tier-1 here is always tier=1; bulk_v0 used
+        # tier=2 via a direct REST POST (deleted in v4 Phase 6).
+        "tier": 1,
+        "constitutional_retries": 0,
         # PR-5: explicit gate outcome. Tier-1 rows always carry a non-NULL
         # gate_status; bulk_v0 rows set 'tier2_skipped' in tier2.py. The
         # ConstitutionalFailure aborts before persistence when deterministic
@@ -2097,6 +2108,7 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
     logger.info("=== Stage 1: synthesis (%s) ===", model)
     cited_prose, m1 = stage_1_synthesize(
         a_client, ctx, model, system_prompt=STAGE_1_SYSTEM,
+        orchestrator_run_id=run.orchestrator_run_id,
     )
     run.stage_metrics.append(m1)
     logger.info("Stage 1: %dms / %d in / %d out / $%.3f",
@@ -2200,6 +2212,18 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
         commercial_dimensions=commercial,
     )
     logger.info("Persisted assessment: %s", assessment_id)
+
+    # Back-fill assessment_id on the sub_agent_calls rows Stage 1 wrote with
+    # assessment_id=NULL (the id didn't exist when Stage 1 fired). Without this,
+    # working sub-agent rows orphan and downstream consumers — IC memo synthesis,
+    # cost views, telemetry — can't tie a call to its parent assessment.
+    # See operator_flag 4fc126c0. Joined by orchestrator_run_id (set at INSERT).
+    if run.orchestrator_run_id and assessment_id:
+        backfill_sub_agent_assessment_id(
+            orchestrator_run_id=run.orchestrator_run_id,
+            assessment_id=assessment_id,
+        )
+
     return assessment_id
 
 
