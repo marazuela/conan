@@ -2040,7 +2040,7 @@ def run_one(sb: SupabaseClient, a_client: OrchestratorClient,
     try:
         return _run_one_inner(
             sb, a_client, asset_id, trigger_type, model, extractor_model,
-            dry_run, parsed_out,
+            dry_run, parsed_out, run_id=run_id,
         )
     finally:
         if hard_kill_usd is not None:
@@ -2051,13 +2051,15 @@ def _run_one_inner(sb: SupabaseClient, a_client: OrchestratorClient,
                    asset_id: str, trigger_type: str,
                    model: str, extractor_model: str,
                    dry_run: bool,
-                   parsed_out: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                   parsed_out: Optional[Dict[str, Any]] = None,
+                   run_id: Optional[str] = None) -> Optional[str]:
     logger.info(
         "v4 path active: commercial dual-mandate prompts; retired "
         "stage 2/3/6/semantic-7 code paths removed",
     )
 
-    run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type)
+    run = AssessmentRun(asset_id=asset_id, trigger_type=trigger_type,
+                        orchestrator_run_id=run_id)
 
     logger.info("=== Stage 0: load context ===")
     ctx = stage_0_load(sb, asset_id)
