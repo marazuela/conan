@@ -76,6 +76,60 @@ class ICMemoOrchestrationError(RuntimeError):
     SubAgentSchemaError, which means the LLM produced bad JSON."""
 
 
+# Phase-0 (fda_agent_reviews.agent_kind, 3-role) → Phase-4B
+# (sub_agent_calls.role, 4-role) bridge. 1:1 and conservative; competitive has
+# no Phase-0 equivalent and is left to build_user_content's placeholder.
+PHASE0_TO_PHASE4B_ROLES = {
+    "medical": "literature",
+    "regulatory": "regulatory_history",
+    "microstructure": "options_microstructure",
+}
+
+
+def _load_phase0_specialists(
+    sb: SupabaseClient,
+    asset_id: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Fallback specialist loader: walk asset_id → fda_regulatory_events →
+    fda_agent_reviews and return the newest completed review per Phase-0 role,
+    remapped to the 4-role taxonomy. Returns {} (not raises) when the asset has
+    no events or no completed reviews — the caller raises after both lookups
+    fail."""
+    events = sb._rest(
+        "GET", "fda_regulatory_events",
+        params={
+            "select": "id",
+            "asset_id": f"eq.{asset_id}",
+            "order": "created_at.desc",
+        },
+    ) or []
+    if not events:
+        return {}
+    event_ids = [e["id"] for e in events]
+
+    reviews = sb._rest(
+        "GET", "fda_agent_reviews",
+        params={
+            "select": "agent_kind,structured_output,status,ran_at",
+            "event_id": f"in.({','.join(event_ids)})",
+            "status": "eq.completed",
+            "agent_kind": f"in.({','.join(PHASE0_TO_PHASE4B_ROLES.keys())})",
+            "order": "ran_at.desc.nullslast",
+        },
+    ) or []
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in reviews:
+        old_role = r.get("agent_kind")
+        new_role = PHASE0_TO_PHASE4B_ROLES.get(old_role)
+        if not new_role or new_role in out:
+            continue
+        payload = r.get("structured_output")
+        if isinstance(payload, dict) and payload:
+            out[new_role] = payload
+    return out
+
+
 def load_ic_memo_context(
     sb: SupabaseClient,
     assessment_id: str,
@@ -167,10 +221,18 @@ def load_ic_memo_context(
             specialists[role] = out
 
     if not specialists:
+        # Fallback: production writes specialist reviews to fda_agent_reviews
+        # with the 3-role taxonomy (medical/regulatory/microstructure). When
+        # sub_agent_calls is empty for this assessment (older runs, or Stage-1
+        # dispatch that left assessment_id NULL), bridge to those reviews so
+        # synthesis still works.
+        specialists = _load_phase0_specialists(sb, asset_id)
+
+    if not specialists:
         raise ICMemoOrchestrationError(
             f"assessment {assessment_id} has no schema-passing specialist "
-            f"sub_agent_calls rows; refusing to synthesize IC memo with "
-            f"zero inputs"
+            f"rows in sub_agent_calls (4-role) or fda_agent_reviews (Phase 0 "
+            f"3-role); refusing to synthesize IC memo with zero inputs"
         )
 
     thesis: Dict[str, Any] = {
