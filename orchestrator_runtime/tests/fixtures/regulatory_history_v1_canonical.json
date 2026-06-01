@@ -32,6 +32,12 @@
     "boxed_warning_rate": 0.0,
     "median_nda_to_decision_days": 240
   },
+  "sparse_class_warning": {
+    "fires": true,
+    "n_precedents": 1,
+    "threshold": 5,
+    "rationale": "Only 1 enumerated class precedent (n=1) — far below the n>=5 density floor. Stage 5 synthesis must widen the base-rate CI; the point estimate is not load-bearing."
+  },
   "sponsor_track_record": {
     "prior_approvals": 0,
     "prior_crls": 0,
