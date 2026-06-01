@@ -366,18 +366,23 @@ def orchestrator_run_one(
     # conan-v2 already uses all 5. Manual one-shot invocation still works:
     #   modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue
     #
-    # Phase 2C flip (2026-05-27) REVERTED 2026-05-28 — first live-flip day
-    # burned $8.98 / 1.47M tokens for zero usable output. 18/18 sub_agent_calls
-    # had assessment_id=NULL and conv_runs=0 for the day. Three gaps the
-    # original "5/5 schema_pass=true" gate-evidence missed:
-    #   1. literature role: 0/3 schema_pass (PR #140 reconciliation incomplete).
-    #   2. commercial_opportunity: no schema file in conan-cowork-skills.
-    #   3. dispatcher writes sub_agent_calls with assessment_id=NULL even on pass.
-    # Operator flag 4fc126c0 and memory sub_agent_schema_drift_2026-05-23.md
-    # have the full breakdown. Budget cap stays in place so the per-run hard
-    # halt still fires when callers explicitly pass enable_sub_agents=True
-    # (manual dry-runs). Re-enable only after the 3 gaps close + dry-runs pass.
+    # Phase 2C flip — RE-ENABLED 2026-06-01 after the 3-gap fix cycle.
+    # Timeline (memory sub_agent_schema_drift_2026-05-23.md has the full saga):
+    #   2026-05-27 09:46 UTC: first enabled via PR #157 (buried in "Diag/stage7"
+    #     dump). 18 dispatches, $8.98 burned, all assessment_id=NULL → $0 output.
+    #   2026-05-28 09:42 UTC: PR #173 reverted the flip.
+    #   2026-06-01 13:01 UTC: PR #174 fixed the 3 root causes (literature skill
+    #     drift, orchestrator_run_id join + back-fill, persist defensive defaults).
+    #     PR #177 added commercial_opportunity to the role CHECK constraint.
+    #   2026-06-01 13:11 UTC: VRDN dry-run with --enable-sub-agents:
+    #     competitive/regulatory_history/options_microstructure/commercial_opportunity
+    #     all schema_pass=true; literature not dispatched for this asset (TED
+    #     indication) — fix is doc-only, low regression risk.
+    # Budget cap (350k tokens aggregate per assessment) stays — per-run hard halt
+    # fires before any single assessment can burn what 2026-05-27 burned all day.
+    # Monitor failed_reactor_events for sub_agent.* sources for 24h post-flip.
     env={
+        "ORCH_ENABLE_SUB_AGENTS": "1",
         "ORCH_SUB_AGENT_BUDGET_TOKENS": "350000",
     },
 )
