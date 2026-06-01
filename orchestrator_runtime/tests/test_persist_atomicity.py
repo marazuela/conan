@@ -142,14 +142,8 @@ def test_build_payload_shape_includes_all_required_keys():
     run.stage_metrics = []  # empty is allowed
     ctx = _baseline_ctx()
     parsed = _parsed_stub()
-    short_to_full = {"aa11bb22": "aa11bb22cc33dd44"}
 
-    payload = _build_stage_10_secondaries(
-        run, ctx, parsed,
-        hypothesis_result=None,
-        premortem_result=None,
-        short_to_full=short_to_full,
-    )
+    payload = _build_stage_10_secondaries(run, ctx, parsed)
 
     assert set(payload.keys()) == {
         "stage_metrics", "hypotheses", "premortem_verdicts", "post_mortem_stub"
@@ -285,6 +279,41 @@ def test_rpc_call_carries_assessment_row_with_expected_keys():
         assert k in assessment, f"assessment row missing key {k!r}"
 
 
+def test_rpc_call_supplies_not_null_columns_without_natural_defaults():
+    """Regression for the 23502 NOT NULL bug on convergence_assessments INSERT
+    (orchestrator_runs 2026-05-25..2026-06-01 burn).
+
+    The RPC's `INSERT ... SELECT (jsonb_populate_record(NULL::table, jsonb)).*`
+    pattern strips column DEFAULTs: any NOT NULL DEFAULT column omitted from
+    the assessment jsonb becomes an explicit NULL in the INSERT and 23502s.
+    `id` and `created_at` are now defaulted server-side via defensive
+    `jsonb_build_object || v_assessment` in the SQL function, but `tier` and
+    `constitutional_retries` are domain-owned constants — runtime.py supplies
+    them explicitly. This test pins that contract so a future row-dict
+    refactor can't silently drop them.
+
+    If this test fails, every Tier-1 v3/v4 run will 23502 in production.
+    """
+    sb = _RpcCapturingMock(rpc_return="aid-test")
+    _drive_stage_10(sb)
+    captured = sb.captured_rpc_payload()
+    assessment = captured["assessment"]
+
+    assert "tier" in assessment, (
+        "row dict must supply `tier` — schema is NOT NULL DEFAULT 1 but the "
+        "RPC's jsonb_populate_record pattern bypasses the DEFAULT"
+    )
+    assert assessment["tier"] == 1, (
+        f"Tier-1 path must persist tier=1, got {assessment['tier']!r}"
+    )
+    assert "constitutional_retries" in assessment, (
+        "row dict must supply `constitutional_retries` — schema is NOT NULL "
+        "DEFAULT 0 but the RPC's jsonb_populate_record pattern bypasses the "
+        "DEFAULT"
+    )
+    assert assessment["constitutional_retries"] == 0
+
+
 def test_rpc_call_carries_post_mortem_stub_with_catalyst_fields():
     """post_mortem_stub MUST include outcome_window_end + catalyst_resolution_marker
     by the time it reaches the RPC. The pure builder leaves them out; the
@@ -336,7 +365,6 @@ def _drive_stage_10(sb: _RpcCapturingMock, *,
                     with_stage_metric: bool = False) -> Optional[str]:
     from orchestrator_runtime import runtime
     from orchestrator_runtime.runtime import StageMetric, stage_10_persist
-    from modal_workers.shared import compute as compute_mod
 
     run = _build_run(run_id=run_id)
     if with_stage_metric:
@@ -349,14 +377,28 @@ def _drive_stage_10(sb: _RpcCapturingMock, *,
     ctx = _baseline_ctx()
     parsed = _parsed_stub()
 
-    # Stage 8 calibration looks up the active curve. Stub to None so the
-    # raw conviction flows through unchanged (calibration is not what this
-    # test surface is about).
+    # Stage 8 calibration + market-side gate + signature lookups all hit the
+    # SupabaseClient — stub them so the test drives stage_10_persist without
+    # needing live infra. These are not what the persist-shape tests are
+    # asserting against.
     with patch.object(runtime, "get_active_calibration_curve", return_value=None), \
-         patch.object(compute_mod, "get_active_calibration_curve",
+         patch.object(runtime, "compute_market_side_context",
+                      return_value=({}, "watchlist", None)), \
+         patch.object(runtime, "_find_existing_convergence_signature",
                       return_value=None), \
+         patch.object(runtime, "compute_document_set_hash",
+                      return_value="hash-test"), \
+         patch.object(runtime, "_resolve_catalyst_window",
+                      return_value=(
+                          __import__("datetime").datetime(
+                              2026, 9, 17, tzinfo=__import__("datetime").timezone.utc
+                          ),
+                          "default_180d_fallback",
+                      )), \
          patch.object(runtime, "_supersede_prior_ic_memo_best_effort"), \
-         patch.object(runtime, "_maybe_trigger_ic_memo_best_effort"):
+         patch.object(runtime, "_maybe_trigger_ic_memo_best_effort"), \
+         patch.object(runtime.MemoryStore, "load_all", return_value=[]), \
+         patch.object(runtime.MemoryStore, "write", return_value=None):
         return stage_10_persist(
             sb, "asset-uuid-1", run,
             cited_prose="Long thesis prose",
@@ -364,8 +406,5 @@ def _drive_stage_10(sb: _RpcCapturingMock, *,
             ctx=ctx,
             model="claude-sonnet-4-5-20250929",
             extractor_model="claude-sonnet-4-5-20250929",
-            ensemble_payload=None,
             constitutional_result=None,
-            hypothesis_result=None,
-            premortem_result=None,
         )

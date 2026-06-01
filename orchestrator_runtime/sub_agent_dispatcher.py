@@ -144,6 +144,7 @@ def _log_to_dlq(role: str, errors: List[str], payload: Dict[str, Any]) -> None:
 def _log_call(
     *,
     assessment_id: Optional[str],
+    orchestrator_run_id: Optional[str],
     role: str,
     question: str,
     output: Dict[str, Any],
@@ -158,6 +159,7 @@ def _log_call(
             "POST", "sub_agent_calls",
             json_body={
                 "assessment_id": assessment_id,
+                "orchestrator_run_id": orchestrator_run_id,
                 "role": role,
                 "query": question[:8000],
                 "output": output,
@@ -188,6 +190,7 @@ def dispatch_sub_agent(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
     priority: str = "normal",
     budget_token_cap: Optional[int] = None,
 ) -> DispatchOutcome:
@@ -270,6 +273,7 @@ def dispatch_sub_agent(
     _running_total_tokens += tokens
     call_id = _log_call(
         assessment_id=assessment_id,
+        orchestrator_run_id=orchestrator_run_id,
         role=role,
         question=question,
         output=output,
@@ -297,6 +301,7 @@ def dispatch_sub_agent_tool(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stage 1 tool-handler. Called when Claude emits a `dispatch_sub_agent` tool_use block."""
     role = tool_input.get("role", "")
@@ -307,6 +312,7 @@ def dispatch_sub_agent_tool(
         question,
         asset_context=asset_context,
         assessment_id=assessment_id,
+        orchestrator_run_id=orchestrator_run_id,
         priority=priority,
     )
     # Trim large outputs returned to the model — schema-validated payload + status
@@ -329,6 +335,7 @@ async def dispatch_parallel(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
 ) -> List[DispatchOutcome]:
     """Fire multiple dispatch_sub_agent calls in parallel via asyncio.
 
@@ -345,9 +352,54 @@ async def dispatch_parallel(
                 r["role"], r["question"],
                 asset_context=asset_context,
                 assessment_id=assessment_id,
+                orchestrator_run_id=orchestrator_run_id,
                 priority=r.get("priority", "normal"),
             ),
         )
         for req in requests
     ]
     return await asyncio.gather(*tasks)
+
+
+def backfill_assessment_id(
+    *,
+    orchestrator_run_id: str,
+    assessment_id: str,
+) -> int:
+    """Back-fill sub_agent_calls.assessment_id for all rows from this run.
+
+    Called by runtime after stage_10_persist returns the parent assessment_id.
+    Sub-agent calls fire in Stage 1 before the parent assessment exists, so
+    assessment_id is NULL at INSERT time. orchestrator_run_id (set at INSERT)
+    is the join key.
+
+    Returns the count of rows updated. Best-effort: logs and returns 0 on error.
+    No-op if either id is empty — guards against a malformed orchestrator_run_id
+    being interpreted as "match every row" by PostgREST.
+    """
+    if not orchestrator_run_id or not assessment_id:
+        return 0
+    try:
+        rows = _client()._rest(
+            "PATCH", "sub_agent_calls",
+            params={
+                "orchestrator_run_id": f"eq.{orchestrator_run_id}",
+                "assessment_id": "is.null",
+            },
+            json_body={"assessment_id": assessment_id},
+            prefer="return=representation",
+        ) or []
+        n = len(rows) if isinstance(rows, list) else 0
+        if n:
+            logger.info(
+                "sub_agent_dispatcher: back-filled assessment_id=%s on %d sub_agent_calls "
+                "rows for orchestrator_run_id=%s",
+                assessment_id, n, orchestrator_run_id,
+            )
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "sub_agent_dispatcher: assessment_id back-fill failed (run=%s, assessment=%s): %s",
+            orchestrator_run_id, assessment_id, exc,
+        )
+        return 0
