@@ -381,9 +381,18 @@ def orchestrator_run_one(
     # Budget cap (350k tokens aggregate per assessment) stays — per-run hard halt
     # fires before any single assessment can burn what 2026-05-27 burned all day.
     # Monitor failed_reactor_events for sub_agent.* sources for 24h post-flip.
+    # 2026-06-02 cost audit: literature (0/5 schema_pass) + commercial_opportunity
+    # (0/6) STILL emit empty {} post-#178/#179 — ~$5.54/day burned for zero usable
+    # output (same empty-{} failure class). The per-role kill switch
+    # (sub_agent_dispatcher._is_role_disabled) short-circuits BEFORE the runner's
+    # API loop, so a disabled role costs $0. competitive (4/6) + regulatory_history
+    # (6/6) stay ON. Re-enable each only after a dry-run shows schema_pass=true.
+    # See memory sub_agent_schema_drift_2026-05-23.md (2026-06-02 row).
     env={
         "ORCH_ENABLE_SUB_AGENTS": "1",
         "ORCH_SUB_AGENT_BUDGET_TOKENS": "350000",
+        "ORCH_DISABLE_LITERATURE": "1",
+        "ORCH_DISABLE_COMMERCIAL_OPPORTUNITY": "1",
     },
 )
 def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
