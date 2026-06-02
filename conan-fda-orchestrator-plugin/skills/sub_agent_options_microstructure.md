@@ -3,11 +3,14 @@ name: sub-agent-options-microstructure
 description: Read pre-event options chain for the asset's ticker — straddle-implied move %, IV term-structure slope, OI concentration, two-sided liquidity score. Returns options_microstructure_v1.json so Stage 1 can triangulate market-implied catalyst magnitude against the regulatory + literature evidence layers. v0 lifted from Investment_engine_v2 Tier-1 skill P5 (options-microstructure-analysis) and the polygon_options_data helper.
 model: claude-sonnet-4-6
 effort: high
+# Tool names below MUST match OptionsMicrostructureRunner.effective_tool_defs()
+# exactly — the runner passes these to the API; mismatched names confuse the
+# model. No internal_rag/compute tools are merged for this role. IV term
+# structure is read from the chain pull; there is no separate get_iv tool.
 allowed-tools:
-  - mcp__polygon-mcp__get_chain
-  - mcp__polygon-mcp__get_iv
-  - mcp__polygon-mcp__straddle_implied_move
-  - mcp__polygon-mcp__event_window_liquidity
+  - polygon_get_chain
+  - polygon_straddle_implied_move
+  - polygon_event_window_liquidity
 context: fork
 hooks:
   PreToolUse: [budget_check]
@@ -157,7 +160,7 @@ Worked example (only when chain data is actually available):
 
 1. **Chain pull.** `polygon_get_chain(ticker)` for the nearest expiry covering `event_date`. If chain empty → `data_quality='unavailable'` + `confidence=0` and return.
 2. **Implied move.** `polygon_straddle_implied_move(ticker, event_date)` → ATM straddle as % of underlying. Floor at 0; cap at 200% (anything higher is a data quality issue).
-3. **IV term structure.** Pull IV30 + IV60 from chain (or `polygon_get_iv` per strike if needed). Slope: front_loaded if IV30 > IV60 by >10%; backward_loaded if IV60 > IV30 by >10%; else flat.
+3. **IV term structure.** Pull IV30 + IV60 from the chain returned in step 1 (the chain rows carry per-strike IV — there is no separate get_iv tool). Slope: front_loaded if IV30 > IV60 by >10%; backward_loaded if IV60 > IV30 by >10%; else flat.
 4. **Liquidity score.** `polygon_event_window_liquidity(ticker, event_date)` → 0-5. Sub-3 means the chain is too thin to short; flag in `confidence`.
 5. **OI concentration.** From the chain dict, pick top-5 strikes by OI on each side. Compute put_call_ratio from OI sums. Infer `position_inferred`:
    - long_vol: high IV + low directional bias (P/C ≈ 1.0)

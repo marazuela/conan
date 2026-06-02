@@ -3,19 +3,22 @@ name: sub-agent-regulatory-history
 description: Synthesize FDA precedents for an asset — class-level approval/CRL base rates, AdComm voting patterns, sponsor track record, reviewer-panel concerns. Returns a structured regulatory_history_v1.json that the orchestrator's Stage 1 evidence ledger consumes. v0 starting point lifted from Investment_engine_v2 Tier-1 skills P1 (analyze-fda-approval-prospects) + P2 (research-clinical-class-precedent), validated at confidence ≥0.70 in predecessor system.
 model: claude-sonnet-4-6
 effort: xhigh
+# Tool names below MUST match RegulatoryHistoryRunner.effective_tool_defs()
+# exactly — the runner passes these to the API; mismatched names confuse the
+# model. The runner wires openFDA (drugsfda approvals / labels / adverse events)
+# + the catalyst_universe AdComm views (upcoming + historical) + internal_rag
+# (corpus "filings") + compute_similar_resolved_cases. There is no Orange Book,
+# warning-letter, or AdComm transcript/voting/panel tool — derive those signals
+# from openFDA + internal_rag over the EDGAR/AdComm corpus.
 allowed-tools:
-  - mcp__openfda-mcp__search_approvals
-  - mcp__openfda-mcp__search_warning_letters
-  - mcp__openfda-mcp__get_orange_book
-  - mcp__openfda-mcp__search_faers
-  - mcp__fda-adcomm-mcp__get_calendar
-  - mcp__fda-adcomm-mcp__search_transcripts
-  - mcp__fda-adcomm-mcp__get_panel_composition
-  - mcp__fda-adcomm-mcp__get_voting_history
-  - mcp__internal-rag-mcp__hybrid_search_adcomm
-  - mcp__internal-rag-mcp__hybrid_search_internal
-  - mcp__internal-rag-mcp__rerank
-  - mcp__compute-mcp__compute_base_rate
+  - openfda_drugsfda_approvals
+  - openfda_labels_recent
+  - openfda_adverse_events
+  - fda_adcomm_upcoming
+  - fda_adcomm_historical
+  - internal_rag_hybrid_search
+  - internal_rag_get_chunk
+  - compute_similar_resolved_cases
 context: fork
 hooks:
   PreToolUse: [budget_check]
@@ -211,20 +214,20 @@ Every entry in `class_precedents`, every base rate, every sponsor-history elemen
 ## Internal loop (interleaved thinking, max 6 tool-call turns)
 
 1. **Memory load.** Read `/memories/sub_agents/regulatory/<indication>_<reviewer_panel_id>.md` if present. This is the per-indication-per-panel memory file with cumulative precedent map + recurring panel concerns. New panels start empty.
-2. **Class membership inference.** If `class_drugs_in_scope` not in memory: split MoA on `+`/`/`/`,`; for each fragment query ChEMBL via `compute_base_rate` MCP (target_search) for canonical class members. Fall back to a hardcoded class table (see Methodology fallbacks below) for common classes. Record `membership_confidence < 0.70` if any fragment was inferred via fallback.
-3. **openFDA precedent enumeration.** `openfda-mcp.search_approvals` for class drugs over `lookback_years=10`. For each approval: pull label (boxed warning, REMS, indication breadth), filing-to-decision interval, AdComm flag. For CRLs: `openfda-mcp.search_warning_letters` cross-referenced against EDGAR 8-K Item 8.01 mentions of the drug name within 30 days of action date.
-4. **AdComm history.** `fda-adcomm-mcp.get_calendar` for the reviewer panel × indication over `lookback_years`. For each AdComm: `search_transcripts` for the recurring concern themes, `get_voting_history` for vote tallies, `get_panel_composition` for current vs historical members.
-5. **Sponsor track record.** EDGAR EFTS (`internal-rag-mcp.hybrid_search_internal`) for the sponsor's prior FDA disclosures (8-K Item 8.01s referencing CRLs, BTD grants, priority designations, RTOR). Cross-reference openFDA warning letters by sponsor address.
+2. **Class membership inference.** If `class_drugs_in_scope` not in memory: split MoA on `+`/`/`/`,`; map each fragment to canonical class members using the hardcoded class table (see Methodology fallbacks below) — there is no ChEMBL/target-search tool wired for this role. Record `membership_confidence < 0.70` if any fragment was inferred via fallback.
+3. **Precedent enumeration.** Anchor the reference class with `compute_similar_resolved_cases` (`reference_class_signature` = MoA + indication + endpoint type) to pull resolved historical decisions with outcome + realized_move_pct. Enrich each with `openfda_drugsfda_approvals` for class drugs over the last ~10 years and `openfda_labels_recent` for the approved label (boxed warning, REMS, indication breadth, filing-to-decision interval). For CRLs there is no openFDA warning-letter tool — surface CRL signals via `internal_rag_hybrid_search` (corpus "filings") over EDGAR 8-K Item 8.01 mentions of the drug name within 30 days of the action date.
+4. **AdComm history.** `fda_adcomm_historical` for resolved AdComm/PDUFA events filtered by drug/sponsor/indication (and `fda_adcomm_upcoming` for any scheduled panel on the current asset). These return catalyst_universe rows — read `raw_payload` + `material_outcome` for the outcome. There is no transcript/voting/panel-composition tool: pull recurring concern themes and vote tallies from `internal_rag_hybrid_search` over the AdComm corpus where transcripts are indexed, and mark `adcomm_vote: unknown` when a tally isn't retrievable rather than inventing one.
+5. **Sponsor track record.** `internal_rag_hybrid_search` (corpus "filings", EDGAR EFTS) for the sponsor's prior FDA disclosures (8-K Item 8.01s referencing CRLs, BTD grants, priority designations, RTOR), with `internal_rag_get_chunk` to expand a hit worth citing. Cross-reference prior approvals via `openfda_drugsfda_approvals` by sponsor; active warning letters / facility-inspection outcomes have no openFDA tool, so source them from `internal_rag_hybrid_search` over the filings corpus.
 6. **Synthesis.** Compute base rates with binomial CIs (Wilson interval). List divergence-from-norm flags ONLY when supported by enumerated precedents (e.g., "no class member has been approved with full label without an AdComm in the last 5 years; this indication's panel convenes for ~31% of NDAs in this class"). Refuse to invent flags.
 
    **Sparse-class warning.** Emit `sparse_class_warning` on every output. Set `fires=true` and write a short `rationale` whenever `base_rates.n < threshold` (default threshold = 5). The threshold is calibrated against the U3 `compare-to-historical-precedents` low-density convention — a class with fewer than five enumerated precedents cannot anchor a base rate without explicitly flagging the extrapolation risk. When `fires=true`, downstream Stage 5 synthesis MUST widen the base-rate CI rather than treat the point estimate as load-bearing. Do not omit the field when the class is dense — emit `fires=false` with `rationale: null` so the operator can verify the check ran.
 7. **Schema validation.** Pydantic-validate against `regulatory_history_v1.json`. Retry up to 3× on failure with feedback prompt; escalate with `validation_pass=false` on terminal failure.
 8. **Memory writeback.** Append new precedents + new panel concerns to the memory file via Supabase Storage. Storage path written into output for the orchestrator's per-stage cost tracker.
 
-## Methodology fallbacks (when MCP tools unavailable)
+## Methodology fallbacks (when a tool or data source is unavailable)
 
 - ChEMBL `target_search` unavailable → hardcoded class table for: NMDA antagonists, JAK inhibitors, GLP-1 agonists, anti-VEGF, anti-amyloid mAbs, anti-FXIa, anti-PD-(L)1, anti-CD20, BTK inhibitors, SGLT2 inhibitors, GLP-1/GIP, complement inhibitors, IL-23 inhibitors. Record `class_membership.fallback=true`.
-- AdComm transcripts older than 5 years may not be in the RAG index → fall back to `openfda-mcp.get_orange_book` to confirm approval-with-AdComm flag; mark `adcomm_vote: unknown` if vote tally absent rather than inventing one.
+- AdComm transcripts older than 5 years may not be in the RAG index → fall back to `openfda_drugsfda_approvals` to confirm the approval and `fda_adcomm_historical` for the approval-with-AdComm flag; mark `adcomm_vote: unknown` if vote tally absent rather than inventing one.
 
 ## Confidence accounting
 

@@ -23,7 +23,10 @@ from modal_workers.sub_agents.commercial_opportunity import (
     CommercialOpportunityRunner,
     _project_label,
 )
+from modal_workers.sub_agents.competitive import CompetitiveRunner
 from modal_workers.sub_agents.literature import LiteratureRunner
+from modal_workers.sub_agents.options_microstructure import OptionsMicrostructureRunner
+from modal_workers.sub_agents.regulatory_history import RegulatoryHistoryRunner
 
 
 # ---------- commercial label projection ----------
@@ -88,7 +91,16 @@ def _allowed_tools(skill_path: Path) -> list[str]:
     return names
 
 
-@pytest.mark.parametrize("runner_cls", [LiteratureRunner, CommercialOpportunityRunner])
+@pytest.mark.parametrize(
+    "runner_cls",
+    [
+        LiteratureRunner,
+        CommercialOpportunityRunner,
+        CompetitiveRunner,
+        RegulatoryHistoryRunner,
+        OptionsMicrostructureRunner,
+    ],
+)
 def test_skill_allowed_tools_match_runner(runner_cls):
     """Every tool named in the skill frontmatter must actually be exposed by the
     runner. This is the exact drift that silently broke literature + commercial:
