@@ -37,7 +37,11 @@ def test_build_cached_system_wraps_skill_in_ephemeral_block():
     assert isinstance(system, list)
     assert len(system) == 1
     assert system[0]["type"] == "text"
-    assert system[0]["text"] == skill
+    # _build_cached_system appends the literal JSON-schema contract after the
+    # skill (added 2026-05-23, commit 532813c) so the model sees the exact
+    # output contract. Skill stays the prefix; the schema block follows.
+    assert system[0]["text"].startswith(skill)
+    assert "Runtime JSON Schema Contract" in system[0]["text"]
     assert system[0]["cache_control"] == {"type": "ephemeral"}
 
 

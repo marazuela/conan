@@ -217,5 +217,59 @@ class CommercialOpportunityRunner(SubAgentRunner):
 
         return handle
 
+    def build_degraded_payload(
+        self,
+        *,
+        asset_context: Dict[str, Any],
+        question: str,
+        tool_log: List[Dict[str, Any]],
+        errors: List[str],
+    ) -> Dict[str, Any]:
+        """Schema-valid partial shape for when openFDA/PubMed retrieval consumes
+        the tool/token budget before the model emits a final commercial review.
+        Emits empty arrays + an is_inferred TAM + partial_output=true so the
+        orchestrator gets a usable (if empty) commercial signal instead of a hard
+        SubAgentSchemaError. Uses only keys allowed by commercial_opportunity_v1.json
+        (regulatory_incentives must be non-empty → ['none']; unmet_need defaults
+        to the neutral midpoint)."""
+        from datetime import datetime, timezone
+
+        indication = (
+            asset_context.get("indication")
+            or asset_context.get("lead_indication")
+            or "unknown indication"
+        )
+        asset_id = asset_context.get("asset_id") or asset_context.get("id") or ""
+        return {
+            "schema_version": 1,
+            "asset_id": str(asset_id),
+            "indication": str(indication),
+            "tam_estimate": {
+                "low_usd": None,
+                "high_usd": None,
+                "is_inferred": True,
+                "rationale": (
+                    "Partial: commercial sizing not completed within the "
+                    "tool/token budget on this run."
+                ),
+            },
+            "standard_of_care": [],
+            "soc_limitations": [],
+            "soc_side_effects": [],
+            "unmet_need_severity_1_5": 3,
+            "unmet_need_rationale": (
+                "Partial run — unmet need not assessed; neutral midpoint placeholder."
+            ),
+            "regulatory_incentives": ["none"],
+            "competitive_landscape_summary": (
+                "Partial: commercial/competitive context not retrieved within the "
+                "tool/token budget on this run."
+            ),
+            "mcap_to_peak_revenue_ratio": None,
+            "sourcing_completeness_pct": 0.0,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "partial_output": True,
+        }
+
 
 ROLE_REGISTRY["commercial_opportunity"] = CommercialOpportunityRunner  # type: ignore[assignment]
