@@ -36,7 +36,13 @@ SONNET_MODEL = "claude-sonnet-4-5-20250929"
 # roles (literature, regulatory_history) regularly need 4-5 search turns +
 # 1-2 fetch turns + 1 synthesis turn, leaving zero headroom at 6.
 DEFAULT_MAX_TURNS = 12
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+# Output-token cap per synthesis turn. Bumped 4096 -> 8192 (2026-06-02): roles
+# with large schemas (commercial_opportunity_v1 = TAM + standard-of-care array +
+# side-effects + ~2k-char competitive_landscape_summary) need >4096 to emit a
+# COMPLETE JSON object; 4096 truncated commercial mid-payload (stop_reason=
+# max_tokens, Round-7). max_tokens is a ceiling, not a charge — smaller-schema
+# roles (competitive/regulatory ~1.5k tokens) are unaffected.
+DEFAULT_MAX_OUTPUT_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_MAX_OUTPUT_TOKENS", "8192"))
 
 # Per-tool-result content cap. Sonnet's context window is 200k tokens; with
 # 4 tool_uses × 60k+ chars each (PubMed full text, OpenFDA labels), a single
