@@ -381,20 +381,20 @@ def orchestrator_run_one(
     # Budget cap (350k tokens aggregate per assessment) stays — per-run hard halt
     # fires before any single assessment can burn what 2026-05-27 burned all day.
     # Monitor failed_reactor_events for sub_agent.* sources for 24h post-flip.
-    # 2026-06-02 cost audit: literature (0/5 schema_pass) + commercial_opportunity
-    # (0/6) STILL emit empty {} post-#178/#179 — ~$5.54/day burned for zero usable
-    # output (same empty-{} failure class). The per-role kill switch
-    # (sub_agent_dispatcher._is_role_disabled) short-circuits BEFORE the runner's
-    # API loop, so a disabled role costs $0. competitive (4/6) + regulatory_history
-    # (6/6) stay ON. Re-enable each only after a dry-run shows schema_pass=true.
-    # See memory sub_agent_schema_drift_2026-05-23.md (2026-06-02 row).
+    # 2026-06-02: the empty-{} sub-agent failures were root-caused + fixed across
+    # #188 (budget/label) #191 (chain_handlers) #192 (persist diag) #193 (force
+    # synthesis) #194 (output cap) + parallel #189 (schema-retry + degraded
+    # fallback). commercial_opportunity now passes (validated full payload on the
+    # coherent-main dry-run) -> RE-ENABLED. literature stays OFF: it never fired in
+    # any dry-run, so it is still unvalidated — re-enable only after it fires +
+    # shows schema_pass=true on a literature-triggering asset.
+    # See memory sub_agent_schema_drift_2026-05-23.md (Round-7).
     env={
         "ORCH_ENABLE_SUB_AGENTS": "1",
         # 800k aggregate (raised from 350k) + 200k/role cap (sub_agent_dispatcher)
         # so dispatch order no longer starves later roles. $15/run hard-kill unchanged.
         "ORCH_SUB_AGENT_BUDGET_TOKENS": "800000",
-        "ORCH_DISABLE_LITERATURE": "1",
-        "ORCH_DISABLE_COMMERCIAL_OPPORTUNITY": "1",
+        "ORCH_DISABLE_LITERATURE": "1",  # unvalidated (never fired) — keep off
     },
 )
 def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
