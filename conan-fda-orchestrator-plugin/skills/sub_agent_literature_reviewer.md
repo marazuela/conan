@@ -3,15 +3,16 @@ name: sub-agent-literature-reviewer
 description: Find peer-reviewed + preprint papers supporting or contradicting an FDA asset's thesis. Evaluate strength of evidence; identify contradictory findings; trace citation graph for missed seminal papers. Returns literature_review_v1.json that the orchestrator's Stage 1 evidence ledger consumes. v0 starting point lifted from Investment_engine_v2 Tier-1 skill P1 (analyze-fda-approval-prospects), §Step-2 trial-data-forensics.
 model: claude-sonnet-4-6
 effort: xhigh
+# Tool names below MUST match LiteratureRunner.effective_tool_defs() exactly —
+# the runner passes these to the API; mismatched names confuse the model.
 allowed-tools:
-  - mcp__pubmed-mcp__search
-  - mcp__pubmed-mcp__fetch_full_text
-  - mcp__pubmed-mcp__citation_graph_expand
-  - mcp__biorxiv-mcp__search
-  - mcp__biorxiv-mcp__fetch_preprint_pdf
-  - mcp__internal-rag-mcp__hybrid_search_literature
-  - mcp__internal-rag-mcp__rerank
-  - mcp__internal-rag-mcp__fetch_chunk_with_context
+  - pubmed_search
+  - pubmed_fetch_abstracts
+  - pubmed_fetch_full_text
+  - pubmed_citation_graph_expand
+  - biorxiv_search
+  - internal_rag_hybrid_search
+  - internal_rag_get_chunk
 context: fork
 hooks:
   PreToolUse: [budget_check]
@@ -170,7 +171,7 @@ Worked example (illustrative shape; substitute your real findings):
 
 ## Internal loop (interleaved thinking, max 8 tool-call turns)
 
-**Tools actually available to you** (the runner injects exactly these — no others, including no internal-rag tools, no rerank, no preprint PDF fetch):
+**Tools actually available to you** (the runner injects exactly these — no others; no rerank, no preprint-PDF fetch). PubMed is the primary source; the `internal_rag_*` tools search the local already-linked corpus:
 
 | Tool | Purpose |
 |---|---|
@@ -179,6 +180,8 @@ Worked example (illustrative shape; substitute your real findings):
 | `pubmed_fetch_full_text(pmid)` | Open-access full text from PubMed Central if available; else returns abstract. |
 | `pubmed_citation_graph_expand(pmid, direction='cited_by'|'references', limit?)` | 1-hop citation neighbors. |
 | `biorxiv_search(query, limit?)` | bioRxiv preprint search. v0 stub may return empty — never block on this. |
+| `internal_rag_hybrid_search(query, corpus?, k?)` | Search the local already-linked corpus (BM25+dense+rerank); `corpus` defaults to `literature`. Cheaper than PubMed for context on docs already attached to the asset. |
+| `internal_rag_get_chunk(chunk_id, with_neighbors?)` | Fetch one corpus chunk (+ optional neighbors) to expand an `internal_rag_hybrid_search` hit. |
 
 Do not invent or attempt to call any other tool name. Tool-call failures count against the 8-turn cap.
 

@@ -39,7 +39,18 @@ from modal_workers.sub_agents import ROLE_REGISTRY, SubAgentResult, SubAgentSche
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "200000"))
+# Global aggregate ceiling across ALL sub-agent calls in one assessment. Raised
+# 200k -> 800k (2026-06-02): under the old shared-pool FIFO, heavy early roles
+# (competitive ~122k) starved later roles (literature/commercial), which then
+# tripped their budget mid-loop and emitted {"partial_output": true} instead of a
+# real payload. The per-run $ hard-kill (cost_budget.PER_RUN_HARD_KILL_USD=$15)
+# remains the real runaway backstop; this is just a token guardrail.
+DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "800000"))
+# Per-role cap so dispatch ORDER never starves a role: each role gets its own
+# budget (default 200k, comfortably above the runner's 150k SOFT_INPUT_TOKEN_CAP so
+# the forced-synthesis turn after tools are dropped isn't itself budget-killed),
+# bounded by whatever the global aggregate still has left.
+PER_ROLE_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_PER_ROLE_TOKEN_CAP", "200000"))
 
 
 def _is_role_disabled(role: str) -> bool:
@@ -236,6 +247,9 @@ def dispatch_sub_agent(
             cost_usd=0.0,
             latency_ms=0,
         )
+    # Per-role allocation: cap each role at PER_ROLE_BUDGET_TOKENS so dispatch
+    # order doesn't starve later roles, but never exceed the global remaining.
+    role_budget = min(PER_ROLE_BUDGET_TOKENS, remaining)
 
     runner = runner_cls()
     schema_pass = True
@@ -249,7 +263,7 @@ def dispatch_sub_agent(
         result: SubAgentResult = runner.run(
             question=question,
             asset_context=asset_context or {},
-            budget_token_cap=remaining,
+            budget_token_cap=role_budget,
         )
         output = result.output
         tokens = result.tokens_input + result.tokens_output

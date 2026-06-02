@@ -83,6 +83,11 @@ class LiteratureRunner(SubAgentRunner):
     skill_path = SKILL_PATH
     schema_filename = "literature_review_v1.json"
     tool_defs = _TOOL_DEFS
+    # PubMed/bioRxiv role tools + injected internal_rag_* (corpus="literature")
+    # over the local already-linked corpus. The skill frontmatter + "Tools
+    # actually available" table list all of these by their real names (reconciled
+    # 2026-06-02 — the prior "no internal-rag" body claim was wrong; tests in
+    # test_sub_agent_rag_tools.py require literature to expose internal_rag).
     internal_rag_default_corpus = "literature"
 
     def build_handler(self) -> ToolHandler:

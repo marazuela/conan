@@ -297,7 +297,7 @@ def seed_fda_asset_aliases_refresh(
     image=image,
     timeout=3600,
     secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
-    env={"ORCH_SUB_AGENT_BUDGET_TOKENS": "350000"},
+    env={"ORCH_SUB_AGENT_BUDGET_TOKENS": "800000"},
 )
 def orchestrator_run_one(
     asset_id: str,
@@ -390,7 +390,9 @@ def orchestrator_run_one(
     # See memory sub_agent_schema_drift_2026-05-23.md (2026-06-02 row).
     env={
         "ORCH_ENABLE_SUB_AGENTS": "1",
-        "ORCH_SUB_AGENT_BUDGET_TOKENS": "350000",
+        # 800k aggregate (raised from 350k) + 200k/role cap (sub_agent_dispatcher)
+        # so dispatch order no longer starves later roles. $15/run hard-kill unchanged.
+        "ORCH_SUB_AGENT_BUDGET_TOKENS": "800000",
         "ORCH_DISABLE_LITERATURE": "1",
         "ORCH_DISABLE_COMMERCIAL_OPPORTUNITY": "1",
     },

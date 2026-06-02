@@ -149,6 +149,37 @@ def test_budget_exhaustion_blocks_subsequent_calls():
         assert any("budget_exhausted" in e for e in out2.errors)
 
 
+def test_per_role_budget_caps_each_role(monkeypatch):
+    """Each role is capped at PER_ROLE_BUDGET_TOKENS even when the global
+    aggregate has plenty left — so dispatch ORDER can't starve later roles
+    (the {"partial_output": true} failure mode, 2026-06-02)."""
+    monkeypatch.setattr(disp, "PER_ROLE_BUDGET_TOKENS", 200_000)
+    monkeypatch.setattr(disp, "DEFAULT_BUDGET_TOKENS", 800_000)
+    disp.reset_budget()
+    seen: Dict[str, Any] = {}
+
+    class _RecordingRunner:
+        role = "competitive"
+
+        def __init__(self):
+            pass
+
+        def run(self, *, question, asset_context, budget_token_cap=None):
+            seen["budget"] = budget_token_cap
+            return SubAgentResult(
+                role=self.role, schema_pass=True, schema_retries=0,
+                output={"schema_version": 1}, tokens_input=100, tokens_output=100,
+                cost_usd=0.001, latency_ms=10, tool_call_log=[],
+            )
+
+    with patch.dict(ROLE_REGISTRY, {"competitive": _RecordingRunner}, clear=False), \
+         patch.object(disp, "_log_call", return_value="c"):
+        # No budget_token_cap passed → cap = DEFAULT_BUDGET_TOKENS (800k global).
+        disp.dispatch_sub_agent("competitive", "q")
+    # Runner received the 200k per-role cap, NOT the 800k global remaining.
+    assert seen["budget"] == 200_000
+
+
 def test_dispatch_tool_handler_returns_serializable_dict():
     disp.reset_budget()
     fake = _FakeRunner.for_role("competitive", {"schema_version": 1, "asset_id": "x", "competitors": []})
