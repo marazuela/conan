@@ -331,21 +331,33 @@ class SubAgentRunner:
             # crash with `prompt is too long`.
             tools_for_call = effective_tools or None
             tools_dropped = False
-            if total_in >= SOFT_INPUT_TOKEN_CAP:
+            # Force synthesis when EITHER the input-token cap is crossed OR we're
+            # on the last allowed turn — drop tools so the model MUST emit final
+            # JSON instead of calling yet another tool and exhausting max_turns
+            # with nothing written (the commercial_opportunity {}/max_turns mode;
+            # see sub_agent_schema_drift_2026-05-23.md Round-6).
+            last_turn = turn >= self.max_turns - 1
+            if total_in >= SOFT_INPUT_TOKEN_CAP or last_turn:
                 tools_for_call = None
                 tools_dropped = True
                 if turn > 0:
                     # Nudge the model: replace last tool_result chain with a
                     # synthesis instruction. Cheaper than appending a user turn
                     # because we still send a single user message.
+                    reason = (
+                        "Tool budget exhausted"
+                        if total_in >= SOFT_INPUT_TOKEN_CAP
+                        else "Final turn"
+                    )
                     messages.append({
                         "role": "user",
                         "content": [{
                             "type": "text",
                             "text": (
-                                "[context-cap] Tool budget exhausted. Return ONLY the final "
-                                f"JSON object matching {self.schema_filename}. Do not call any "
-                                "more tools."
+                                f"[synthesize] {reason}. Return ONLY the final "
+                                f"JSON object matching {self.schema_filename}. Do not call "
+                                "any more tools; fill unknown fields per the schema's "
+                                "honest-uncertainty rules rather than omitting them."
                             ),
                         }],
                     })
