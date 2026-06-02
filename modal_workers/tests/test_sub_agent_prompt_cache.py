@@ -5,6 +5,10 @@ sub-agent tool-use loop (up to 12 turns by default). Marking the last system
 block and last tool with cache_control lets Anthropic serve cached prefix at
 ~10% of input-token cost. These tests lock in:
   - System is built as a list with cache_control on the (final) block.
+  - The schema-contract block is appended after the skill iff the schema
+    resolves, and only then; both branches are covered deterministically by
+    monkeypatching the loader (so the suite is green with or without the
+    conan-cowork-skills schema sibling checked out).
   - The last tool definition is mutated with cache_control via a copy, not
     in-place (so dispatcher-shared tool_defs lists are not corrupted).
   - The opt-out env flag turns both off cleanly.
@@ -30,18 +34,55 @@ class _Runner(SubAgentRunner):
         self._client = None
 
 
-def test_build_cached_system_wraps_skill_in_ephemeral_block():
+def _raise_schema_missing(_schema_filename):
+    # Simulates the conan-cowork-skills schema sibling being absent (e.g. a
+    # conan-only CI clone). _build_cached_system swallows this and emits the
+    # skill text only, with no schema-contract block appended.
+    raise FileNotFoundError("forced schema miss (test)")
+
+
+def test_build_cached_system_wraps_skill_in_ephemeral_block(monkeypatch):
+    # Isolate the cache-wrapping behavior from schema embedding: force the
+    # schema lookup to miss so the system block is exactly the skill text.
+    # This keeps the strict `==` deterministic regardless of whether the
+    # conan-cowork-skills schema sibling is checked out (it is absent in a
+    # conan-only CI clone). Schema embedding is covered by the next test.
+    monkeypatch.setattr(
+        "modal_workers.sub_agents.runtime._load_schema", _raise_schema_missing
+    )
     runner = _Runner()
     skill = "static skill markdown"
     system = runner._build_cached_system(skill)
     assert isinstance(system, list)
     assert len(system) == 1
     assert system[0]["type"] == "text"
-    # _build_cached_system appends the literal JSON-schema contract after the
-    # skill (added 2026-05-23, commit 532813c) so the model sees the exact
-    # output contract. Skill stays the prefix; the schema block follows.
-    assert system[0]["text"].startswith(skill)
-    assert "Runtime JSON Schema Contract" in system[0]["text"]
+    assert system[0]["text"] == skill
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_build_cached_system_embeds_schema_contract(monkeypatch):
+    # When schema_filename resolves, _build_cached_system appends the literal
+    # Draft-7 contract after the skill (commit 532813c, 2026-05-23) so the model
+    # sees the exact output contract. Monkeypatch the loader so this branch is
+    # exercised deterministically, with or without the schema sibling present.
+    sentinel = {
+        "type": "object",
+        "title": "SENTINEL_SCHEMA",
+        "additionalProperties": False,
+    }
+    monkeypatch.setattr(
+        "modal_workers.sub_agents.runtime._load_schema", lambda _fn: sentinel
+    )
+    runner = _Runner()
+    skill = "static skill markdown"
+    system = runner._build_cached_system(skill)
+    assert len(system) == 1
+    text = system[0]["text"]
+    # Skill stays the prefix; the contract block follows it.
+    assert text.startswith(skill + "\n\n## Runtime JSON Schema Contract")
+    assert "```jsonschema" in text
+    # The actual schema JSON (not just a header) is embedded.
+    assert '"title": "SENTINEL_SCHEMA"' in text
     assert system[0]["cache_control"] == {"type": "ephemeral"}
 
 
