@@ -15,11 +15,11 @@ A skill belongs here iff its frontmatter has:
 - `trigger:` describing a recurring schedule
 - usually a `quota:` field (per-UTC-day soft cap)
 
-Current residents exclude the retired Tier-2 `bulk_orchestrator_run`. Cron-backed skills should now be limited to operational follow-up work such as thesis writing, aging, coverage audit, and feedback retrospectives.
+The retired Tier-2 `bulk_orchestrator_run` skill + wrapper were deleted by `conan-cowork-skills@181b9c6` (Phase 6b teardown, 2026-05-28) — do not re-add. Cron-backed skills are now limited to operational follow-up work: thesis writing, signal resolving, candidate aging, coverage audit, FDA aging review, the four FDA agent-replay skills, `skill_watchdog`, and `feedback_retrospective` (Phase 7).
 
 ### `conan-fda-orchestrator-plugin/skills/` — Claude Code plugin
 
-Inside the `marazuela/conan` repo. Bundled with `.claude-plugin/plugin.json`, MCP servers under `mcp_servers/`, and `hooks/`. The live v4 orchestrator no longer loads plugin skills as production sub-agent stages; these files are retained for diagnostics, IC memo polish, and eval-only sidecar experiments.
+Inside the `marazuela/conan` repo. Bundled with `.claude-plugin/plugin.json`, MCP servers under `mcp_servers/`, and `hooks/`. The live v4 orchestrator (Phase 6c onward) no longer loads plugin skills as production sub-agent stages; these files are retained for diagnostics, IC memo polish, and eval-only sidecar experiments (`.claude/skills/assess-fda-binary-catalyst/`).
 
 A skill belongs here iff its frontmatter has:
 
@@ -28,7 +28,7 @@ A skill belongs here iff its frontmatter has:
 - `allowed-tools:` (MCP-server tool list)
 - no `host:` field
 
-Current residents: `ic_memo_polish`, `sub_agent_competitive_landscape`, `sub_agent_literature_reviewer`, `sub_agent_options_microstructure`, `sub_agent_regulatory_history`. The old `bulk_orchestrator` Tier-2 skill is retired and should not be scheduled.
+Current residents: `ic_memo_polish`, `sub_agent_competitive_landscape`, `sub_agent_literature_reviewer`, `sub_agent_options_microstructure`, `sub_agent_regulatory_history`. The old `bulk_orchestrator` Tier-2 skill was deleted in Phase 6b (2026-05-28) and must not be re-added.
 
 ## `.claude/skills` is a symlink
 

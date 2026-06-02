@@ -1,6 +1,10 @@
 # Conan Data Flow & AI Jobs — System Diagram
 
-**As of 2026-05-13.** Dual-pipeline state: v2 (legacy, phasing down) + v3 (FDA-focused, in-flight).
+**As of 2026-05-28.** v4 single-pass orchestrator is the only live runtime
+(Phase 6c landed 2026-05-27 via PR #152). The retired v3 stage modules
+(`hypothesis.py`, `premortem.py`, `constitutional.py`, `ensemble.py`) and
+the Tier-2 Cowork `bulk_orchestrator` are deleted. v2 reactor + fanout
+paths remain in service for promoted FDA assessments.
 
 ---
 
@@ -20,8 +24,8 @@ flowchart TB
         FX["🤖 fact_extractor<br/>Sonnet 4.5 · :20 hourly"]
     end
 
-    subgraph L3["③ ASSESSMENT — v3 ORCHESTRATOR (10 stages, N=7 ensemble)"]
-        ORCH["Stage 0-10 pipeline<br/>(detail below)"]
+    subgraph L3["③ ASSESSMENT — v4 ORCHESTRATOR (single-pass, AI-first)"]
+        ORCH["Stage 0/4/RAG/1/9/7/calibration/10<br/>(detail below)"]
     end
 
     subgraph L4["④ REACTOR & CONVERGENCE (v2 + v3 routing)"]
@@ -218,11 +222,10 @@ flowchart LR
         PC8["dispatch_release_times (v2)"]
     end
 
-    subgraph COWORK["Cowork skills (JGoror Windows)"]
+    subgraph COWORK["Cowork skills (Pedro's Mac, single-host)"]
         CW1["thesis_writer<br/>on thesis_jobs.INSERT"]
         CW2["signal_resolver<br/>daily"]
         CW3["candidate_aging<br/>weekly"]
-        CW4["bulk_orchestrator<br/>per watch_priority"]
     end
 
     subgraph MODAL["Modal endpoints (HTTP)"]
@@ -269,10 +272,10 @@ flowchart LR
 | Dimension | v2 | v3 |
 |-----------|----|----|
 | Scope | 19 scanners, 6 profiles | FDA-only + EDGAR pairing |
-| Pipeline | Flat reactor + convergence bonus | 10-stage orchestrator + N=7 ensemble + isotonic calibration |
+| Pipeline | Flat reactor + convergence bonus | v4 single-pass orchestrator (Stage 0/4/RAG/1/9/7/calibration/10) + isotonic calibration. v3-era ensemble + Stage 2/3/6/semantic-7 modules deleted in Phase 6c. |
 | Conviction | Categorical bands (Immediate/Watchlist/Archive) | Probabilistic `conviction_pct` ∈ [0,100], calibrated nightly |
 | Sub-agents | None | Literature, Competitive, Regulatory, Options Microstructure, IC Memo |
-| Cost control | Unbudgeted | $15 Tier-1 / $1.50 Tier-2 hard kill |
+| Cost control | Unbudgeted | $15 Tier-1 hard kill. Tier-2 retired in Phase 6b. |
 | Dispatch | Modal @modal.Cron (5-slot limit) | pg_cron → compute_v3 multiplex (unlimited) |
 | Sources | All scanners | documents → asset_documents → orchestrator |
 | Output | signals → alerts/thesis_jobs | convergence_assessments → ic_memo → operator-promoted signals |
