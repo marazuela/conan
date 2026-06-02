@@ -3,16 +3,18 @@ name: sub-agent-competitive-landscape
 description: Survey other programs in the same indication. Map competitive position (phase distribution, recent readouts, market share dynamics). Identify differentiators and overlap risks. Returns competitive_landscape_v1.json that the orchestrator's Stage 1 evidence ledger consumes. v0 starting point partially derived from Investment_engine_v2 Tier-1 skill P2 (research-clinical-class-precedent) class-membership inference + in-class-approvals enumeration.
 model: claude-sonnet-4-6
 effort: xhigh
+# Tool names below MUST match CompetitiveRunner.effective_tool_defs() exactly —
+# the runner passes these to the API; mismatched names confuse the model. The
+# runner wires ClinicalTrials.gov + PubMed + internal_rag (corpus "all"); no
+# openFDA or polygon/market-cap tool is exposed (sponsor sizing is inferred from
+# internal filings or left null).
 allowed-tools:
-  - mcp__clinicaltrials-mcp__search_studies
-  - mcp__clinicaltrials-mcp__get_study_full
-  - mcp__clinicaltrials-mcp__get_cohort_history
-  - mcp__openfda-mcp__search_approvals
-  - mcp__openfda-mcp__search_drugs
-  - mcp__internal-rag-mcp__hybrid_search_internal
-  - mcp__internal-rag-mcp__rerank
-  - mcp__polygon-mcp__get_quote
-  - mcp__polygon-mcp__get_market_cap
+  - clinicaltrials_search
+  - clinicaltrials_by_nct
+  - pubmed_search
+  - pubmed_fetch_abstracts
+  - internal_rag_hybrid_search
+  - internal_rag_get_chunk
 context: fork
 hooks:
   PreToolUse: [budget_check]
@@ -172,9 +174,9 @@ Worked example (illustrative shape; substitute your real findings):
 
 1. **Memory load.** Read `/memories/sub_agents/competitive/<indication>.md`. Indication memory is refreshed quarterly; treat as snapshot — verify any phase or status assertion against live tool calls before relying on it.
 2. **Class membership confirmation.** If passed in by orchestrator, accept. Otherwise: split MoA + query ClinicalTrials.gov by `intervention=<MoA>` + `condition=<indication>` to enumerate class members. Record `class_membership_source`.
-3. **Pipeline enumeration.** `clinicaltrials-mcp.search_studies` filtered to `phase >= 2` + `status=active|recruiting|completed` over the last 5 years for the indication. Cross-reference with `openfda-mcp.search_drugs` for filed/approved status. Per competitor: pull `get_study_full` for the most recent pivotal trial → primary endpoint, n, expected primary completion date.
-4. **Sponsor sizing.** `polygon-mcp.get_market_cap` per public sponsor (skip private). Memorize that "competitor that's a $50M micro-cap" carries different competitive weight from "competitor that's a $200B pharma" — Stage 5 cares.
-5. **Internal-doc cross-reference.** `internal-rag-mcp.hybrid_search_internal` for sponsor pipeline disclosures in 10-K/10-Q (the pipeline tables in MD&A). Captures programs that don't have ClinicalTrials.gov entries yet.
+3. **Pipeline enumeration.** `clinicaltrials_search` filtered to `phase >= 2` + `status=active|recruiting|completed` over the last 5 years for the indication. Cross-reference `internal_rag_hybrid_search` (corpus "all" — covers FDA filings/labels) for filed/approved status; no openFDA tool is wired for this role. Per competitor: pull `clinicaltrials_by_nct` for the most recent pivotal trial → primary endpoint, n, expected primary completion date.
+4. **Sponsor sizing.** No market-cap tool is wired for this role. Infer sponsor scale from `internal_rag_hybrid_search` over the filings corpus (10-K cover-page shares outstanding / public float) for public sponsors; leave `ticker` / `sponsor_market_cap_usd` null when it can't be sourced. Memorize that "competitor that's a $50M micro-cap" carries different competitive weight from "competitor that's a $200B pharma" — Stage 5 cares.
+5. **Internal-doc cross-reference.** `internal_rag_hybrid_search` for sponsor pipeline disclosures in 10-K/10-Q (the pipeline tables in MD&A). Captures programs that don't have ClinicalTrials.gov entries yet. Use `pubmed_search` + `pubmed_fetch_abstracts` for competitor mechanism-of-action papers, and `internal_rag_get_chunk` to expand any hit worth citing.
 6. **Differentiator + threat level.** Per competitor, classify `differentiator` (first-in-class / best-in-class / me-too / safety / convenience). `threat_level` = high if (phase ≥ 3 AND endpoint primary-same AND sponsor market_cap > 5× this asset's sponsor) OR (approved within 36mo AND market-share top-3); medium if phase 3 with differentiated endpoint; low otherwise.
 7. **White-space.** True first-in-class for indication = no approved/phase-3 competitor with same primary endpoint. Subpopulation white-space = differentiated by patient subset (e.g., second-line vs first-line). `differentiation_durability_months` = months until the closest threat is expected to file (median across phase-3 next_milestone_date).
 8. **Schema validation.** Pydantic. Retry 3×.
