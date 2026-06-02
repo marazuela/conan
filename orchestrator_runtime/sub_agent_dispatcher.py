@@ -39,7 +39,18 @@ from modal_workers.sub_agents import ROLE_REGISTRY, SubAgentResult, SubAgentSche
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "200000"))
+# Global aggregate ceiling across ALL sub-agent calls in one assessment. Raised
+# 200k -> 800k (2026-06-02): under the old shared-pool FIFO, heavy early roles
+# (competitive ~122k) starved later roles (literature/commercial), which then
+# tripped their budget mid-loop and emitted {"partial_output": true} instead of a
+# real payload. The per-run $ hard-kill (cost_budget.PER_RUN_HARD_KILL_USD=$15)
+# remains the real runaway backstop; this is just a token guardrail.
+DEFAULT_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_BUDGET_TOKENS", "800000"))
+# Per-role cap so dispatch ORDER never starves a role: each role gets its own
+# budget (default 200k, comfortably above the runner's 150k SOFT_INPUT_TOKEN_CAP so
+# the forced-synthesis turn after tools are dropped isn't itself budget-killed),
+# bounded by whatever the global aggregate still has left.
+PER_ROLE_BUDGET_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_PER_ROLE_TOKEN_CAP", "200000"))
 
 
 def _is_role_disabled(role: str) -> bool:
@@ -144,6 +155,7 @@ def _log_to_dlq(role: str, errors: List[str], payload: Dict[str, Any]) -> None:
 def _log_call(
     *,
     assessment_id: Optional[str],
+    orchestrator_run_id: Optional[str],
     role: str,
     question: str,
     output: Dict[str, Any],
@@ -152,12 +164,16 @@ def _log_call(
     tokens: int,
     cost_usd: float,
     latency_ms: int,
+    final_text: str = "",
+    stop_reason: Optional[str] = None,
+    errors: Optional[List[str]] = None,
 ) -> Optional[str]:
     try:
         rows = _client()._rest(
             "POST", "sub_agent_calls",
             json_body={
                 "assessment_id": assessment_id,
+                "orchestrator_run_id": orchestrator_run_id,
                 "role": role,
                 "query": question[:8000],
                 "output": output,
@@ -166,6 +182,9 @@ def _log_call(
                 "tokens": tokens,
                 "cost_usd": round(cost_usd, 4),
                 "latency_ms": latency_ms,
+                "final_text": (final_text or "")[:16000] or None,
+                "stop_reason": stop_reason,
+                "errors": errors or None,
             },
             prefer="return=representation",
         ) or []
@@ -188,6 +207,7 @@ def dispatch_sub_agent(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
     priority: str = "normal",
     budget_token_cap: Optional[int] = None,
 ) -> DispatchOutcome:
@@ -233,6 +253,9 @@ def dispatch_sub_agent(
             cost_usd=0.0,
             latency_ms=0,
         )
+    # Per-role allocation: cap each role at PER_ROLE_BUDGET_TOKENS so dispatch
+    # order doesn't starve later roles, but never exceed the global remaining.
+    role_budget = min(PER_ROLE_BUDGET_TOKENS, remaining)
 
     runner = runner_cls()
     schema_pass = True
@@ -241,17 +264,21 @@ def dispatch_sub_agent(
     tokens = 0
     cost = 0.0
     latency = 0
+    final_text = ""
+    stop_reason: Optional[str] = None
 
     try:
         result: SubAgentResult = runner.run(
             question=question,
             asset_context=asset_context or {},
-            budget_token_cap=remaining,
+            budget_token_cap=role_budget,
         )
         output = result.output
         tokens = result.tokens_input + result.tokens_output
         cost = result.cost_usd
         latency = result.latency_ms
+        final_text = getattr(result, "final_text", "") or ""
+        stop_reason = getattr(result, "stop_reason", None)
     except SubAgentSchemaError as exc:
         schema_pass = False
         errors = exc.errors
@@ -261,6 +288,8 @@ def dispatch_sub_agent(
         tokens = (exc.tokens_input or 0) + (exc.tokens_output or 0)
         cost = exc.cost_usd or 0.0
         latency = exc.latency_ms or 0
+        final_text = getattr(exc, "final_text", "") or ""
+        stop_reason = getattr(exc, "stop_reason", None)
         _log_to_dlq(role, errors, output)
     except Exception as exc:  # noqa: BLE001
         schema_pass = False
@@ -270,6 +299,7 @@ def dispatch_sub_agent(
     _running_total_tokens += tokens
     call_id = _log_call(
         assessment_id=assessment_id,
+        orchestrator_run_id=orchestrator_run_id,
         role=role,
         question=question,
         output=output,
@@ -278,6 +308,9 @@ def dispatch_sub_agent(
         tokens=tokens,
         cost_usd=cost,
         latency_ms=latency,
+        final_text=final_text,
+        stop_reason=stop_reason,
+        errors=errors,
     )
 
     return DispatchOutcome(
@@ -297,6 +330,7 @@ def dispatch_sub_agent_tool(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stage 1 tool-handler. Called when Claude emits a `dispatch_sub_agent` tool_use block."""
     role = tool_input.get("role", "")
@@ -307,6 +341,7 @@ def dispatch_sub_agent_tool(
         question,
         asset_context=asset_context,
         assessment_id=assessment_id,
+        orchestrator_run_id=orchestrator_run_id,
         priority=priority,
     )
     # Trim large outputs returned to the model — schema-validated payload + status
@@ -329,6 +364,7 @@ async def dispatch_parallel(
     *,
     asset_context: Optional[Dict[str, Any]] = None,
     assessment_id: Optional[str] = None,
+    orchestrator_run_id: Optional[str] = None,
 ) -> List[DispatchOutcome]:
     """Fire multiple dispatch_sub_agent calls in parallel via asyncio.
 
@@ -345,9 +381,54 @@ async def dispatch_parallel(
                 r["role"], r["question"],
                 asset_context=asset_context,
                 assessment_id=assessment_id,
+                orchestrator_run_id=orchestrator_run_id,
                 priority=r.get("priority", "normal"),
             ),
         )
         for req in requests
     ]
     return await asyncio.gather(*tasks)
+
+
+def backfill_assessment_id(
+    *,
+    orchestrator_run_id: str,
+    assessment_id: str,
+) -> int:
+    """Back-fill sub_agent_calls.assessment_id for all rows from this run.
+
+    Called by runtime after stage_10_persist returns the parent assessment_id.
+    Sub-agent calls fire in Stage 1 before the parent assessment exists, so
+    assessment_id is NULL at INSERT time. orchestrator_run_id (set at INSERT)
+    is the join key.
+
+    Returns the count of rows updated. Best-effort: logs and returns 0 on error.
+    No-op if either id is empty — guards against a malformed orchestrator_run_id
+    being interpreted as "match every row" by PostgREST.
+    """
+    if not orchestrator_run_id or not assessment_id:
+        return 0
+    try:
+        rows = _client()._rest(
+            "PATCH", "sub_agent_calls",
+            params={
+                "orchestrator_run_id": f"eq.{orchestrator_run_id}",
+                "assessment_id": "is.null",
+            },
+            json_body={"assessment_id": assessment_id},
+            prefer="return=representation",
+        ) or []
+        n = len(rows) if isinstance(rows, list) else 0
+        if n:
+            logger.info(
+                "sub_agent_dispatcher: back-filled assessment_id=%s on %d sub_agent_calls "
+                "rows for orchestrator_run_id=%s",
+                assessment_id, n, orchestrator_run_id,
+            )
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "sub_agent_dispatcher: assessment_id back-fill failed (run=%s, assessment=%s): %s",
+            orchestrator_run_id, assessment_id, exc,
+        )
+        return 0

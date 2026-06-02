@@ -1,6 +1,6 @@
 # PRD — Unified Investment Research System v3 (FDA Depth)
 
-**Status:** Phase 6 closed 2026-05-28 (code-level — see DECISIONS.md D-133). Gate 6 (50-asset operator review + final PRD stamp) blocked on Anthropic credit top-up — see `tasks/v4_phase6_close_blockers.md`.
+**Status:** Phase 6 closed 2026-05-28 (code-level — see DECISIONS.md D-134). Gate 6 (50-asset operator review + final PRD stamp) blocked on Anthropic credit top-up — see `tasks/v4_phase6_close_blockers.md`.
 **Date:** 2026-05-07 (initial draft) · last amended 2026-05-28 for v4 Phase 6 close-out
 **Author:** Pedro (with Claude Code as architectural collaborator)
 **Predecessor:** [PRD_unified_investment_research_v2.md](PRD_unified_investment_research_v2.md) (frozen at the v3 cutover; do not amend)

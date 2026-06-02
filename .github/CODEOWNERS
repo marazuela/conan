@@ -1,0 +1,55 @@
+# CODEOWNERS for marazuela/conan
+#
+# Lines in this file follow GitHub's CODEOWNERS syntax. The owner listed for a
+# matching path is REQUIRED to review any PR that touches those files (when
+# branch protection's "Require review from Code Owners" rule is enabled).
+#
+# Even with @marazuela as the sole owner (a one-person team for now), this file
+# matters: it forces a second-pass diff read at PR-merge time instead of
+# allowing direct self-merge. Combined with non-empty-body + 1-approval branch
+# protection, it would have caught the 2026-05-27 buried-flag-flip incident
+# (PR #157 hardcoded ORCH_ENABLE_SUB_AGENTS=1 in a PR titled "Diag/stage7
+# finding dump v2", merged with empty body and zero reviewers).
+#
+# Reference: operator_flag 4fc126c0 / PR #157 process audit.
+
+# ----------------------------------------------------------------------------
+# Hot files: feature flags, deploy entry points, orchestrator runtime
+# ----------------------------------------------------------------------------
+
+# Modal deploy entry — env={} blocks here flip Phase 2C / sub-agent / budget
+# defaults for every cron-triggered tier-1 drain. Single most blast-radius file.
+modal_workers/orchestrator_app.py                       @marazuela
+
+# Stage 1 / Stage 10 / persist / sub-agent dispatch loop. Edits here change how
+# every Tier-1 assessment is constructed.
+orchestrator_runtime/runtime.py                         @marazuela
+orchestrator_runtime/sub_agent_dispatcher.py            @marazuela
+orchestrator_runtime/tier2.py                           @marazuela
+
+# Sub-agent runners (5 roles). Schema-validated output. Drift here breaks
+# downstream IC-memo synthesis.
+modal_workers/sub_agents/                               @marazuela
+conan-fda-orchestrator-plugin/skills/sub_agent_*.md     @marazuela
+
+# Cowork-skills repo holds the canonical JSON schemas — referenced via symlink.
+# Edits here change what every sub-agent must produce.
+.claude/skills/                                         @marazuela
+
+# ----------------------------------------------------------------------------
+# Database: migrations, RLS, RPCs
+# ----------------------------------------------------------------------------
+
+# Migrations: drift cleanup (see docs/MIGRATIONS.md + audit/migration_drift_*).
+# Convention violations (YYYYMMDD000000 block versions, duplicate timestamps)
+# need a second pair of eyes.
+supabase/migrations/                                    @marazuela
+supabase/functions/                                     @marazuela
+
+# ----------------------------------------------------------------------------
+# CI / repo config
+# ----------------------------------------------------------------------------
+
+# This file itself, branch protection scripts, the migration pre-commit hook.
+.github/                                                @marazuela
+.githooks/                                              @marazuela

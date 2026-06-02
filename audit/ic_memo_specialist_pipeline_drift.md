@@ -1,11 +1,13 @@
 # IC Memo / Specialist Pipeline — Schema Drift & Plan
 
 **Date filed:** 2026-05-13
-**Status:** Read-side bridged (commit `8887773`); write-side still drifts
+**Status:** RESOLVED — read-side bridge (`8887773`) AND write-side switch (`84efa65`, PR #60) both shipped 2026-05-13. Verified 2026-06-01: `persist_ic_memo_result()` writes to `fda_agent_reviews` (event-scoped) with `_resolve_event_id_for_assessment` helper; 8 test assertions in `test_ic_memo_orchestration.py` cover the path. **Document retained for historical context — do not act on the "Path A residual" section, it is no longer accurate.**
 **Severity:** P2 (no live workflow currently depends on the write-side gap; will bite when IC memos start being synthesized)
 **Owner:** unassigned
 **Related memory:** [fda_agent_reviews_operator_fed](../memory/fda_agent_reviews_operator_fed.md), [v3_pipeline_scheduling_state](../memory/v3_pipeline_scheduling_state.md)
-**Related commit:** [`8887773`](https://github.com/marazuela/conan/commit/8887773) — read-side bridge (2026-05-13)
+**Related commits:** [`8887773`](https://github.com/marazuela/conan/commit/8887773) — read-side bridge (PR #58, 2026-05-13); [`84efa65`](https://github.com/marazuela/conan/commit/84efa65) — write-side switch (PR #60, 2026-05-13).
+
+**Why IC memos still don't exist as of 2026-06-01** — has nothing to do with this drift. Root causes are upstream: (1) Anthropic credit balance exhausted since 2026-05-27 (open critical flag `0372c276`), (2) `ORCH_ENABLE_SUB_AGENTS=0` after the 2026-05-27 burn revert (commit `26480ca`, see operator_flag `4fc126c0`), (3) three open Strategy A follow-up gaps — literature schema_pass=0/3, missing commercial_opportunity_v1.json, assessment_id=NULL on sub_agent_calls. See memory `feedback_resurface_open_flags`.
 
 ---
 

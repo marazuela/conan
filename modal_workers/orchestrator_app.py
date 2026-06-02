@@ -297,7 +297,7 @@ def seed_fda_asset_aliases_refresh(
     image=image,
     timeout=3600,
     secrets=[anthropic_secrets, supabase_secrets, rag_secrets],
-    env={"ORCH_SUB_AGENT_BUDGET_TOKENS": "350000"},
+    env={"ORCH_SUB_AGENT_BUDGET_TOKENS": "800000"},
 )
 def orchestrator_run_one(
     asset_id: str,
@@ -366,15 +366,35 @@ def orchestrator_run_one(
     # conan-v2 already uses all 5. Manual one-shot invocation still works:
     #   modal run modal_workers/orchestrator_app.py::orchestrator_drain_queue
     #
-    # Phase 2C flip (2026-05-27): ORCH_ENABLE_SUB_AGENTS=1 makes the 5-role
-    # sub-agent pipeline (literature, competitive, regulatory_history,
-    # options_microstructure, commercial_opportunity) the default for all
-    # cron-triggered tier-1 drains. Gate evidence: VRDN dry-run #3 produced
-    # zero sub_agent.* DLQ rows = 5/5 schema_pass=true. Budget cap raised
-    # to 350k tokens (sub_agent_schema_drift_2026-05-23.md S-3).
+    # Phase 2C flip — RE-ENABLED 2026-06-01 after the 3-gap fix cycle.
+    # Timeline (memory sub_agent_schema_drift_2026-05-23.md has the full saga):
+    #   2026-05-27 09:46 UTC: first enabled via PR #157 (buried in "Diag/stage7"
+    #     dump). 18 dispatches, $8.98 burned, all assessment_id=NULL → $0 output.
+    #   2026-05-28 09:42 UTC: PR #173 reverted the flip.
+    #   2026-06-01 13:01 UTC: PR #174 fixed the 3 root causes (literature skill
+    #     drift, orchestrator_run_id join + back-fill, persist defensive defaults).
+    #     PR #177 added commercial_opportunity to the role CHECK constraint.
+    #   2026-06-01 13:11 UTC: VRDN dry-run with --enable-sub-agents:
+    #     competitive/regulatory_history/options_microstructure/commercial_opportunity
+    #     all schema_pass=true; literature not dispatched for this asset (TED
+    #     indication) — fix is doc-only, low regression risk.
+    # Budget cap (350k tokens aggregate per assessment) stays — per-run hard halt
+    # fires before any single assessment can burn what 2026-05-27 burned all day.
+    # Monitor failed_reactor_events for sub_agent.* sources for 24h post-flip.
+    # 2026-06-02 cost audit: literature (0/5 schema_pass) + commercial_opportunity
+    # (0/6) STILL emit empty {} post-#178/#179 — ~$5.54/day burned for zero usable
+    # output (same empty-{} failure class). The per-role kill switch
+    # (sub_agent_dispatcher._is_role_disabled) short-circuits BEFORE the runner's
+    # API loop, so a disabled role costs $0. competitive (4/6) + regulatory_history
+    # (6/6) stay ON. Re-enable each only after a dry-run shows schema_pass=true.
+    # See memory sub_agent_schema_drift_2026-05-23.md (2026-06-02 row).
     env={
         "ORCH_ENABLE_SUB_AGENTS": "1",
-        "ORCH_SUB_AGENT_BUDGET_TOKENS": "350000",
+        # 800k aggregate (raised from 350k) + 200k/role cap (sub_agent_dispatcher)
+        # so dispatch order no longer starves later roles. $15/run hard-kill unchanged.
+        "ORCH_SUB_AGENT_BUDGET_TOKENS": "800000",
+        "ORCH_DISABLE_LITERATURE": "1",
+        "ORCH_DISABLE_COMMERCIAL_OPPORTUNITY": "1",
     },
 )
 def orchestrator_drain_queue(max_per_run: int = 5) -> Dict[str, Any]:
@@ -1063,7 +1083,8 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
         kwargs: Dict[str, Any] = {}
         for k in ("drain_batch_size", "monitor_window_days",
-                  "refit_min_n", "refit_bootstrap_resamples"):
+                  "refit_min_n", "refit_bootstrap_resamples",
+                  "category_cohort_days"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)

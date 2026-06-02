@@ -42,7 +42,7 @@ def test_compute_tool_defs_includes_similar_resolved_cases():
 
 
 def test_chain_handlers_passes_through_unknown_tool_to_next(monkeypatch):
-    from modal_workers.sub_agents._rag_tools import chain_handlers
+    from modal_workers.sub_agents._rag_tools import chain_handlers, ToolNotOwned
 
     def role_h(name: str, inp: Dict[str, Any]):
         if name == "role_only_tool":
@@ -52,7 +52,7 @@ def test_chain_handlers_passes_through_unknown_tool_to_next(monkeypatch):
     def shared_h(name: str, inp: Dict[str, Any]):
         if name == "shared_tool":
             return {"from": "shared"}
-        raise KeyError(name)
+        raise ToolNotOwned(name)
 
     chained = chain_handlers(role_h, shared_h)
     assert chained("role_only_tool", {})["from"] == "role"
@@ -60,17 +60,43 @@ def test_chain_handlers_passes_through_unknown_tool_to_next(monkeypatch):
 
 
 def test_chain_handlers_raises_when_no_handler_owns_tool():
-    from modal_workers.sub_agents._rag_tools import chain_handlers
+    from modal_workers.sub_agents._rag_tools import chain_handlers, ToolNotOwned
 
     def h1(name, inp):
-        raise KeyError(name)
+        raise ToolNotOwned(name)
 
     def h2(name, inp):
-        raise KeyError(name)
+        raise ToolNotOwned(name)
 
     chained = chain_handlers(h1, h2)
     with pytest.raises((KeyError, ValueError)):
         chained("nonexistent", {})
+
+
+def test_chain_handlers_propagates_real_backend_keyerror():
+    """Round-5 regression: a genuine KeyError from a handler's tool BACKEND
+    (e.g. inp['query_term'] on a malformed/missing-arg call) must PROPAGATE — not
+    be masked as 'tool not owned' and swallowed into the next handler, which sent
+    the model into a retry loop until max_turns -> empty payload."""
+    from modal_workers.sub_agents._rag_tools import chain_handlers, ToolNotOwned
+
+    shared_calls = {"n": 0}
+
+    def role_h(name, inp):
+        if name == "clinicaltrials_search":
+            return {"q": inp["query_term"]}  # KeyError if the model omitted the arg
+        raise ValueError(f"unknown tool: {name}")
+
+    def shared_h(name, inp):
+        shared_calls["n"] += 1
+        raise ToolNotOwned(name)
+
+    chained = chain_handlers(role_h, shared_h)
+    with pytest.raises(KeyError) as ei:
+        chained("clinicaltrials_search", {})  # missing required query_term
+    assert "query_term" in str(ei.value)
+    assert not isinstance(ei.value, ToolNotOwned)  # the REAL error, not a routing miss
+    assert shared_calls["n"] == 0  # NOT masked + passed downstream
 
 
 def test_internal_rag_handler_routes_hybrid_search(monkeypatch):

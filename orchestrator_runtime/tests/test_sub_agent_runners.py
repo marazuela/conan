@@ -30,10 +30,12 @@ from modal_workers.sub_agents.runtime import SubAgentSchemaError
 # ---------- registry ----------
 
 
-def test_role_registry_has_five_roles():
+def test_role_registry_has_six_roles():
+    # commercial_opportunity was added as the 5th specialist (Phase 2C, #177);
+    # ic_memo is the synthesis role. Keep this in sync with sub_agents/__init__.py.
     assert set(ROLE_REGISTRY.keys()) == {
         "literature", "competitive", "regulatory_history", "options_microstructure",
-        "ic_memo",
+        "commercial_opportunity", "ic_memo",
     }
 
 
@@ -229,3 +231,76 @@ def test_runner_raises_on_schema_failure():
             runner.run(question="x", asset_context={})
     assert exc_info.value.role == "options_microstructure"
     assert exc_info.value.errors  # non-empty
+
+
+# ---------- literature degraded fallback (budget/turn exhaustion) ----------
+
+
+def test_literature_degraded_payload_is_schema_valid():
+    """The literature degraded shape must validate against literature_review_v1.json
+    (papers=[] is allowed by minItems 0; partial_output flags the truncation)."""
+    from modal_workers.sub_agents.runtime import _load_schema, _validate
+
+    runner = LiteratureRunner()
+    payload = runner.build_degraded_payload(
+        asset_context={"asset_id": "00000000-0000-0000-0000-000000000009"},
+        question="pivotal trial data for drug X?",
+        tool_log=[{"name": "pubmed_search", "input": {"query": "drug X phase 3"}, "turn": 0}],
+        errors=["[]: 'papers' is a required property"],
+    )
+    assert payload["partial_output"] is True
+    assert payload["papers"] == []
+    assert payload["query_used"]  # non-empty (schema minLength 1)
+    assert payload["asset_id"] == "00000000-0000-0000-0000-000000000009"
+    assert _validate(payload, _load_schema("literature_review_v1.json")) == []
+
+
+def test_literature_returns_degraded_instead_of_raising():
+    """Empty/non-JSON model output, retry also empty → run() emits the
+    schema-valid degraded payload rather than raising SubAgentSchemaError."""
+    runner = LiteratureRunner()
+    runner.skill_path = None
+    runner.internal_rag_default_corpus = None  # skip rag tool chaining in-test
+
+    empty_msg = _FakeMessage([_TextBlock("")], stop_reason="end_turn")
+    fake = MagicMock(
+        text="", input_tokens=100, output_tokens=20,
+        thinking_tokens=0, cache_read_tokens=0, cache_creation_tokens=0,
+        cost_usd=0.001, latency_ms=100, model="sonnet", raw_message=empty_msg,
+    )
+    # call 1 = initial turn (empty), call 2 = forced-synthesis retry (still empty)
+    with patch.object(runner._client, "call", side_effect=[fake, fake]):
+        result = runner.run(
+            question="pivotal data?",
+            asset_context={"asset_id": "00000000-0000-0000-0000-000000000009"},
+        )
+
+    assert result.schema_pass is True
+    assert result.output["partial_output"] is True
+    assert result.output["papers"] == []
+    assert result.schema_retries == 1
+
+
+def test_commercial_opportunity_degraded_payload_is_schema_valid():
+    """commercial_opportunity shares literature's empty-{} failure class; its
+    degraded shape must validate against commercial_opportunity_v1.json
+    (regulatory_incentives non-empty, unmet_need 1-5, tam_estimate present)."""
+    from modal_workers.sub_agents.runtime import _load_schema, _validate
+    from modal_workers.sub_agents.commercial_opportunity import CommercialOpportunityRunner
+
+    runner = CommercialOpportunityRunner()
+    payload = runner.build_degraded_payload(
+        asset_context={
+            "asset_id": "00000000-0000-0000-0000-000000000009",
+            "indication": "biliary tract cancer",
+        },
+        question="commercial opportunity for drug X?",
+        tool_log=[],
+        errors=["[]: 'tam_estimate' is a required property"],
+    )
+    assert payload["partial_output"] is True
+    assert payload["regulatory_incentives"] == ["none"]
+    assert payload["standard_of_care"] == []
+    assert 1 <= payload["unmet_need_severity_1_5"] <= 5
+    assert payload["mcap_to_peak_revenue_ratio"] is None  # nullable, present for robustness
+    assert _validate(payload, _load_schema("commercial_opportunity_v1.json")) == []

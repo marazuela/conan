@@ -83,6 +83,11 @@ class LiteratureRunner(SubAgentRunner):
     skill_path = SKILL_PATH
     schema_filename = "literature_review_v1.json"
     tool_defs = _TOOL_DEFS
+    # PubMed/bioRxiv role tools + injected internal_rag_* (corpus="literature")
+    # over the local already-linked corpus. The skill frontmatter + "Tools
+    # actually available" table list all of these by their real names (reconciled
+    # 2026-06-02 — the prior "no internal-rag" body claim was wrong; tests in
+    # test_sub_agent_rag_tools.py require literature to expose internal_rag).
     internal_rag_default_corpus = "literature"
 
     def build_handler(self) -> ToolHandler:
@@ -108,6 +113,50 @@ class LiteratureRunner(SubAgentRunner):
             raise ValueError(f"unknown tool: {name}")
 
         return handle
+
+    def build_degraded_payload(
+        self,
+        *,
+        asset_context: Dict[str, Any],
+        question: str,
+        tool_log: List[Dict[str, Any]],
+        errors: List[str],
+    ) -> Dict[str, Any]:
+        """Schema-valid partial shape for when PubMed retrieval consumes the
+        tool/token budget before the model emits a final review. Returns
+        papers=[] + partial_output=true so the orchestrator gets a usable
+        (if empty) literature signal instead of a hard SubAgentSchemaError.
+        Uses only the top-level keys allowed by literature_review_v1.json."""
+        from datetime import datetime, timezone
+
+        queries = [
+            (t.get("input") or {}).get("query")
+            for t in (tool_log or [])
+            if t.get("name") in ("pubmed_search", "biorxiv_search")
+            and (t.get("input") or {}).get("query")
+        ]
+        query_used = (
+            "; ".join(queries)
+            or (question or "").strip()[:200]
+            or "no queries executed"
+        )
+        asset_id = asset_context.get("asset_id") or asset_context.get("id") or ""
+        return {
+            "schema_version": 1,
+            "asset_id": str(asset_id),
+            "papers": [],
+            "synthesis": {
+                "thesis_alignment": "neutral",
+                "summary": (
+                    "Partial: literature retrieval did not complete within the "
+                    "tool/token budget; no papers were synthesized on this run."
+                ),
+            },
+            "query_used": query_used,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "sourcing_completeness_pct": 0.0,
+            "partial_output": True,
+        }
 
 
 ROLE_REGISTRY["literature"] = LiteratureRunner  # type: ignore[assignment]

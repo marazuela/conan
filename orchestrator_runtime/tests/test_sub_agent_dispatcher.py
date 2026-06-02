@@ -149,6 +149,37 @@ def test_budget_exhaustion_blocks_subsequent_calls():
         assert any("budget_exhausted" in e for e in out2.errors)
 
 
+def test_per_role_budget_caps_each_role(monkeypatch):
+    """Each role is capped at PER_ROLE_BUDGET_TOKENS even when the global
+    aggregate has plenty left — so dispatch ORDER can't starve later roles
+    (the {"partial_output": true} failure mode, 2026-06-02)."""
+    monkeypatch.setattr(disp, "PER_ROLE_BUDGET_TOKENS", 200_000)
+    monkeypatch.setattr(disp, "DEFAULT_BUDGET_TOKENS", 800_000)
+    disp.reset_budget()
+    seen: Dict[str, Any] = {}
+
+    class _RecordingRunner:
+        role = "competitive"
+
+        def __init__(self):
+            pass
+
+        def run(self, *, question, asset_context, budget_token_cap=None):
+            seen["budget"] = budget_token_cap
+            return SubAgentResult(
+                role=self.role, schema_pass=True, schema_retries=0,
+                output={"schema_version": 1}, tokens_input=100, tokens_output=100,
+                cost_usd=0.001, latency_ms=10, tool_call_log=[],
+            )
+
+    with patch.dict(ROLE_REGISTRY, {"competitive": _RecordingRunner}, clear=False), \
+         patch.object(disp, "_log_call", return_value="c"):
+        # No budget_token_cap passed → cap = DEFAULT_BUDGET_TOKENS (800k global).
+        disp.dispatch_sub_agent("competitive", "q")
+    # Runner received the 200k per-role cap, NOT the 800k global remaining.
+    assert seen["budget"] == 200_000
+
+
 def test_dispatch_tool_handler_returns_serializable_dict():
     disp.reset_budget()
     fake = _FakeRunner.for_role("competitive", {"schema_version": 1, "asset_id": "x", "competitors": []})
@@ -166,8 +197,89 @@ def test_dispatch_tool_handler_returns_serializable_dict():
     _json.dumps(result)  # must be JSON-serializable
 
 
-def test_dispatch_tool_def_has_four_roles():
+def test_dispatch_tool_def_has_five_roles():
     enum_roles = disp.DISPATCH_TOOL_DEF["input_schema"]["properties"]["role"]["enum"]
     assert set(enum_roles) == {
         "literature", "competitive", "regulatory_history", "options_microstructure",
+        "commercial_opportunity",
     }
+
+
+# ---------- backfill_assessment_id ----------
+
+
+def test_backfill_assessment_id_updates_rows_by_run_id():
+    captured: Dict[str, Any] = {}
+
+    def _fake_rest(method, table, *, params=None, json_body=None, prefer=None):
+        captured.update(
+            method=method, table=table, params=params or {},
+            json_body=json_body or {}, prefer=prefer,
+        )
+        return [{"id": "row-1"}, {"id": "row-2"}, {"id": "row-3"}]
+
+    with patch.object(disp._client(), "_rest", side_effect=_fake_rest):
+        n = disp.backfill_assessment_id(
+            orchestrator_run_id="run-abc",
+            assessment_id="asmt-xyz",
+        )
+    assert n == 3
+    assert captured["method"] == "PATCH"
+    assert captured["table"] == "sub_agent_calls"
+    assert captured["params"]["orchestrator_run_id"] == "eq.run-abc"
+    assert captured["params"]["assessment_id"] == "is.null"  # don't clobber existing
+    assert captured["json_body"] == {"assessment_id": "asmt-xyz"}
+
+
+def test_backfill_assessment_id_returns_zero_on_rest_failure():
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("supabase 5xx")
+
+    with patch.object(disp._client(), "_rest", side_effect=_raise):
+        n = disp.backfill_assessment_id(
+            orchestrator_run_id="run-abc",
+            assessment_id="asmt-xyz",
+        )
+    assert n == 0  # best-effort: orphans a row but does not unwind the assessment
+
+
+def test_backfill_assessment_id_no_op_on_missing_inputs():
+    # No back-fill if either input is empty — guards against accidental
+    # mass-UPDATEs from a malformed orchestrator_run_id.
+    with patch.object(disp._client(), "_rest") as mock_rest:
+        assert disp.backfill_assessment_id(orchestrator_run_id="", assessment_id="a") == 0
+        assert disp.backfill_assessment_id(orchestrator_run_id="r", assessment_id="") == 0
+        mock_rest.assert_not_called()
+
+
+def test_log_call_persists_diagnostics(monkeypatch):
+    """final_text / stop_reason / errors are written to sub_agent_calls so a
+    failed run is debuggable from the DB instead of live Modal logs (Round-6)."""
+    disp.reset_budget()
+    captured: Dict[str, Any] = {}
+
+    def _fake_rest(method, table, *, json_body=None, prefer=None, params=None):
+        captured.update(json_body or {})
+        return [{"id": "row-x"}]
+
+    class _Runner:
+        role = "commercial_opportunity"
+
+        def __init__(self):
+            pass
+
+        def run(self, *, question, asset_context, budget_token_cap=None):
+            return SubAgentResult(
+                role=self.role, schema_pass=True, schema_retries=0,
+                output={"schema_version": 1}, tokens_input=10, tokens_output=10,
+                cost_usd=0.001, latency_ms=5, tool_call_log=[],
+                final_text='{"schema_version": 1}', stop_reason="end_turn",
+            )
+
+    with patch.dict(ROLE_REGISTRY, {"commercial_opportunity": _Runner}, clear=False), \
+         patch.object(disp._client(), "_rest", side_effect=_fake_rest):
+        out = disp.dispatch_sub_agent("commercial_opportunity", "q")
+    assert out.schema_pass is True
+    assert captured["final_text"] == '{"schema_version": 1}'
+    assert captured["stop_reason"] == "end_turn"
+    assert "errors" in captured  # key present (None when no errors)

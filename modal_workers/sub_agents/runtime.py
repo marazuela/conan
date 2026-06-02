@@ -36,7 +36,13 @@ SONNET_MODEL = "claude-sonnet-4-5-20250929"
 # roles (literature, regulatory_history) regularly need 4-5 search turns +
 # 1-2 fetch turns + 1 synthesis turn, leaving zero headroom at 6.
 DEFAULT_MAX_TURNS = 12
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+# Output-token cap per synthesis turn. Bumped 4096 -> 8192 (2026-06-02): roles
+# with large schemas (commercial_opportunity_v1 = TAM + standard-of-care array +
+# side-effects + ~2k-char competitive_landscape_summary) need >4096 to emit a
+# COMPLETE JSON object; 4096 truncated commercial mid-payload (stop_reason=
+# max_tokens, Round-7). max_tokens is a ceiling, not a charge — smaller-schema
+# roles (competitive/regulatory ~1.5k tokens) are unaffected.
+DEFAULT_MAX_OUTPUT_TOKENS = int(os.environ.get("ORCH_SUB_AGENT_MAX_OUTPUT_TOKENS", "8192"))
 
 # Per-tool-result content cap. Sonnet's context window is 200k tokens; with
 # 4 tool_uses × 60k+ chars each (PubMed full text, OpenFDA labels), a single
@@ -50,6 +56,11 @@ MAX_TOOL_RESULT_CHARS = int(os.environ.get("ORCH_SUB_AGENT_TOOL_RESULT_CHAR_CAP"
 # synthesize from what it has). Set well below 200k to leave room for the
 # system prompt + assistant turn + the final user message.
 SOFT_INPUT_TOKEN_CAP = int(os.environ.get("ORCH_SUB_AGENT_SOFT_INPUT_CAP", "150000"))
+# Max accumulated input tokens under which a one-shot schema-failure retry is
+# attempted (tools dropped, "emit JSON only"). Above this, re-sending the tool
+# history is costly / risks a 200k overflow, so the run falls through to the
+# role's degraded payload (if any) instead. Disable via ORCH_SUB_AGENT_SCHEMA_RETRY=0.
+SCHEMA_RETRY_INPUT_CAP = int(os.environ.get("ORCH_SUB_AGENT_SCHEMA_RETRY_INPUT_CAP", "60000"))
 
 SCHEMA_DIR = (
     Path(__file__).resolve().parents[3]
@@ -73,11 +84,15 @@ class SubAgentSchemaError(RuntimeError):
         tokens_output: int = 0,
         cost_usd: float = 0.0,
         latency_ms: int = 0,
+        final_text: str = "",
+        stop_reason: Optional[str] = None,
     ):
         super().__init__(f"sub_agent[{role}] schema validation failed: {errors[:1]}")
         self.role = role
         self.errors = errors
         self.payload = payload
+        self.final_text = final_text
+        self.stop_reason = stop_reason
         # Metrics from the partial-but-spent run. Without these, the dispatcher's
         # `except SubAgentSchemaError` branch logs 0-cost rows even though real
         # Anthropic tokens were burned — corrupting cost soak. See audit/
@@ -100,6 +115,8 @@ class SubAgentResult:
     latency_ms: int = 0
     tool_call_log: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    final_text: str = ""
+    stop_reason: Optional[str] = None
 
 
 # Tool handler signature: (tool_name, tool_input) -> dict
@@ -229,6 +246,21 @@ class SubAgentRunner:
             f"object matching the {self.schema_filename} schema. No prose outside the JSON."
         )
 
+    def build_degraded_payload(
+        self,
+        *,
+        asset_context: Dict[str, Any],
+        question: str,
+        tool_log: List[Dict[str, Any]],
+        errors: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Optional hook: return a schema-VALID minimal payload to emit when the
+        model fails to produce valid output within the tool/token budget.
+        Default None preserves the hard-fail contract (run() raises
+        SubAgentSchemaError). Roles that override convert an empty / over-budget
+        run into a usable low-content result (e.g. partial_output=true)."""
+        return None
+
     # ---------- core loop ----------
 
     def _load_skill(self) -> str:
@@ -314,6 +346,7 @@ class SubAgentRunner:
         total_cost = 0.0
         t0 = time.time()
         final_text = ""
+        stop_reason: Optional[str] = None
         partial = False
 
         for turn in range(self.max_turns):
@@ -324,21 +357,33 @@ class SubAgentRunner:
             # crash with `prompt is too long`.
             tools_for_call = effective_tools or None
             tools_dropped = False
-            if total_in >= SOFT_INPUT_TOKEN_CAP:
+            # Force synthesis when EITHER the input-token cap is crossed OR we're
+            # on the last allowed turn — drop tools so the model MUST emit final
+            # JSON instead of calling yet another tool and exhausting max_turns
+            # with nothing written (the commercial_opportunity {}/max_turns mode;
+            # see sub_agent_schema_drift_2026-05-23.md Round-6).
+            last_turn = turn >= self.max_turns - 1
+            if total_in >= SOFT_INPUT_TOKEN_CAP or last_turn:
                 tools_for_call = None
                 tools_dropped = True
                 if turn > 0:
                     # Nudge the model: replace last tool_result chain with a
                     # synthesis instruction. Cheaper than appending a user turn
                     # because we still send a single user message.
+                    reason = (
+                        "Tool budget exhausted"
+                        if total_in >= SOFT_INPUT_TOKEN_CAP
+                        else "Final turn"
+                    )
                     messages.append({
                         "role": "user",
                         "content": [{
                             "type": "text",
                             "text": (
-                                "[context-cap] Tool budget exhausted. Return ONLY the final "
-                                f"JSON object matching {self.schema_filename}. Do not call any "
-                                "more tools."
+                                f"[synthesize] {reason}. Return ONLY the final "
+                                f"JSON object matching {self.schema_filename}. Do not call "
+                                "any more tools; fill unknown fields per the schema's "
+                                "honest-uncertainty rules rather than omitting them."
                             ),
                         }],
                     })
@@ -409,7 +454,7 @@ class SubAgentRunner:
                         "sub_agent[%s] tool=%s raised %s",
                         self.role, block.name, exc,
                     )
-                    serialized = json.dumps({"error": str(exc)})
+                    serialized = json.dumps({"error": f"{type(exc).__name__}: {exc}"})
                     is_error = True
                 # Per-result cap: prevents a single oversized tool_result from
                 # blowing past the next call's input window. Truncated payloads
@@ -431,12 +476,12 @@ class SubAgentRunner:
             messages.append({"role": "user", "content": tool_results})
         else:
             partial = True
+            stop_reason = "max_turns"
             logger.warning(
                 "sub_agent[%s] hit max_turns=%d without end_turn",
                 self.role, self.max_turns,
             )
 
-        latency_ms = int((time.time() - t0) * 1000)
         payload = parse_json_or_none(final_text) or {}
         if partial and isinstance(payload, dict):
             payload["partial_output"] = True
@@ -444,6 +489,66 @@ class SubAgentRunner:
         # Validate
         schema = _load_schema(self.schema_filename)
         errors = _validate(payload, schema)
+        schema_retries = 0
+
+        # (1) One cheap forced-synthesis retry. If the model ended without
+        # emitting valid JSON but did NOT exhaust the token budget, ask once
+        # more for JSON-only with tools removed. Guarded on input size: a
+        # re-send of a large tool history is costly and risks a 'prompt too
+        # long' overflow, so big runs skip to the degraded fallback below.
+        if (
+            errors
+            and os.environ.get("ORCH_SUB_AGENT_SCHEMA_RETRY", "1") == "1"
+            and not partial
+            and total_in < SCHEMA_RETRY_INPUT_CAP
+        ):
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "[schema-retry] Your previous response did not validate "
+                        f"against {self.schema_filename} (errors: {errors[:3]}). "
+                        "Return ONLY the corrected JSON object — no prose, no tool calls."
+                    ),
+                }],
+            })
+            res = self._client.call(
+                system=system,
+                messages=messages,
+                model=self.model,
+                max_tokens=self.max_output_tokens,
+                tools=None,
+            )
+            total_in += res.input_tokens
+            total_out += res.output_tokens
+            total_cost += res.cost_usd
+            schema_retries = 1
+            retry_payload = parse_json_or_none(res.text)
+            if isinstance(retry_payload, dict) and not _validate(retry_payload, schema):
+                payload, errors = retry_payload, []
+
+        # (2) Degraded fallback. If still invalid and the role supplies a
+        # schema-valid degraded shape, emit that instead of hard-failing — a
+        # spent run becomes a usable low-content result (papers=[],
+        # partial_output=true) rather than a DLQ'd exception. Roles without a
+        # degraded hook keep the original raise-on-failure contract.
+        if errors:
+            degraded = self.build_degraded_payload(
+                asset_context=asset_context,
+                question=question,
+                tool_log=tool_log,
+                errors=errors,
+            )
+            if degraded is not None and not _validate(degraded, schema):
+                logger.warning(
+                    "sub_agent[%s] returning degraded schema-valid payload "
+                    "after %d schema error(s); first=%s",
+                    self.role, len(errors), errors[0] if errors else "",
+                )
+                payload, errors = degraded, []
+
+        latency_ms = int((time.time() - t0) * 1000)
         schema_pass = not errors
 
         if not schema_pass:
@@ -453,16 +558,20 @@ class SubAgentRunner:
                 tokens_output=total_out,
                 cost_usd=total_cost,
                 latency_ms=latency_ms,
+                final_text=final_text,
+                stop_reason=stop_reason,
             )
 
         return SubAgentResult(
             role=self.role,
             schema_pass=True,
-            schema_retries=0,
+            schema_retries=schema_retries,
             output=payload,
             tokens_input=total_in,
             tokens_output=total_out,
             cost_usd=total_cost,
             latency_ms=latency_ms,
             tool_call_log=tool_log,
+            final_text=final_text,
+            stop_reason=stop_reason,
         )

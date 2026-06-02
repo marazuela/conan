@@ -8,7 +8,7 @@ branch and the retired v3 modules (`hypothesis.py`, `premortem.py`,
 The Cowork-side Phase 6b teardown (Sept 2026-05-28) deleted the
 `bulk_orchestrator_run` skill + wrapper from `conan-cowork-skills@181b9c6`
 and the two scheduled-task directories from Pedro's Mac. See DECISIONS.md
-D-133 for the close-out record.
+D-134 for the close-out record.
 
 **What is still NOT closed:** Gate-6 acceptance (50-asset operator review +
 PRD final stamp) cannot run until a successful `orchestrator_version='orch-v4.0'`

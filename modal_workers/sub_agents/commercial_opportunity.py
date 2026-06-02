@@ -34,6 +34,41 @@ SKILL_PATH = (
 )
 
 
+# openFDA drug-label records are huge (a full label = dozens of sections, often
+# 50-100 KB each). Returning them whole pushed commercial_opportunity past the
+# runner's 150k SOFT_INPUT_TOKEN_CAP, forcing a tools-dropped synthesis with no
+# usable structured data -> empty {} (2026-06-02 audit, 0/6 schema_pass). Project
+# each label down to the few sections the schema actually needs.
+_LABEL_OPENFDA_KEYS = ("brand_name", "generic_name", "manufacturer_name")
+
+
+def _project_label(
+    result: Dict[str, Any],
+    *,
+    sections: tuple,
+    max_section_chars: int = 1200,
+) -> Dict[str, Any]:
+    """Shrink one openFDA label record to {brand/generic/manufacturer + the
+    requested label sections, each truncated}. Keeps tool output lean + on-point
+    so the model can synthesize instead of choking on raw label noise."""
+    openfda = result.get("openfda") or {}
+    proj: Dict[str, Any] = {}
+    for k in _LABEL_OPENFDA_KEYS:
+        v = openfda.get(k)
+        proj[k] = v[0] if isinstance(v, list) and v else (v if isinstance(v, str) else None)
+    for sec in sections:
+        raw = result.get(sec)
+        if isinstance(raw, list):
+            raw = " ".join(str(x) for x in raw)
+        if isinstance(raw, str) and raw.strip():
+            proj[sec] = (
+                raw[:max_section_chars] + " ...[truncated]"
+                if len(raw) > max_section_chars
+                else raw
+            )
+    return proj
+
+
 _TOOL_DEFS: List[Dict[str, Any]] = [
     {
         "name": "openfda_labels_for_indication",
@@ -130,7 +165,13 @@ class CommercialOpportunityRunner(SubAgentRunner):
                     },
                 ) or {}
                 results = body.get("results") or []
-                return {"count": len(results), "labels": results}
+                projected = [
+                    _project_label(
+                        r, sections=("indications_and_usage",), max_section_chars=600
+                    )
+                    for r in results
+                ]
+                return {"count": len(projected), "labels": projected}
 
             if name == "openfda_label_by_drug":
                 drug_q = inp["drug_name"].strip()
@@ -147,7 +188,20 @@ class CommercialOpportunityRunner(SubAgentRunner):
                     },
                 ) or {}
                 results = body.get("results") or []
-                return {"count": len(results), "labels": results}
+                projected = [
+                    _project_label(
+                        r,
+                        sections=(
+                            "boxed_warning",
+                            "adverse_reactions",
+                            "warnings_and_precautions",
+                            "indications_and_usage",
+                        ),
+                        max_section_chars=1500,
+                    )
+                    for r in results
+                ]
+                return {"count": len(projected), "labels": projected}
 
             if name == "pubmed_search":
                 pmids = _pubmed.search(
@@ -162,6 +216,60 @@ class CommercialOpportunityRunner(SubAgentRunner):
             raise ValueError(f"unknown tool: {name}")
 
         return handle
+
+    def build_degraded_payload(
+        self,
+        *,
+        asset_context: Dict[str, Any],
+        question: str,
+        tool_log: List[Dict[str, Any]],
+        errors: List[str],
+    ) -> Dict[str, Any]:
+        """Schema-valid partial shape for when openFDA/PubMed retrieval consumes
+        the tool/token budget before the model emits a final commercial review.
+        Emits empty arrays + an is_inferred TAM + partial_output=true so the
+        orchestrator gets a usable (if empty) commercial signal instead of a hard
+        SubAgentSchemaError. Uses only keys allowed by commercial_opportunity_v1.json
+        (regulatory_incentives must be non-empty → ['none']; unmet_need defaults
+        to the neutral midpoint)."""
+        from datetime import datetime, timezone
+
+        indication = (
+            asset_context.get("indication")
+            or asset_context.get("lead_indication")
+            or "unknown indication"
+        )
+        asset_id = asset_context.get("asset_id") or asset_context.get("id") or ""
+        return {
+            "schema_version": 1,
+            "asset_id": str(asset_id),
+            "indication": str(indication),
+            "tam_estimate": {
+                "low_usd": None,
+                "high_usd": None,
+                "is_inferred": True,
+                "rationale": (
+                    "Partial: commercial sizing not completed within the "
+                    "tool/token budget on this run."
+                ),
+            },
+            "standard_of_care": [],
+            "soc_limitations": [],
+            "soc_side_effects": [],
+            "unmet_need_severity_1_5": 3,
+            "unmet_need_rationale": (
+                "Partial run — unmet need not assessed; neutral midpoint placeholder."
+            ),
+            "regulatory_incentives": ["none"],
+            "competitive_landscape_summary": (
+                "Partial: commercial/competitive context not retrieved within the "
+                "tool/token budget on this run."
+            ),
+            "mcap_to_peak_revenue_ratio": None,
+            "sourcing_completeness_pct": 0.0,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "partial_output": True,
+        }
 
 
 ROLE_REGISTRY["commercial_opportunity"] = CommercialOpportunityRunner  # type: ignore[assignment]
