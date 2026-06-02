@@ -268,11 +268,78 @@ def _ingest_drugsfda_record(app: Dict[str, Any], writer: DocumentWriter) -> "_In
                          application_number, exc)
         return _IngestOutcome(error=True)
 
+    # CRL rubric keystone: persist the structured submissions best-effort.
+    # Never fail the document write on this — log and continue (mirrors the
+    # mechanism-seed pass). See modal_workers/shared/fda_crl/feature_assembly.py.
+    try:
+        sub_rows = extract_submission_rows(app, sponsor_name=sponsor, ticker=resolution.ticker)
+        _upsert_application_submissions(sub_rows, writer.client)
+    except Exception:  # noqa: BLE001
+        logger.exception("openfda drugsfda: submissions upsert failed for %s",
+                         application_number)
+
     return _IngestOutcome(
         written=result.was_new,
         dedup_hit=not result.was_new,
         document_id=result.document_id,
     )
+
+
+def extract_submission_rows(
+    app: Dict[str, Any],
+    *,
+    sponsor_name: Optional[str] = None,
+    ticker: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Normalize a drugsfda record's submissions[] into fda_application_submissions rows.
+
+    Pure (no I/O) so the parsing is unit-testable against fixture payloads.
+    Skips submissions missing the natural key (application_number,
+    submission_type, submission_number).
+    """
+    appno = app.get("application_number")
+    if not appno:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for s in app.get("submissions") or []:
+        sub_type = s.get("submission_type")
+        sub_num = s.get("submission_number")
+        if not sub_type or sub_num in (None, ""):
+            continue
+        status_date = s.get("submission_status_date")
+        iso_date: Optional[str] = None
+        if status_date:
+            try:
+                iso_date = datetime.strptime(str(status_date)[:8], "%Y%m%d").date().isoformat()
+            except ValueError:
+                iso_date = None
+        rows.append({
+            "application_number": str(appno),
+            "submission_type": str(sub_type),
+            "submission_number": str(sub_num),
+            "submission_status": s.get("submission_status"),
+            "submission_class_code": s.get("submission_class_code"),
+            "submission_class_code_description": s.get("submission_class_code_description"),
+            "review_priority": s.get("review_priority"),
+            "submission_status_date": iso_date,
+            "sponsor_name": sponsor_name,
+            "ticker": ticker,
+        })
+    return rows
+
+
+def _upsert_application_submissions(rows: List[Dict[str, Any]], client: Any) -> int:
+    """Upsert normalized submission rows (resolution=merge-duplicates)."""
+    if not rows:
+        return 0
+    client._rest_with_retry(
+        "POST",
+        "fda_application_submissions",
+        json_body=rows,
+        params={"on_conflict": "application_number,submission_type,submission_number"},
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+    return len(rows)
 
 
 def _format_drugsfda_record_as_text(app: Dict[str, Any], most_recent: Dict[str, Any]) -> str:

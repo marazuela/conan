@@ -1,0 +1,4 @@
+ApplNo,SponsorName,ApplType,ReviewPriority,SubmissionClassCode,cycle_type,is_biosimilar_bla,n_prior_filings,n_drug_inspections_5y_fix,n_8ks_30_180_clean,p_crl,raw_p_uncalibrated,ci_low,ci_high,risk_band,confidence_flag,refusal_reason,model_version
+999001,Example NDA,NDA,Standard Review,TYPE 1,first_cycle_orig,0,3,4,2,0.02504998,0.02895121,0.00000000,0.17504998,low,standard,,M14_ADJUSTED_L1_ORIG_v1_1_2026-05-30
+999002,Example Priority BLA,BLA,Priority Review,TYPE 1,first_cycle_orig,0,4,6,1,0.07110114,0.08789143,0.00000000,0.22110114,low,standard,,M14_ADJUSTED_L1_ORIG_v1_1_2026-05-30
+999003,Example sNDA,NDA,PR,SUPPL,supplemental,0,5,,2,,,,,,refused,M14 adjusted trained only on first_cycle_orig; got cycle_type=supplemental,M14_ADJUSTED_L1_ORIG_v1_1_2026-05-30
