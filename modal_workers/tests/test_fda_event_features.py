@@ -490,3 +490,40 @@ def test_replay_with_same_canonical_inputs_yields_same_hash():
     out_b = compose_features(rebuilt)
     assert out_a.inputs_hash == out_b.inputs_hash
     assert out_a.score == out_b.score
+
+
+# --------------------------------------------------------------------------- #
+# Seam 2 — CRL rubric drives fair_probability for in-scope originals
+# --------------------------------------------------------------------------- #
+def test_crl_override_sets_fair_probability_for_originals():
+    out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30,
+                                         crl_confidence=0.9, crl_model_version="M14",
+                                         crl_feature_coverage=1.0))
+    assert out.fair_probability == pytest.approx(0.70)  # 1 - crl_risk, overrides base+modifiers
+    assert out.raw_inputs["fair_probability_source"] == "crl_rubric"
+    assert out.raw_inputs["crl"]["risk"] == 0.30
+    assert out.raw_inputs["crl"]["model_version"] == "M14"
+
+
+def test_crl_low_confidence_falls_back_to_base_rate():
+    base = compose_features(_build_inputs())
+    out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30, crl_confidence=0.2))
+    assert out.fair_probability == pytest.approx(base.fair_probability)  # override skipped
+    assert out.raw_inputs["fair_probability_source"] == "base_rate"
+
+
+def test_crl_efficacy_supplement_is_rank_only_no_override():
+    base = compose_features(_build_inputs())
+    out = compose_features(_build_inputs(crl_scope="efficacy_supplement", crl_risk=None,
+                                         crl_percentile=88.0, crl_confidence=0.9))
+    assert out.fair_probability == pytest.approx(base.fair_probability)  # rank never moves fair_p
+    assert out.raw_inputs["fair_probability_source"] == "base_rate"
+    assert out.raw_inputs["crl"]["percentile"] == 88.0
+
+
+def test_crl_absent_leaves_raw_inputs_byte_stable():
+    # No CRL routing -> no provenance keys, so out-of-domain events keep their
+    # exact pre-CRL raw_inputs/inputs_hash (no rollout re-score churn).
+    out = compose_features(_build_inputs())
+    assert "crl" not in out.raw_inputs
+    assert "fair_probability_source" not in out.raw_inputs

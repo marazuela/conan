@@ -483,6 +483,16 @@ class FeatureInputs:
     agent_confidences: List[float]
     agent_modifiers: AgentModifiers = field(default_factory=AgentModifiers)
     band_thresholds: Mapping[str, float] = None  # type: ignore[assignment]
+    # Seam 2 — FDA CRL rubric. When crl_scope=='original', crl_risk is set, and
+    # crl_confidence clears CRL_OVERRIDE_MIN_CONFIDENCE, the calibrated rubric is
+    # the source of truth: fair_probability = 1 - crl_risk. Out-of-scope or
+    # low-confidence events keep the base-rate composition untouched.
+    crl_scope: Optional[str] = None
+    crl_risk: Optional[float] = None
+    crl_percentile: Optional[float] = None
+    crl_confidence: Optional[float] = None
+    crl_model_version: Optional[str] = None
+    crl_feature_coverage: Optional[float] = None
 
 
 @dataclass
@@ -510,6 +520,10 @@ def _days_to_event(snapshot_at: datetime, event_date: Optional[date]) -> Optiona
     return (event_date - snapshot_at.astimezone(timezone.utc).date()).days
 
 
+CRL_OVERRIDE_MIN_CONFIDENCE = 0.5  # below this, a poorly-sourced rubric score
+# falls back to the base-rate composition instead of overriding fair_probability.
+
+
 def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
     """Pure composition: deterministic given identical inputs.
 
@@ -534,6 +548,21 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
         0.0,
         1.0,
     )
+
+    # Seam 2: the calibrated CRL rubric is the source of truth for fair
+    # probability on in-scope first-cycle original NDA/BLA. crl_risk is P(CRL),
+    # so fair_probability = 1 - crl_risk. A confidence floor keeps a
+    # poorly-sourced rubric score from overriding the base-rate composition.
+    # Supplements (rank-only), biosimilars, resubmissions and non-NDA/BLA
+    # catalysts are out of scope here and keep the composition above.
+    fair_probability_source = "base_rate"
+    if (
+        inputs.crl_scope == "original"
+        and inputs.crl_risk is not None
+        and (inputs.crl_confidence or 0.0) >= CRL_OVERRIDE_MIN_CONFIDENCE
+    ):
+        fair_p = _clamp(1.0 - float(inputs.crl_risk), 0.0, 1.0)
+        fair_probability_source = "crl_rubric"
 
     upside_pct, downside_pct = magnitude_defaults_for_mcap(inputs.market_cap_usd)
 
@@ -625,6 +654,19 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
         "evidence_confidence_pre_boost": confidence_pre_boost,
         "band_thresholds": dict(band_thresholds),
     }
+    # Provenance for in-domain events only — keeps out-of-domain events'
+    # raw_inputs (and therefore inputs_hash) byte-stable, so the rollout doesn't
+    # force a re-score of every non-NDA/BLA catalyst.
+    if inputs.crl_scope in ("original", "efficacy_supplement"):
+        raw_inputs["fair_probability_source"] = fair_probability_source
+        raw_inputs["crl"] = {
+            "scope": inputs.crl_scope,
+            "risk": inputs.crl_risk,
+            "percentile": inputs.crl_percentile,
+            "confidence": inputs.crl_confidence,
+            "feature_coverage": inputs.crl_feature_coverage,
+            "model_version": inputs.crl_model_version,
+        }
     return FeatureSnapshot(
         fair_probability=fair_p,
         market_implied_probability=market_p,
@@ -660,6 +702,7 @@ def build_features(
     options: Optional[OptionsDataProvider],
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
+    crl: Optional[Mapping[str, Any]] = None,
 ) -> FeatureSnapshot:
     """Pull provider data and compose a feature snapshot for one event.
 
@@ -749,5 +792,11 @@ def build_features(
         evidence_count=len(evidence_rows or []),
         agent_confidences=agent_confidences,
         agent_modifiers=agent_modifiers,
+        crl_scope=(crl or {}).get("crl_scope"),
+        crl_risk=(crl or {}).get("crl_risk"),
+        crl_percentile=(crl or {}).get("crl_percentile"),
+        crl_confidence=(crl or {}).get("crl_confidence"),
+        crl_model_version=(crl or {}).get("crl_model_version"),
+        crl_feature_coverage=(crl or {}).get("crl_feature_coverage"),
     )
     return compose_features(inputs)

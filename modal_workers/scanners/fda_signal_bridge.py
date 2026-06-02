@@ -168,6 +168,7 @@ def process_event(
     mode: str,
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
+    crl: Optional[Mapping[str, Any]] = None,
 ) -> ProcessOutcome:
     """Pure single-event pipeline.
 
@@ -209,6 +210,7 @@ def process_event(
         options=options,
         snapshot_at=snapshot_at,
         designations=dict(designations) if designations else None,
+        crl=crl,
     )
 
     # Gate 2: no auto-Immediate without market_implied_probability.
@@ -341,6 +343,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
     snapshot from the latest provider data + evidence.
     """
     from modal_workers.shared.biotech_base_rates import load_base_rates
+    from modal_workers.shared.fda_crl.feature_assembly import score_catalyst_crl
     from modal_workers.shared.scanner_base import ScannerResult, Signal
     from modal_workers.shared.supabase_client import EntityHints, SupabaseClient
 
@@ -436,6 +439,15 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
 
         designations = _designations_from(asset, evidence_rows)
 
+        # Seam 1: score the CRL rubric once per event (decision-support — must
+        # never block base scoring). Threaded into build_features for the Seam-2
+        # fair_probability override and stamped onto the signal for observability.
+        try:
+            crl = score_catalyst_crl(client, asset, event, evidence_rows=evidence_rows)
+        except Exception as e:  # noqa: BLE001 — degrade to base-rate, never poison the run
+            warnings.append(f"crl scoring failed for {event_id}: {type(e).__name__}: {e}")
+            crl = None
+
         try:
             outcome = process_event(
                 event=event,
@@ -447,6 +459,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
                 mode=mode,
                 snapshot_at=snapshot_at,
                 designations=designations,
+                crl=crl,
             )
         except Exception as e:  # noqa: BLE001 — one bad event must not poison the run
             warnings.append(f"process_event failed for {event_id}: {type(e).__name__}: {e}")
@@ -505,6 +518,8 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             "score": snapshot.score,
             "band": snapshot.band,
             "immediate_demoted": outcome.immediate_demoted,
+            "fair_probability_source": snapshot.raw_inputs.get("fair_probability_source", "base_rate"),
+            "crl": snapshot.raw_inputs.get("crl"),
         }
 
         signals.append(Signal(
