@@ -56,6 +56,11 @@ MAX_TOOL_RESULT_CHARS = int(os.environ.get("ORCH_SUB_AGENT_TOOL_RESULT_CHAR_CAP"
 # synthesize from what it has). Set well below 200k to leave room for the
 # system prompt + assistant turn + the final user message.
 SOFT_INPUT_TOKEN_CAP = int(os.environ.get("ORCH_SUB_AGENT_SOFT_INPUT_CAP", "150000"))
+# Max accumulated input tokens under which a one-shot schema-failure retry is
+# attempted (tools dropped, "emit JSON only"). Above this, re-sending the tool
+# history is costly / risks a 200k overflow, so the run falls through to the
+# role's degraded payload (if any) instead. Disable via ORCH_SUB_AGENT_SCHEMA_RETRY=0.
+SCHEMA_RETRY_INPUT_CAP = int(os.environ.get("ORCH_SUB_AGENT_SCHEMA_RETRY_INPUT_CAP", "60000"))
 
 SCHEMA_DIR = (
     Path(__file__).resolve().parents[3]
@@ -240,6 +245,21 @@ class SubAgentRunner:
             f"Use the available tools to gather evidence, then return ONLY a JSON "
             f"object matching the {self.schema_filename} schema. No prose outside the JSON."
         )
+
+    def build_degraded_payload(
+        self,
+        *,
+        asset_context: Dict[str, Any],
+        question: str,
+        tool_log: List[Dict[str, Any]],
+        errors: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Optional hook: return a schema-VALID minimal payload to emit when the
+        model fails to produce valid output within the tool/token budget.
+        Default None preserves the hard-fail contract (run() raises
+        SubAgentSchemaError). Roles that override convert an empty / over-budget
+        run into a usable low-content result (e.g. partial_output=true)."""
+        return None
 
     # ---------- core loop ----------
 
@@ -462,7 +482,6 @@ class SubAgentRunner:
                 self.role, self.max_turns,
             )
 
-        latency_ms = int((time.time() - t0) * 1000)
         payload = parse_json_or_none(final_text) or {}
         if partial and isinstance(payload, dict):
             payload["partial_output"] = True
@@ -470,6 +489,66 @@ class SubAgentRunner:
         # Validate
         schema = _load_schema(self.schema_filename)
         errors = _validate(payload, schema)
+        schema_retries = 0
+
+        # (1) One cheap forced-synthesis retry. If the model ended without
+        # emitting valid JSON but did NOT exhaust the token budget, ask once
+        # more for JSON-only with tools removed. Guarded on input size: a
+        # re-send of a large tool history is costly and risks a 'prompt too
+        # long' overflow, so big runs skip to the degraded fallback below.
+        if (
+            errors
+            and os.environ.get("ORCH_SUB_AGENT_SCHEMA_RETRY", "1") == "1"
+            and not partial
+            and total_in < SCHEMA_RETRY_INPUT_CAP
+        ):
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "[schema-retry] Your previous response did not validate "
+                        f"against {self.schema_filename} (errors: {errors[:3]}). "
+                        "Return ONLY the corrected JSON object — no prose, no tool calls."
+                    ),
+                }],
+            })
+            res = self._client.call(
+                system=system,
+                messages=messages,
+                model=self.model,
+                max_tokens=self.max_output_tokens,
+                tools=None,
+            )
+            total_in += res.input_tokens
+            total_out += res.output_tokens
+            total_cost += res.cost_usd
+            schema_retries = 1
+            retry_payload = parse_json_or_none(res.text)
+            if isinstance(retry_payload, dict) and not _validate(retry_payload, schema):
+                payload, errors = retry_payload, []
+
+        # (2) Degraded fallback. If still invalid and the role supplies a
+        # schema-valid degraded shape, emit that instead of hard-failing — a
+        # spent run becomes a usable low-content result (papers=[],
+        # partial_output=true) rather than a DLQ'd exception. Roles without a
+        # degraded hook keep the original raise-on-failure contract.
+        if errors:
+            degraded = self.build_degraded_payload(
+                asset_context=asset_context,
+                question=question,
+                tool_log=tool_log,
+                errors=errors,
+            )
+            if degraded is not None and not _validate(degraded, schema):
+                logger.warning(
+                    "sub_agent[%s] returning degraded schema-valid payload "
+                    "after %d schema error(s); first=%s",
+                    self.role, len(errors), errors[0] if errors else "",
+                )
+                payload, errors = degraded, []
+
+        latency_ms = int((time.time() - t0) * 1000)
         schema_pass = not errors
 
         if not schema_pass:
@@ -486,7 +565,7 @@ class SubAgentRunner:
         return SubAgentResult(
             role=self.role,
             schema_pass=True,
-            schema_retries=0,
+            schema_retries=schema_retries,
             output=payload,
             tokens_input=total_in,
             tokens_output=total_out,
