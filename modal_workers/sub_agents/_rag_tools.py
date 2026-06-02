@@ -21,6 +21,21 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+class ToolNotOwned(KeyError):
+    """Raised by a composed handler to signal it does not handle this tool name,
+    so chain_handlers should try the next handler. Subclasses KeyError for
+    backward-compat, but is DISTINCT from a genuine KeyError raised *while*
+    handling a tool (a real backend/arg error, e.g. inp["required_arg"] on a
+    malformed call) — chain_handlers lets the latter PROPAGATE instead of masking
+    it as 'not owned', which used to loop the model to max_turns. See
+    sub_agent_schema_drift_2026-05-23.md Round-5.
+    """
+
+    def __init__(self, tool_name: str):
+        super().__init__(f"handler does not own tool: {tool_name}")
+        self.tool_name = tool_name
+
+
 VALID_CORPUS = ("literature", "filings", "labels_aes", "news", "all")
 
 
@@ -154,7 +169,7 @@ def make_internal_rag_handler(sb=None) -> Callable[[str, Dict[str, Any]], Dict[s
                 _sb(), inp["chunk_id"],
                 with_neighbors=int(inp.get("with_neighbors", 0)),
             )
-        raise KeyError(f"_rag_tools handler does not own tool: {name}")
+        raise ToolNotOwned(name)
 
     return handle
 
@@ -179,7 +194,7 @@ def make_compute_handler() -> Callable[[str, Dict[str, Any]], Dict[str, Any]]:
                 "count": len(cases),
                 "cases": [asdict(c) for c in cases],
             }
-        raise KeyError(f"_compute handler does not own tool: {name}")
+        raise ToolNotOwned(name)
 
     return handle
 
@@ -187,25 +202,32 @@ def make_compute_handler() -> Callable[[str, Dict[str, Any]], Dict[str, Any]]:
 def chain_handlers(
     *handlers: Callable[[str, Dict[str, Any]], Dict[str, Any]],
 ) -> Callable[[str, Dict[str, Any]], Dict[str, Any]]:
-    """Try each handler in order; raise the first non-`KeyError` exception
-    or return the first non-error result. Used by sub-agent runners to
-    compose their role-specific handler with the shared rag/compute ones."""
+    """Try each handler in order until one claims the tool.
+
+    A handler signals "not my tool" by raising ToolNotOwned (shared rag/compute
+    handlers) or ValueError("unknown tool: ...") (role handlers) — those fall
+    through to the next handler. ANY OTHER exception PROPAGATES — including a
+    plain KeyError (e.g. a role handler doing inp["required_arg"] on a malformed
+    tool call, or a backend error). That is a REAL error, not a routing miss, and
+    must reach the model as such instead of being masked as 'tool not owned'
+    (which sent the model into a retry loop until max_turns -> empty payload).
+    See sub_agent_schema_drift_2026-05-23.md Round-5.
+    """
 
     def handle(name: str, inp: Dict[str, Any]) -> Dict[str, Any]:
         last_err: Optional[Exception] = None
         for h in handlers:
             try:
                 return h(name, inp)
-            except KeyError as exc:
+            except ToolNotOwned as exc:
                 last_err = exc
                 continue
             except ValueError as exc:
-                # Some role handlers raise ValueError for unknown tools
-                # (LiteratureRunner et al). Treat as soft pass-through.
+                # Role handlers signal not-mine via ValueError("unknown tool").
                 if "unknown tool" in str(exc).lower():
                     last_err = exc
                     continue
-                raise
-        raise last_err or ValueError(f"no handler claimed tool: {name}")
+                raise  # a real ValueError while handling — propagate
+        raise last_err or ToolNotOwned(name)
 
     return handle

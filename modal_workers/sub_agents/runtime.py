@@ -409,7 +409,7 @@ class SubAgentRunner:
                         "sub_agent[%s] tool=%s raised %s",
                         self.role, block.name, exc,
                     )
-                    serialized = json.dumps({"error": str(exc)})
+                    serialized = json.dumps({"error": f"{type(exc).__name__}: {exc}"})
                     is_error = True
                 # Per-result cap: prevents a single oversized tool_result from
                 # blowing past the next call's input window. Truncated payloads
