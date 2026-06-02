@@ -104,3 +104,70 @@ def test_skill_allowed_tools_match_runner(runner_cls):
     )
     phantom = [t for t in declared if t.startswith("mcp__")]
     assert not phantom, f"{runner_cls.__name__} skill still has MCP-style phantom names: {phantom}"
+
+
+def test_loop_forces_synthesis_on_last_turn(monkeypatch):
+    """Round-6: a role whose model keeps calling tools must still get a forced
+    synthesis turn at max_turns-1 (tools dropped) instead of hitting max_turns
+    with an empty payload (the commercial_opportunity {} mode)."""
+    from modal_workers.sub_agents import runtime as rt
+
+    # Always-valid schema so the test isolates the forcing behavior.
+    monkeypatch.setattr(rt, "_load_schema", lambda _name: {})
+    monkeypatch.setattr(rt, "_validate", lambda _payload, _schema: [])
+
+    seen_tools = []
+
+    class _Tool:
+        type = "tool_use"
+        id = "t1"
+        name = "noop"
+        input = {}
+
+    class _Text:
+        type = "text"
+
+        def __init__(self, t):
+            self.text = t
+
+    class _Msg:
+        def __init__(self, content, stop_reason):
+            self.content = content
+            self.stop_reason = stop_reason
+
+    class _Res:
+        def __init__(self, raw, text):
+            self.raw_message = raw
+            self.text = text
+            self.input_tokens = 10
+            self.output_tokens = 10
+            self.cost_usd = 0.0
+            self.latency_ms = 1
+
+    class _Client:
+        def call(self, *, system, messages, model, max_tokens, tools):
+            seen_tools.append(tools)
+            if tools is None:  # tools dropped => model synthesizes
+                return _Res(_Msg([_Text('{"ok": 1}')], "end_turn"), '{"ok": 1}')
+            return _Res(_Msg([_Tool()], "tool_use"), "")  # else keep calling tools
+
+    class _R(rt.SubAgentRunner):
+        role = "x"
+        schema_filename = "x_v1.json"
+        max_turns = 3
+        tool_defs = [{"name": "noop", "input_schema": {"type": "object"}}]
+
+        def __init__(self):
+            self._client = _Client()
+
+        def build_handler(self):
+            return lambda name, inp: {"ok": True}
+
+    result = _R().run(question="q", asset_context={})
+    # Model wanted a tool every turn; the loop forced tools=None on the last turn
+    # so it synthesized instead of ending empty.
+    assert result.schema_pass is True
+    assert result.output == {"ok": 1}
+    assert seen_tools[-1] is None        # tools dropped on the final call
+    assert len(seen_tools) <= 3          # never exceeded max_turns
+    assert result.stop_reason == "end_turn"
