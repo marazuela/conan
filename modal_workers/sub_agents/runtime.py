@@ -73,11 +73,15 @@ class SubAgentSchemaError(RuntimeError):
         tokens_output: int = 0,
         cost_usd: float = 0.0,
         latency_ms: int = 0,
+        final_text: str = "",
+        stop_reason: Optional[str] = None,
     ):
         super().__init__(f"sub_agent[{role}] schema validation failed: {errors[:1]}")
         self.role = role
         self.errors = errors
         self.payload = payload
+        self.final_text = final_text
+        self.stop_reason = stop_reason
         # Metrics from the partial-but-spent run. Without these, the dispatcher's
         # `except SubAgentSchemaError` branch logs 0-cost rows even though real
         # Anthropic tokens were burned — corrupting cost soak. See audit/
@@ -100,6 +104,8 @@ class SubAgentResult:
     latency_ms: int = 0
     tool_call_log: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    final_text: str = ""
+    stop_reason: Optional[str] = None
 
 
 # Tool handler signature: (tool_name, tool_input) -> dict
@@ -314,6 +320,7 @@ class SubAgentRunner:
         total_cost = 0.0
         t0 = time.time()
         final_text = ""
+        stop_reason: Optional[str] = None
         partial = False
 
         for turn in range(self.max_turns):
@@ -431,6 +438,7 @@ class SubAgentRunner:
             messages.append({"role": "user", "content": tool_results})
         else:
             partial = True
+            stop_reason = "max_turns"
             logger.warning(
                 "sub_agent[%s] hit max_turns=%d without end_turn",
                 self.role, self.max_turns,
@@ -453,6 +461,8 @@ class SubAgentRunner:
                 tokens_output=total_out,
                 cost_usd=total_cost,
                 latency_ms=latency_ms,
+                final_text=final_text,
+                stop_reason=stop_reason,
             )
 
         return SubAgentResult(
@@ -465,4 +475,6 @@ class SubAgentRunner:
             cost_usd=total_cost,
             latency_ms=latency_ms,
             tool_call_log=tool_log,
+            final_text=final_text,
+            stop_reason=stop_reason,
         )
