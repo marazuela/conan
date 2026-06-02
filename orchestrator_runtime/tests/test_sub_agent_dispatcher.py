@@ -250,3 +250,36 @@ def test_backfill_assessment_id_no_op_on_missing_inputs():
         assert disp.backfill_assessment_id(orchestrator_run_id="", assessment_id="a") == 0
         assert disp.backfill_assessment_id(orchestrator_run_id="r", assessment_id="") == 0
         mock_rest.assert_not_called()
+
+
+def test_log_call_persists_diagnostics(monkeypatch):
+    """final_text / stop_reason / errors are written to sub_agent_calls so a
+    failed run is debuggable from the DB instead of live Modal logs (Round-6)."""
+    disp.reset_budget()
+    captured: Dict[str, Any] = {}
+
+    def _fake_rest(method, table, *, json_body=None, prefer=None, params=None):
+        captured.update(json_body or {})
+        return [{"id": "row-x"}]
+
+    class _Runner:
+        role = "commercial_opportunity"
+
+        def __init__(self):
+            pass
+
+        def run(self, *, question, asset_context, budget_token_cap=None):
+            return SubAgentResult(
+                role=self.role, schema_pass=True, schema_retries=0,
+                output={"schema_version": 1}, tokens_input=10, tokens_output=10,
+                cost_usd=0.001, latency_ms=5, tool_call_log=[],
+                final_text='{"schema_version": 1}', stop_reason="end_turn",
+            )
+
+    with patch.dict(ROLE_REGISTRY, {"commercial_opportunity": _Runner}, clear=False), \
+         patch.object(disp._client(), "_rest", side_effect=_fake_rest):
+        out = disp.dispatch_sub_agent("commercial_opportunity", "q")
+    assert out.schema_pass is True
+    assert captured["final_text"] == '{"schema_version": 1}'
+    assert captured["stop_reason"] == "end_turn"
+    assert "errors" in captured  # key present (None when no errors)

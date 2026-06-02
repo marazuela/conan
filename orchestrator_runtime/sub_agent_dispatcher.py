@@ -164,6 +164,9 @@ def _log_call(
     tokens: int,
     cost_usd: float,
     latency_ms: int,
+    final_text: str = "",
+    stop_reason: Optional[str] = None,
+    errors: Optional[List[str]] = None,
 ) -> Optional[str]:
     try:
         rows = _client()._rest(
@@ -179,6 +182,9 @@ def _log_call(
                 "tokens": tokens,
                 "cost_usd": round(cost_usd, 4),
                 "latency_ms": latency_ms,
+                "final_text": (final_text or "")[:16000] or None,
+                "stop_reason": stop_reason,
+                "errors": errors or None,
             },
             prefer="return=representation",
         ) or []
@@ -258,6 +264,8 @@ def dispatch_sub_agent(
     tokens = 0
     cost = 0.0
     latency = 0
+    final_text = ""
+    stop_reason: Optional[str] = None
 
     try:
         result: SubAgentResult = runner.run(
@@ -269,6 +277,8 @@ def dispatch_sub_agent(
         tokens = result.tokens_input + result.tokens_output
         cost = result.cost_usd
         latency = result.latency_ms
+        final_text = getattr(result, "final_text", "") or ""
+        stop_reason = getattr(result, "stop_reason", None)
     except SubAgentSchemaError as exc:
         schema_pass = False
         errors = exc.errors
@@ -278,6 +288,8 @@ def dispatch_sub_agent(
         tokens = (exc.tokens_input or 0) + (exc.tokens_output or 0)
         cost = exc.cost_usd or 0.0
         latency = exc.latency_ms or 0
+        final_text = getattr(exc, "final_text", "") or ""
+        stop_reason = getattr(exc, "stop_reason", None)
         _log_to_dlq(role, errors, output)
     except Exception as exc:  # noqa: BLE001
         schema_pass = False
@@ -296,6 +308,9 @@ def dispatch_sub_agent(
         tokens=tokens,
         cost_usd=cost,
         latency_ms=latency,
+        final_text=final_text,
+        stop_reason=stop_reason,
+        errors=errors,
     )
 
     return DispatchOutcome(
