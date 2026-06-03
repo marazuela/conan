@@ -1073,6 +1073,40 @@ def _first_approval(results: List[dict], clean_name: str) -> Optional[dict]:
     return None
 
 
+def _appno_type(application_number: str) -> Optional[str]:
+    s = (application_number or "").strip().upper()
+    if s.startswith("BLA"):
+        return "BLA"
+    if s.startswith("NDA"):
+        return "NDA"
+    return None
+
+
+def _single_application_from_cache(client: SupabaseClient, drug_name: str) -> Optional[dict]:
+    """Best-effort FDA application_number for a watchlist drug, read from the warm
+    openFDA approval cache (_check_fda_approval_status writes it earlier in the same
+    crosscheck pass — so this adds zero openFDA calls). Returns a result ONLY when
+    the lookup yielded exactly ONE distinct application_number: high-confidence,
+    never guesses. Works for pending (non-approved) entries — exactly where the
+    watchlist is starved of application numbers. Mirrors the name cleaning in
+    _check_fda_approval_status so the cache key matches."""
+    clean_name = (drug_name or "").lower().strip()
+    for remove in ("(auto-discovered)", "snda", "bla", "nda"):
+        clean_name = clean_name.replace(remove, "").strip()
+    if not clean_name or len(clean_name) < 3:
+        return None
+    cached = _read_approval_cache(client, clean_name)
+    if not cached:
+        return None
+    appnos = sorted({
+        (r.get("application_number") or "").strip()
+        for r in cached if (r.get("application_number") or "").strip()
+    })
+    if len(appnos) != 1:
+        return None  # 0 or ambiguous -> don't guess
+    return {"application_number": appnos[0], "application_type": _appno_type(appnos[0])}
+
+
 def _extract_designations(history: Any) -> Dict[str, bool]:
     """Surface FDA designation flags from openFDA submission rows.
 
@@ -1199,6 +1233,16 @@ def _run_approval_crosscheck(watchlist: List[dict], user_agent: str,
         drug_name = entry.get("drug_name", "")
         check_count += 1
         result = _check_fda_approval_status(drug_name, user_agent, client)
+        # Durable source fix: backfill the FDA application_number onto the entry
+        # from the now-warm openFDA cache (works for pending entries, where
+        # `result` is None). Feeds the CRL rubric's router/feature-assembly, which
+        # is starved because EDGAR-discovered entries carry no application number.
+        if not entry.get("application_number"):
+            appinfo = _single_application_from_cache(client, drug_name)
+            if appinfo:
+                entry["application_number"] = appinfo["application_number"]
+                if appinfo.get("application_type"):
+                    entry["nda_type"] = appinfo["application_type"]
         if not result or not result.get("approved"):
             continue
         approval_date_str = result.get("approval_date", "")
