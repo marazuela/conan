@@ -498,7 +498,7 @@ def test_replay_with_same_canonical_inputs_yields_same_hash():
 def test_crl_override_sets_fair_probability_for_originals():
     out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30,
                                          crl_confidence=0.9, crl_model_version="M14",
-                                         crl_feature_coverage=1.0))
+                                         crl_feature_coverage=1.0, crl_override_enabled=True))
     assert out.fair_probability == pytest.approx(0.70)  # 1 - crl_risk, overrides base+modifiers
     assert out.raw_inputs["fair_probability_source"] == "crl_rubric"
     assert out.raw_inputs["crl"]["risk"] == 0.30
@@ -507,8 +507,9 @@ def test_crl_override_sets_fair_probability_for_originals():
 
 def test_crl_low_confidence_falls_back_to_base_rate():
     base = compose_features(_build_inputs())
-    out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30, crl_confidence=0.2))
-    assert out.fair_probability == pytest.approx(base.fair_probability)  # override skipped
+    out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30, crl_confidence=0.2,
+                                         crl_override_enabled=True))
+    assert out.fair_probability == pytest.approx(base.fair_probability)  # confidence floor skips override
     assert out.raw_inputs["fair_probability_source"] == "base_rate"
 
 
@@ -527,3 +528,15 @@ def test_crl_absent_leaves_raw_inputs_byte_stable():
     out = compose_features(_build_inputs())
     assert "crl" not in out.raw_inputs
     assert "fair_probability_source" not in out.raw_inputs
+
+
+def test_crl_shadow_mode_records_but_does_not_override():
+    # Default (override disabled): live fair_probability is untouched, but the
+    # rubric's would-be value is recorded so forward shadow-validation can run.
+    base = compose_features(_build_inputs())
+    out = compose_features(_build_inputs(crl_scope="original", crl_risk=0.30,
+                                         crl_confidence=0.9, crl_override_enabled=False))
+    assert out.fair_probability == pytest.approx(base.fair_probability)
+    assert out.raw_inputs["fair_probability_source"] == "base_rate"
+    assert out.raw_inputs["crl"]["override_enabled"] is False
+    assert out.raw_inputs["crl"]["shadow_fair_probability"] == pytest.approx(0.70)

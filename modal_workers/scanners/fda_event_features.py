@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -493,6 +494,7 @@ class FeatureInputs:
     crl_confidence: Optional[float] = None
     crl_model_version: Optional[str] = None
     crl_feature_coverage: Optional[float] = None
+    crl_override_enabled: bool = False  # Seam-2 master switch (default shadow)
 
 
 @dataclass
@@ -522,6 +524,14 @@ def _days_to_event(snapshot_at: datetime, event_date: Optional[date]) -> Optiona
 
 CRL_OVERRIDE_MIN_CONFIDENCE = 0.5  # below this, a poorly-sourced rubric score
 # falls back to the base-rate composition instead of overriding fair_probability.
+
+
+def _crl_override_enabled() -> bool:
+    """Master switch for the Seam-2 override. Defaults OFF (shadow mode): the
+    rubric runs and records ``shadow_fair_probability`` on every in-scope event,
+    but does NOT move live fair_probability until FDA_CRL_OVERRIDE_ENABLED is set.
+    Lets the rubric accumulate forward predictions before it changes scoring."""
+    return os.environ.get("FDA_CRL_OVERRIDE_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
@@ -557,7 +567,8 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
     # catalysts are out of scope here and keep the composition above.
     fair_probability_source = "base_rate"
     if (
-        inputs.crl_scope == "original"
+        inputs.crl_override_enabled
+        and inputs.crl_scope == "original"
         and inputs.crl_risk is not None
         and (inputs.crl_confidence or 0.0) >= CRL_OVERRIDE_MIN_CONFIDENCE
     ):
@@ -659,14 +670,21 @@ def compose_features(inputs: FeatureInputs) -> FeatureSnapshot:
     # force a re-score of every non-NDA/BLA catalyst.
     if inputs.crl_scope in ("original", "efficacy_supplement"):
         raw_inputs["fair_probability_source"] = fair_probability_source
-        raw_inputs["crl"] = {
+        crl_block = {
             "scope": inputs.crl_scope,
             "risk": inputs.crl_risk,
             "percentile": inputs.crl_percentile,
             "confidence": inputs.crl_confidence,
             "feature_coverage": inputs.crl_feature_coverage,
             "model_version": inputs.crl_model_version,
+            "override_enabled": inputs.crl_override_enabled,
         }
+        # Shadow: what the rubric WOULD set fair_probability to, recorded even
+        # when the override is disabled, so forward shadow-validation can compare
+        # rubric vs base-rate vs realized outcome without changing live scoring.
+        if inputs.crl_scope == "original" and inputs.crl_risk is not None:
+            crl_block["shadow_fair_probability"] = _clamp(1.0 - float(inputs.crl_risk), 0.0, 1.0)
+        raw_inputs["crl"] = crl_block
     return FeatureSnapshot(
         fair_probability=fair_p,
         market_implied_probability=market_p,
@@ -798,5 +816,6 @@ def build_features(
         crl_confidence=(crl or {}).get("crl_confidence"),
         crl_model_version=(crl or {}).get("crl_model_version"),
         crl_feature_coverage=(crl or {}).get("crl_feature_coverage"),
+        crl_override_enabled=_crl_override_enabled(),
     )
     return compose_features(inputs)
