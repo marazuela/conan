@@ -47,6 +47,38 @@ def test_appl_is_bla():
     assert fa.appl_is_bla(None) is None
 
 
+def test_build_catalyst_falls_back_to_application_type_column():
+    # Real fda_assets shape: application_type lives in the COLUMN (not extensions)
+    # and application_number has no NDA/BLA prefix. build_catalyst must read the
+    # column, or the router refuses the catalyst as 'unclassifiable'.
+    cat = fa.build_catalyst(
+        {"application_number": "210854", "application_type": "BLA", "extensions": {}},
+        {"extensions": {}},
+    )
+    assert cat["application_type"] == "BLA"
+    assert router.classify_scope(cat)["scope"] == router.ORIGINAL
+
+
+def test_build_catalyst_column_routes_supplement():
+    cat = fa.build_catalyst(
+        {"application_number": "761049", "application_type": "sNDA",
+         "extensions": {"submission_class_code": "TYPE 6 - NEW INDICATION"}},
+        {"extensions": {}},
+    )
+    assert cat["application_type"] == "sNDA"
+    assert router.classify_scope(cat)["scope"] == router.EFFICACY_SUPPLEMENT
+
+
+def test_build_catalyst_extensions_win_over_column():
+    # extensions still take precedence over the column (event/asset metadata wins).
+    cat = fa.build_catalyst(
+        {"application_number": "210854", "application_type": "NDA",
+         "extensions": {"application_type": "sNDA"}},
+        {"extensions": {}},
+    )
+    assert cat["application_type"] == "sNDA"
+
+
 def test_build_catalyst_routes_original_from_orig_submission():
     asset = {"application_number": "NDA021436", "extensions": {}}
     event = {"extensions": {}}
