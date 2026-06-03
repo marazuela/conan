@@ -721,6 +721,7 @@ def build_features(
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
     crl: Optional[Mapping[str, Any]] = None,
+    crl_override_enabled: Optional[bool] = None,
 ) -> FeatureSnapshot:
     """Pull provider data and compose a feature snapshot for one event.
 
@@ -816,6 +817,8 @@ def build_features(
         crl_confidence=(crl or {}).get("crl_confidence"),
         crl_model_version=(crl or {}).get("crl_model_version"),
         crl_feature_coverage=(crl or {}).get("crl_feature_coverage"),
-        crl_override_enabled=_crl_override_enabled(),
+        crl_override_enabled=(
+            crl_override_enabled if crl_override_enabled is not None else _crl_override_enabled()
+        ),
     )
     return compose_features(inputs)

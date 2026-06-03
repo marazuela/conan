@@ -63,8 +63,15 @@ when that report says `go`.
    ```
    Verdict `go` = rubric beats the base-rate Brier by ≥2% over ≥20 resolved
    in-scope events.
-6. **Cut over** — set `FDA_CRL_OVERRIDE_ENABLED=true`. **Rollback** = unset it
-   (the base-rate path is untouched and restored instantly).
+6. **Cut over — logged + reversible** (requires migration `20260615000030`):
+   ```
+   python -m modal_workers.scripts.fda_crl_override_admin --status
+   python -m modal_workers.scripts.fda_crl_override_admin --enable v1 --notes "shadow verdict=go"
+   ```
+   This records + activates an `fda_model_versions` row (scope `fda_crl_override`);
+   the bridge reads it once per run. **Rollback** = `--disable` (supersedes the
+   active row → base-rate resumes instantly). `FDA_CRL_OVERRIDE_ENABLED=true|false`
+   remains an explicit force-on / emergency kill-switch that overrides the row.
 
 ## Durable follow-up
 
@@ -88,4 +95,5 @@ schedule the linker) — that's what lifts coverage from ~30% toward the whole b
 | Seam 1 (CRL threaded + observability) | `modal_workers/scanners/fda_signal_bridge.py` |
 | Application-number linker | `modal_workers/fetchers/universe/fda_application_linker.py` |
 | Forward shadow report | `modal_workers/scripts/fda_crl_shadow_report.py` |
+| Override activation (record + activate) | `modal_workers/scripts/fda_crl_override_admin.py` |
 | Migrations | `supabase/migrations/20260615*.sql` |

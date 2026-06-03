@@ -36,6 +36,7 @@ providers, mode). Tests can drive it without a database.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -157,6 +158,35 @@ def write_flags_for_mode(mode: str) -> tuple[bool, bool, bool]:
     raise ValueError(f"unknown bridge mode: {mode!r}")
 
 
+CRL_OVERRIDE_SCOPE = "fda_crl_override"
+
+
+def _crl_override_version_active(client: Any) -> bool:
+    """True when an fda_model_versions row for the CRL override scope is active
+    (effective_at set, not superseded) — the auditable, reversible cutover switch."""
+    try:
+        rows = client._rest(
+            "GET", "fda_model_versions",
+            params={"scope": f"eq.{CRL_OVERRIDE_SCOPE}", "superseded_at": "is.null",
+                    "effective_at": "not.is.null", "select": "version", "limit": 1},
+        )
+        return bool(rows)
+    except Exception:  # noqa: BLE001 — never block scoring on the switch lookup
+        return False
+
+
+def _resolve_crl_override_enabled(client: Any) -> bool:
+    """Resolve the Seam-2 override switch. Env FDA_CRL_OVERRIDE_ENABLED wins when
+    explicitly set (force-on for testing / kill-switch for emergencies); otherwise
+    an active fda_model_versions row drives it (the logged, reversible cutover)."""
+    env = os.environ.get("FDA_CRL_OVERRIDE_ENABLED", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    return _crl_override_version_active(client)
+
+
 def process_event(
     *,
     event: Mapping[str, Any],
@@ -169,6 +199,7 @@ def process_event(
     snapshot_at: Optional[datetime] = None,
     designations: Optional[Mapping[str, Any]] = None,
     crl: Optional[Mapping[str, Any]] = None,
+    crl_override_enabled: Optional[bool] = None,
 ) -> ProcessOutcome:
     """Pure single-event pipeline.
 
@@ -211,6 +242,7 @@ def process_event(
         snapshot_at=snapshot_at,
         designations=dict(designations) if designations else None,
         crl=crl,
+        crl_override_enabled=crl_override_enabled,
     )
 
     # Gate 2: no auto-Immediate without market_implied_probability.
@@ -367,6 +399,8 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
         warnings.append(polygon_warning)
 
     base_rates = load_base_rates(client)
+    # Resolve the Seam-2 override switch once per run (env wins; else active model version).
+    crl_override_enabled = _resolve_crl_override_enabled(client)
 
     # Pending events first — ordered by event_date ASC so near-term decisions
     # get scored even when the budget runs out before the tail.
@@ -460,6 +494,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
                 snapshot_at=snapshot_at,
                 designations=designations,
                 crl=crl,
+                crl_override_enabled=crl_override_enabled,
             )
         except Exception as e:  # noqa: BLE001 — one bad event must not poison the run
             warnings.append(f"process_event failed for {event_id}: {type(e).__name__}: {e}")
