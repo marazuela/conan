@@ -20,6 +20,24 @@ from orchestrator_runtime import sub_agent_dispatcher as disp
 from modal_workers.sub_agents import ROLE_REGISTRY
 from modal_workers.sub_agents.runtime import SubAgentResult, SubAgentSchemaError
 
+# Real reader captured before the autouse stub replaces it; reader-internals
+# tests restore this to exercise the live _read_role_controls implementation.
+_REAL_READ_ROLE_CONTROLS = disp._read_role_controls
+
+
+@pytest.fixture(autouse=True)
+def _isolate_role_controls(monkeypatch):
+    """Default every test to 'no DB role controls' (env path active) and reset the
+    module TTL cache, so tests make no real internal_config network call and don't
+    leak cached controls across tests. DB-gate tests override disp._read_role_controls;
+    reader-internals tests restore _REAL_READ_ROLE_CONTROLS and patch disp._client."""
+    disp._role_controls_cache = None
+    disp._role_controls_cache_at = 0.0
+    monkeypatch.setattr(disp, "_read_role_controls", lambda: {})
+    yield
+    disp._role_controls_cache = None
+    disp._role_controls_cache_at = 0.0
+
 
 # ---------- helpers ----------
 
@@ -85,7 +103,8 @@ def test_dispatch_skips_role_when_kill_switch_set(monkeypatch):
     monkeypatch.setenv("ORCH_DISABLE_LITERATURE", "1")
     disp.reset_budget()
     fake = _FakeRunner.for_role("literature", {"schema_version": 1, "asset_id": "x"})
-    with patch.dict(ROLE_REGISTRY, {"literature": fake}, clear=False):
+    with patch.dict(ROLE_REGISTRY, {"literature": fake}, clear=False), \
+         patch.object(disp, "_log_call", return_value="skip-id"):
         out = disp.dispatch_sub_agent("literature", "find papers")
     assert out.schema_pass is False
     assert out.role == "literature"
@@ -283,3 +302,118 @@ def test_log_call_persists_diagnostics(monkeypatch):
     assert captured["final_text"] == '{"schema_version": 1}'
     assert captured["stop_reason"] == "end_turn"
     assert "errors" in captured  # key present (None when no errors)
+
+
+# ---------- DB-backed per-role kill switch ----------
+
+
+def test_db_disable_skips_runner(monkeypatch):
+    """sub_agent_role_controls[role]=false short-circuits the runner with $0 spend."""
+    monkeypatch.setattr(disp, "_read_role_controls", lambda: {"literature": False})
+    disp.reset_budget()
+    fake = _FakeRunner.for_role("literature", {"schema_version": 1, "asset_id": "x"})
+    with patch.dict(ROLE_REGISTRY, {"literature": fake}, clear=False), \
+         patch.object(disp, "_log_call", return_value="skip-db"):
+        out = disp.dispatch_sub_agent("literature", "find papers")
+    assert out.schema_pass is False
+    assert out.tokens == 0
+    assert any("role_disabled_db" in e for e in out.errors)
+    assert out.sub_agent_call_id == "skip-db"
+
+
+def test_db_reenables_over_env(monkeypatch):
+    """DB is authoritative: controls[role]=true RUNS the role even when the env var
+    disables it — the runtime re-enable that needs no Modal redeploy."""
+    monkeypatch.setenv("ORCH_DISABLE_LITERATURE", "1")
+    monkeypatch.setattr(disp, "_read_role_controls", lambda: {"literature": True})
+    disp.reset_budget()
+    fake = _FakeRunner.for_role("literature", {"schema_version": 1, "asset_id": "x"})
+    with patch.dict(ROLE_REGISTRY, {"literature": fake}, clear=False), \
+         patch.object(disp, "_log_call", return_value="ran"):
+        out = disp.dispatch_sub_agent("literature", "find papers")
+    assert out.schema_pass is True
+    assert out.tokens == 500  # runner actually executed
+
+
+def test_env_fallback_when_role_absent_from_db(monkeypatch):
+    """A role the DB doesn't name still honors the ORCH_DISABLE_<ROLE> env var."""
+    monkeypatch.setattr(disp, "_read_role_controls", lambda: {"literature": False})
+    monkeypatch.setenv("ORCH_DISABLE_COMMERCIAL_OPPORTUNITY", "1")
+    disp.reset_budget()
+    fake = _FakeRunner.for_role("commercial_opportunity", {"schema_version": 1})
+    with patch.dict(ROLE_REGISTRY, {"commercial_opportunity": fake}, clear=False), \
+         patch.object(disp, "_log_call", return_value="skip-env"):
+        out = disp.dispatch_sub_agent("commercial_opportunity", "TAM?")
+    assert out.schema_pass is False
+    assert out.tokens == 0
+    assert any("role_disabled_env" in e for e in out.errors)
+
+
+def test_db_skip_logs_marker_row(monkeypatch):
+    """A DB-disabled role lands a $0 marker row in sub_agent_calls so the skip is
+    observable (env-only skips were previously invisible)."""
+    monkeypatch.setattr(disp, "_read_role_controls", lambda: {"commercial_opportunity": False})
+    disp.reset_budget()
+    captured: Dict[str, Any] = {}
+
+    def _fake_rest(method, table, *, json_body=None, prefer=None, params=None):
+        captured.update(table=table, **(json_body or {}))
+        return [{"id": "marker-1"}]
+
+    fake = _FakeRunner.for_role("commercial_opportunity", {"schema_version": 1})
+    with patch.dict(ROLE_REGISTRY, {"commercial_opportunity": fake}, clear=False), \
+         patch.object(disp._client(), "_rest", side_effect=_fake_rest):
+        out = disp.dispatch_sub_agent("commercial_opportunity", "TAM?")
+    assert out.schema_pass is False
+    assert captured["table"] == "sub_agent_calls"
+    assert captured["role"] == "commercial_opportunity"
+    assert captured["tokens"] == 0
+    assert captured["cost_usd"] == 0.0
+    assert captured["schema_pass"] is False
+    assert captured["stop_reason"] == "skipped_disabled_db"
+
+
+def test_read_role_controls_fail_open_on_db_error(monkeypatch):
+    monkeypatch.setattr(disp, "_read_role_controls", _REAL_READ_ROLE_CONTROLS)
+    disp._role_controls_cache = None
+
+    class _Boom:
+        def _rest_with_retry(self, *a, **k):
+            raise RuntimeError("supabase 5xx")
+
+    monkeypatch.setattr(disp, "_client", lambda: _Boom())
+    assert disp._read_role_controls() == {}
+
+
+def test_read_role_controls_fail_open_on_malformed_json(monkeypatch):
+    monkeypatch.setattr(disp, "_read_role_controls", _REAL_READ_ROLE_CONTROLS)
+    disp._role_controls_cache = None
+
+    class _Bad:
+        def _rest_with_retry(self, *a, **k):
+            return [{"value": "not json{"}]
+
+    monkeypatch.setattr(disp, "_client", lambda: _Bad())
+    assert disp._read_role_controls() == {}
+
+
+def test_read_role_controls_ttl_caches(monkeypatch):
+    monkeypatch.setattr(disp, "_read_role_controls", _REAL_READ_ROLE_CONTROLS)
+    disp._role_controls_cache = None
+    disp._role_controls_cache_at = 0.0
+    calls = [0]
+
+    class _Counting:
+        def _rest_with_retry(self, *a, **k):
+            calls[0] += 1
+            return [{"value": '{"literature": false}'}]
+
+    monkeypatch.setattr(disp, "_client", lambda: _Counting())
+    first = disp._read_role_controls()
+    second = disp._read_role_controls()
+    assert first == {"literature": False}
+    assert second == {"literature": False}
+    assert calls[0] == 1  # second served from the TTL cache
+    disp._role_controls_cache_at = 0.0  # force-expire
+    disp._read_role_controls()
+    assert calls[0] == 2  # re-fetched after expiry
