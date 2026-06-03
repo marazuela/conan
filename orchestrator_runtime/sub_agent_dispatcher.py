@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Dict, List, Optional
 
@@ -126,12 +127,52 @@ class DispatchOutcome:
 _sb: Optional[SupabaseClient] = None
 _running_total_tokens = 0
 
+# Per-role DB kill switch. internal_config.sub_agent_role_controls is a JSON
+# object {role: enabled_bool}; an absent role => enabled. Read with a short TTL so
+# an operator toggle lands within ~60s (well under the 5-min orchestrator-drain
+# cadence) WITHOUT a Modal redeploy, while the many dispatch_sub_agent calls in a
+# single run don't each hit Supabase. DB is authoritative when it names a role;
+# the ORCH_DISABLE_<ROLE> env var is the fallback for roles the DB omits.
+_ROLE_CONTROLS_TTL_S = 60.0
+_role_controls_cache: Optional[Dict[str, bool]] = None
+_role_controls_cache_at: float = 0.0
+
 
 def _client() -> SupabaseClient:
     global _sb
     if _sb is None:
         _sb = SupabaseClient()
     return _sb
+
+
+def _read_role_controls() -> Dict[str, bool]:
+    """Return {role: enabled_bool} from internal_config.sub_agent_role_controls.
+
+    TTL-cached (~60s) at module scope. FAIL-OPEN: on any DB/parse error return {}
+    (no role disabled by the DB; the env fallback + the per-run $15 hard-kill and
+    token caps remain the real backstops). Mirrors the read_q2_gate_mode() pattern
+    in modal_workers/scripts/audit_sample_balance.py.
+    """
+    global _role_controls_cache, _role_controls_cache_at
+    now = time.monotonic()
+    if _role_controls_cache is not None and (now - _role_controls_cache_at) < _ROLE_CONTROLS_TTL_S:
+        return _role_controls_cache
+    controls: Dict[str, bool] = {}
+    try:
+        rows = _client()._rest_with_retry(
+            "GET", "internal_config",
+            params={"select": "value", "key": "eq.sub_agent_role_controls", "limit": "1"},
+        ) or []
+        if rows:
+            raw = json.loads(rows[0].get("value") or "{}")
+            if isinstance(raw, dict):
+                controls = {str(k): bool(v) for k, v in raw.items()}
+    except Exception as exc:  # noqa: BLE001 — fail-open; env backstop still active
+        logger.warning("sub_agent_dispatcher: role-controls read failed (fail-open): %s", exc)
+        controls = {}
+    _role_controls_cache = controls
+    _role_controls_cache_at = now
+    return controls
 
 
 def _log_to_dlq(role: str, errors: List[str], payload: Dict[str, Any]) -> None:
@@ -226,19 +267,46 @@ def dispatch_sub_agent(
             latency_ms=0,
         )
 
-    if _is_role_disabled(role):
-        logger.info(
-            "sub_agent_dispatcher: role=%s disabled via ORCH_DISABLE_%s — skipping",
-            role, role.upper(),
+    # Per-role kill switch. The DB control (internal_config.sub_agent_role_controls)
+    # is authoritative when it names the role — so an operator can disable OR
+    # re-enable a role at runtime with no Modal redeploy; the ORCH_DISABLE_<ROLE>
+    # env var is the fallback for roles the DB omits.
+    _controls = _read_role_controls()
+    if role in _controls:
+        _disabled = _controls[role] is False
+        _via, _stop = "db", "skipped_disabled_db"
+        _reason = f"role_disabled_db: sub_agent_role_controls[{role}]=false"
+    else:
+        _disabled = _is_role_disabled(role)
+        _via, _stop = "env", "skipped_disabled_env"
+        _reason = f"role_disabled_env: ORCH_DISABLE_{role.upper()}=1"
+    if _disabled:
+        logger.info("sub_agent_dispatcher: role=%s disabled (via %s) — skipping", role, _via)
+        # Log a $0 marker row so the skip is observable in sub_agent_calls /
+        # v_cost_24h_by_worker (env-only skips were previously invisible).
+        call_id = _log_call(
+            assessment_id=assessment_id,
+            orchestrator_run_id=orchestrator_run_id,
+            role=role,
+            question=question,
+            output={},
+            schema_pass=False,
+            schema_retries=0,
+            tokens=0,
+            cost_usd=0.0,
+            latency_ms=0,
+            stop_reason=_stop,
+            errors=[_reason],
         )
         return DispatchOutcome(
             role=role,
             schema_pass=False,
             output={},
-            errors=[f"role_disabled: ORCH_DISABLE_{role.upper()}=1"],
+            errors=[_reason],
             tokens=0,
             cost_usd=0.0,
             latency_ms=0,
+            sub_agent_call_id=call_id,
         )
 
     cap = budget_token_cap or DEFAULT_BUDGET_TOKENS
