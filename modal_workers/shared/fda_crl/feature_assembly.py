@@ -171,10 +171,16 @@ def build_catalyst(
     submission: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Routing metadata for ``router.classify_scope`` — best-effort from asset,
-    event.extensions and (optionally) the resolved submission row."""
+    event.extensions and (optionally) the resolved submission row.
+
+    application_type resolution order: event/asset extensions -> the fda_assets
+    ``application_type`` COLUMN -> NDA/BLA prefix on application_number. The column
+    fallback is load-bearing: real fda_assets rows carry application_type in the
+    column (not in extensions) and use unprefixed application_numbers, so without
+    it the router classifies ~every catalyst as 'unclassifiable' -> refused."""
     ext = {**(asset.get("extensions") or {}), **(event.get("extensions") or {})}
     is_bla = appl_is_bla(asset.get("application_number"))
-    appl_type = ext.get("application_type")
+    appl_type = ext.get("application_type") or asset.get("application_type")
     if not appl_type and is_bla is not None:
         appl_type = "BLA" if is_bla else "NDA"
     # The event's own extensions describe THIS catalyst (e.g. a supplement

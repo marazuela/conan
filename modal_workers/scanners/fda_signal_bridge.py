@@ -429,7 +429,7 @@ def scan(cfg) -> "ScannerResult":  # noqa: F821 — runtime import to avoid circ
             "GET", "fda_assets",
             params={
                 "id": f"in.({in_clause})",
-                "select": "id,ticker,mic,entity_id,drug_name,generic_name,application_number,indication,sponsor_name,extensions",
+                "select": "id,ticker,mic,entity_id,drug_name,generic_name,application_number,application_type,indication,sponsor_name,extensions",
             },
         ) or []
         assets_by_id = {row["id"]: row for row in asset_rows}
