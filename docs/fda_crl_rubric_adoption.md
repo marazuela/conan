@@ -73,10 +73,15 @@ when that report says `go`.
    active row → base-rate resumes instantly). `FDA_CRL_OVERRIDE_ENABLED=true|false`
    remains an explicit force-on / emergency kill-switch that overrides the row.
 
-## Durable follow-up
+## Durable follow-up — implemented
 
-Fix the PDUFA watchlist scanner to capture `application_number` at the source (or
-schedule the linker) — that's what lifts coverage from ~30% toward the whole book.
+The PDUFA watchlist scanner now backfills `application_number` at the source: the
+D-046 openFDA cross-check (`_run_approval_crosscheck`) sets `application_number` +
+`nda_type` on each active entry from its already-warm openFDA cache (single-match
+only, zero extra calls), so coverage **self-heals over runs** as drugs get
+filed/indexed. The one-shot linker (`fda_application_linker --commit`) clears the
+existing backlog; the scanner keeps it current. The ~30% openFDA ceiling applies
+per run but rises naturally as pre-approval drugs reach openFDA.
 
 ## Coverage / weight notes
 
