@@ -62,7 +62,6 @@ import {
   configFlagBool,
   configThreshold,
   classPrecedentFromApprovalRate,
-  inputsFromRawPayload,
   normalizeClassField,
   scoreBcPregate,
 } from "./bc-pregate.ts";
@@ -640,36 +639,26 @@ async function processAssetDocument(link: AssetDocumentRow) {
 // ----------------------------------------------------------------------
 // WI-2 — Binary-catalyst convergence pre-gate.
 // ----------------------------------------------------------------------
-// Reads internal_config flags, resolves the triggering document back to its
-// source FDA signal payload, and returns the score + decision. This must stay
-// document-scoped: entity-wide "latest FDA signal" lookup can bleed one asset's
-// designation flags into another asset for multi-program issuers.
-
-function _recordOrNull(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
+// Reads internal_config flags + the asset's hydrated designation/sponsor inputs
+// from fda_assets, and returns the score + decision. fda_assets is keyed per drug
+// program (asset_id), so the row read is program-scoped — no risk of one program's
+// designation flags bleeding into another for a multi-program issuer. Inputs are
+// hydrated out-of-band by enrich_fda_asset_designations.py (priority_review +
+// breakthrough_designation from 8-K extracted_facts; first_time_sponsor from openFDA
+// drugsfda), decoupled from the scanner's per-scan openFDA budget that starved them.
 
 /**
- * Look up the class-peer approval rate for an asset by joining its
- * (mechanism, indication) → `fda_class_precedent_base_rates`. Returns 0
- * when the asset or the base-rates row is missing — the safe default that
- * leaves the gate's class_precedent term at 0 (i.e. behaviorally identical
- * to v1 stub).
+ * Class-peer approval rate for an asset's (mechanism, indication) →
+ * `fda_class_precedent_base_rates`. Returns 0 when either class field or the
+ * base-rates row is missing — the safe default that leaves class_precedent at 0
+ * (behaviorally identical to the v1 stub).
  */
-async function lookupClassPrecedent(asset_id: string): Promise<number> {
-  const { data: assetRow, error: assetErr } = await sb
-    .from("fda_assets")
-    .select("mechanism, indication")
-    .eq("id", asset_id)
-    .maybeSingle();
-  if (assetErr) throw assetErr;
-  if (!assetRow) return 0;
-  const asset = assetRow as { mechanism?: string | null; indication?: string | null };
-  const moa = normalizeClassField(asset.mechanism);
-  const ind = normalizeClassField(asset.indication);
+async function lookupClassPrecedentByClass(
+  mechanism: string | null | undefined,
+  indication: string | null | undefined,
+): Promise<number> {
+  const moa = normalizeClassField(mechanism);
+  const ind = normalizeClassField(indication);
   if (!moa || !ind) return 0;
   const { data: rateRow, error: rateErr } = await sb
     .from("fda_class_precedent_base_rates")
@@ -684,7 +673,7 @@ async function lookupClassPrecedent(asset_id: string): Promise<number> {
   );
 }
 
-async function evaluateBcPreGate(asset_id: string, document_id: string): Promise<{
+async function evaluateBcPreGate(asset_id: string, _document_id: string): Promise<{
   enabled: boolean;
   passed: boolean;
   score: number;
@@ -703,19 +692,22 @@ async function evaluateBcPreGate(asset_id: string, document_id: string): Promise
   const enabled = configFlagBool(cfg.get("bc_pregate_enabled") ?? null);
   const threshold = configThreshold(cfg.get("bc_pregate_threshold") ?? null);
 
-  // 2. Resolve the triggering asset_document's document. Bridge-generated
-  // signal documents carry the same source_content_hash as signals, and also
-  // embed raw_payload in documents.extensions for forensic fallback.
-  const { data: docRow, error: docErr } = await sb
-    .from("documents")
-    .select("source_content_hash, extensions")
-    .eq("id", document_id)
+  // 2. The asset's hydrated pre-gate inputs (program-scoped by asset_id).
+  const { data: assetRow, error: assetErr } = await sb
+    .from("fda_assets")
+    .select(
+      "breakthrough_designation, priority_review, first_time_sponsor, " +
+        "designations_enriched_at, mechanism, indication",
+    )
+    .eq("id", asset_id)
     .maybeSingle();
-  if (docErr) throw docErr;
-  if (!docRow) {
-    // Broken FK or deleted document. Auto-declines in active mode.
+  if (assetErr) throw assetErr;
+
+  if (!assetRow) {
+    // No asset row (broken link) — fail-open (scoreBcPregate passes 'unavailable').
     const r = scoreBcPregate({
       breakthrough_designation: false,
+      priority_review: false,
       first_time_sponsor: false,
       class_precedent: 0,
       enrichment_state: "unavailable",
@@ -723,39 +715,22 @@ async function evaluateBcPreGate(asset_id: string, document_id: string): Promise
     return { enabled, ...r };
   }
 
-  const doc = docRow as {
-    source_content_hash?: string | null;
-    extensions?: Record<string, unknown> | null;
+  const asset = assetRow as {
+    breakthrough_designation?: boolean | null;
+    priority_review?: boolean | null;
+    first_time_sponsor?: boolean | null;
+    designations_enriched_at?: string | null;
+    mechanism?: string | null;
+    indication?: string | null;
   };
-  const sourceHash = typeof doc.source_content_hash === "string" && doc.source_content_hash
-    ? doc.source_content_hash
-    : null;
 
-  let rawPayload: Record<string, unknown> | null = null;
-  if (sourceHash) {
-    const { data: sigRow, error: sigErr } = await sb
-      .from("signals")
-      .select("raw_payload, created_at")
-      .eq("source_content_hash", sourceHash)
-      .in("scoring_profile", ["binary_catalyst", "fda_event"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (sigErr) throw sigErr;
-    rawPayload = _recordOrNull((sigRow as { raw_payload?: unknown } | null)?.raw_payload);
-  }
-
-  if (!rawPayload) {
-    const extensions = _recordOrNull(doc.extensions);
-    rawPayload = _recordOrNull(extensions?.raw_payload);
-  }
-
-  if (!rawPayload) {
-    // Document exists but has no FDA signal payload. Auto-declines with
-    // 'enrichment_pending' in active mode; shadow mode persists the missing
-    // input so operators can see which document classes need enrichment.
+  if (!asset.designations_enriched_at) {
+    // Not yet enriched -> fail-open (scoreBcPregate passes 'stub'): we can't judge
+    // an un-enriched asset, so we don't decline it. enrich_fda_asset_designations.py
+    // hydrates the columns and the asset is scored normally on its next dispatch.
     const r = scoreBcPregate({
       breakthrough_designation: false,
+      priority_review: false,
       first_time_sponsor: false,
       class_precedent: 0,
       enrichment_state: "stub",
@@ -763,12 +738,15 @@ async function evaluateBcPreGate(asset_id: string, document_id: string): Promise
     return { enabled, ...r };
   }
 
-  const inputs = inputsFromRawPayload(rawPayload);
-  // Override raw_payload's class_precedent (typically absent or stubbed to 0)
-  // with the refresher-computed base rate. When the table is empty / no row
-  // exists for this asset, lookupClassPrecedent returns 0 — behaviorally
-  // identical to the v1 stub, so this is forward-compatible.
-  inputs.class_precedent = await lookupClassPrecedent(asset_id);
+  const inputs: BcPregateInputs = {
+    breakthrough_designation: asset.breakthrough_designation === true,
+    priority_review: asset.priority_review === true,
+    first_time_sponsor: asset.first_time_sponsor === true,
+    // 0 when the base-rates table is empty / no class row — forward-compatible
+    // with the (currently dormant) class-precedent refresher.
+    class_precedent: await lookupClassPrecedentByClass(asset.mechanism, asset.indication),
+    enrichment_state: "ready",
+  };
   const r = scoreBcPregate(inputs, threshold);
   return { enabled, ...r };
 }
