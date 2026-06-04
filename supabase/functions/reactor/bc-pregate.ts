@@ -21,6 +21,10 @@
 
 export interface BcPregateInputs {
   breakthrough_designation: boolean;
+  // FDA Priority Review on the in-flight submission. Sourced from 8-K
+  // extracted_facts (openFDA drugsfda has no application_number for a pending
+  // pre-PDUFA app), hydrated onto fda_assets by enrich_fda_asset_designations.py.
+  priority_review: boolean;
   first_time_sponsor: boolean;
   // approval_rate from fda_class_precedent_base_rates, ∈[0..1]. 0 = no row in
   // the refresher table OR n_total<threshold; the gate scores the term as 0.
@@ -39,12 +43,13 @@ export interface BcPregateScore {
 export const BC_PREGATE_WEIGHTS = {
   breakthrough_designation: 6,
   first_time_sponsor: 4,
+  priority_review: 3,
   class_precedent_per_unit: 5, // multiplier for the (currently-stubbed) class precedent input
 } as const;
 
-export const BC_PREGATE_MAX_SCORE_V1 = 10; // BT+6 + sponsor+4; class_precedent stubbed to 0
-export const BC_PREGATE_MAX_SCORE_V2 = 15; // adds class_precedent * 5 (refresher-populated)
-export const BC_PREGATE_DEFAULT_THRESHOLD = 6;
+export const BC_PREGATE_MAX_SCORE_V1 = 13; // BT+6 + sponsor+4 + priority+3; class_precedent stubbed to 0
+export const BC_PREGATE_MAX_SCORE_V2 = 18; // adds class_precedent * 5 (refresher-populated)
+export const BC_PREGATE_DEFAULT_THRESHOLD = 4;
 
 /**
  * Canonicalize a mechanism-of-action or indication string for lookup against
@@ -79,6 +84,7 @@ export function inputsFromRawPayload(rawPayload: Record<string, unknown>): BcPre
   const classPrecedent = rawPayload["class_precedent"];
   return {
     breakthrough_designation: rawPayload["breakthrough_designation"] === true,
+    priority_review: rawPayload["priority_review"] === true,
     first_time_sponsor: rawPayload["first_time_sponsor"] === true,
     class_precedent: typeof classPrecedent === "number" && Number.isFinite(classPrecedent)
       ? classPrecedent
@@ -97,24 +103,27 @@ export function scoreBcPregate(
 ): BcPregateScore {
   const reasons: string[] = [];
 
-  // Enrichment-pending stub assets auto-decline. The asset will be re-evaluated
-  // when enrichment completes (new material-doc INSERT triggers re-dispatch);
-  // scoring as zero would permanently decline stubs that genuinely deserve
-  // dispatch once their designation flags / sponsor history hydrate.
+  // FAIL-OPEN on missing data. The gate exists to skip OBVIOUSLY low-quality
+  // catalysts (established sponsor, no designation), which we can only judge for
+  // an enriched asset. An un-enriched ("stub") or missing ("unavailable") asset
+  // is something we CANNOT judge, so we pass it rather than decline — a false
+  // decline misses a real FDA catalyst (high cost), a false pass burns one extra
+  // orchestrator run (cents). Once enrich_fda_asset_designations.py hydrates the
+  // asset it gets scored normally on the next dispatch.
   if (inputs.enrichment_state === "stub") {
     return {
       score: 0,
       inputs,
-      reasons: ["enrichment_pending"],
-      passed: false,
+      reasons: ["enrichment_pending_fail_open"],
+      passed: true,
     };
   }
   if (inputs.enrichment_state === "unavailable") {
     return {
       score: 0,
       inputs,
-      reasons: ["enrichment_unavailable"],
-      passed: false,
+      reasons: ["enrichment_unavailable_fail_open"],
+      passed: true,
     };
   }
 
@@ -128,6 +137,11 @@ export function scoreBcPregate(
     score += BC_PREGATE_WEIGHTS.first_time_sponsor;
   } else {
     reasons.push("sponsor_has_prior_p3");
+  }
+  if (inputs.priority_review) {
+    score += BC_PREGATE_WEIGHTS.priority_review;
+  } else {
+    reasons.push("no_priority_review");
   }
   // class_precedent is a numeric input in [0..1] (or null/0 in v1 stub). When
   // the refresher table lands and class_precedent > 0, weight by the per-unit

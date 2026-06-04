@@ -27,6 +27,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function inputs(over: Partial<BcPregateInputs> = {}): BcPregateInputs {
   return {
     breakthrough_designation: false,
+    priority_review: false,
     first_time_sponsor: false,
     class_precedent: 0,
     enrichment_state: "ready",
@@ -41,14 +42,15 @@ function inputs(over: Partial<BcPregateInputs> = {}): BcPregateInputs {
 Deno.test("all-fire scores at v1 max and passes", () => {
   const result = scoreBcPregate(inputs({
     breakthrough_designation: true,
+    priority_review: true,
     first_time_sponsor: true,
     class_precedent: 0, // stubbed in v1
   }));
-  // v1 max = BT(+6) + sponsor(+4) + class_precedent(0) = 10. When the
-  // class_precedent refresher table lands and emits class_precedent=1, the
-  // composite will hit 15 — at which point we lift threshold to 9.
-  assert(result.score === BC_PREGATE_MAX_SCORE_V1, `expected max=10, got ${result.score}`);
-  assert(result.passed === true, "all-three-fire must pass");
+  // v1 max = BT(+6) + sponsor(+4) + priority(+3) + class_precedent(0) = 13. When
+  // the class_precedent refresher table lands and emits class_precedent=1, the
+  // composite hits 18.
+  assert(result.score === BC_PREGATE_MAX_SCORE_V1, `expected max=13, got ${result.score}`);
+  assert(result.passed === true, "all-fire must pass");
   assert(result.reasons.length === 0, "passed case carries no reasons");
 });
 
@@ -75,22 +77,23 @@ Deno.test("breakthrough + first-time sponsor = 10, comfortable pass", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Case 3 — one fire below threshold → decline
+// Case 3 — threshold boundary (default = 4: decline only zero-signal assets)
 // ---------------------------------------------------------------------------
 
-Deno.test("first-time sponsor alone scores 4, declines (below threshold)", () => {
-  const result = scoreBcPregate(inputs({
-    first_time_sponsor: true,
-  }));
+Deno.test("priority-review alone scores 3, declines below default threshold 4", () => {
+  const result = scoreBcPregate(inputs({ priority_review: true }));
+  assert(result.score === BC_PREGATE_WEIGHTS.priority_review,
+    `priority alone = ${BC_PREGATE_WEIGHTS.priority_review}`);
+  assert(result.passed === false, "score 3 < default threshold 4 must decline");
+  assert(result.reasons.includes("no_breakthrough_designation"));
+  assert(result.reasons.includes("sponsor_has_prior_p3"));
+});
+
+Deno.test("first-time sponsor alone scores 4, passes at default threshold 4 (boundary)", () => {
+  const result = scoreBcPregate(inputs({ first_time_sponsor: true }));
   assert(result.score === BC_PREGATE_WEIGHTS.first_time_sponsor,
     `sponsor alone = ${BC_PREGATE_WEIGHTS.first_time_sponsor}`);
-  assert(result.passed === false, "score 4 < threshold 6 must decline");
-  // Reasons should call out which signals failed to fire so operators can
-  // distinguish "scored low because of A" from "scored low because of B".
-  assert(result.reasons.includes("no_breakthrough_designation"),
-    "decline reasons must include no_breakthrough_designation");
-  assert(result.reasons.includes("class_precedent_unknown"),
-    "decline reasons must include class_precedent_unknown (v1 stub)");
+  assert(result.passed === true, "score 4 >= default threshold 4 passes (>=)");
 });
 
 Deno.test("zero-fire scores 0, declines with all reasons", () => {
@@ -98,50 +101,45 @@ Deno.test("zero-fire scores 0, declines with all reasons", () => {
   assert(result.score === 0, "zero inputs scores 0");
   assert(result.passed === false, "must decline");
   assert(result.reasons.includes("no_breakthrough_designation"));
+  assert(result.reasons.includes("no_priority_review"));
   assert(result.reasons.includes("sponsor_has_prior_p3"));
   assert(result.reasons.includes("class_precedent_unknown"));
 });
 
 // ---------------------------------------------------------------------------
-// Case 4 — enrichment_pending stub → auto-decline with specific reason
+// Case 4 — missing data → FAIL-OPEN (can't judge an un-enriched asset, so pass)
 // ---------------------------------------------------------------------------
 
-Deno.test("enrichment_state='stub' auto-declines with enrichment_pending reason", () => {
-  const result = scoreBcPregate(inputs({
-    breakthrough_designation: true,
-    first_time_sponsor: true,
-    enrichment_state: "stub",
-  }));
-  assert(result.passed === false, "stub asset must decline regardless of designation flags");
-  assert(result.score === 0, "stub asset short-circuits before scoring");
-  assert(result.reasons.length === 1 && result.reasons[0] === "enrichment_pending",
-    "stub asset emits exactly enrichment_pending reason — re-dispatch path picks up the row when enrichment completes");
+Deno.test("enrichment_state='stub' fails open (passes) with fail_open reason", () => {
+  const result = scoreBcPregate(inputs({ enrichment_state: "stub" }));
+  assert(result.passed === true, "un-enriched asset fails open — we don't decline what we can't judge");
+  assert(result.score === 0, "stub short-circuits before scoring");
+  assert(result.reasons.length === 1 && result.reasons[0] === "enrichment_pending_fail_open",
+    "stub emits exactly enrichment_pending_fail_open — gets scored normally once enriched");
 });
 
-Deno.test("enrichment_state='unavailable' declines with enrichment_unavailable", () => {
-  const result = scoreBcPregate(inputs({
-    breakthrough_designation: true,
-    enrichment_state: "unavailable",
-  }));
-  assert(result.passed === false);
-  assert(result.reasons[0] === "enrichment_unavailable");
+Deno.test("enrichment_state='unavailable' fails open (passes)", () => {
+  const result = scoreBcPregate(inputs({ enrichment_state: "unavailable" }));
+  assert(result.passed === true, "missing asset fails open rather than declining a possibly-real catalyst");
+  assert(result.reasons[0] === "enrichment_unavailable_fail_open");
 });
 
 // ---------------------------------------------------------------------------
 // Case 5 — class_precedent post-refresher (future state)
 // ---------------------------------------------------------------------------
 
-Deno.test("class_precedent=1 lifts score to v2 max=15", () => {
+Deno.test("class_precedent=1 lifts score to v2 max=18", () => {
   // With the refresher table populated, class_precedent ∈[0..1] is the
   // approval_rate from fda_class_precedent_base_rates. The per-unit
-  // multiplier (5) lifts the max composite to 15.
+  // multiplier (5) lifts the max composite to 18.
   const result = scoreBcPregate(inputs({
     breakthrough_designation: true,
+    priority_review: true,
     first_time_sponsor: true,
     class_precedent: 1.0,
   }));
   assert(result.score === BC_PREGATE_MAX_SCORE_V2,
-    `BT(6) + sponsor(4) + class(1*5)=15, got ${result.score}`);
+    `BT(6) + sponsor(4) + priority(3) + class(1*5)=18, got ${result.score}`);
   assert(result.passed === true);
 });
 
@@ -157,13 +155,24 @@ Deno.test("class_precedent fractional values weight proportionally", () => {
 // payload, not the latest entity-wide FDA signal.
 // ---------------------------------------------------------------------------
 
+Deno.test("priority_review contributes exactly its weight (+3)", () => {
+  const withPriority = scoreBcPregate(inputs({ priority_review: true }));
+  const without = scoreBcPregate(inputs());
+  assert(withPriority.score - without.score === BC_PREGATE_WEIGHTS.priority_review,
+    `priority delta should be ${BC_PREGATE_WEIGHTS.priority_review}`);
+  assert(without.reasons.includes("no_priority_review"),
+    "absent priority_review surfaces a reason");
+});
+
 Deno.test("inputsFromRawPayload reads designation and sponsor flags only from payload", () => {
   const parsed = inputsFromRawPayload({
     breakthrough_designation: true,
+    priority_review: true,
     first_time_sponsor: true,
     class_precedent: 0.4,
   });
   assert(parsed.breakthrough_designation === true);
+  assert(parsed.priority_review === true);
   assert(parsed.first_time_sponsor === true);
   assert(parsed.class_precedent === 0.4);
   assert(parsed.enrichment_state === "ready");
