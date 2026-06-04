@@ -971,6 +971,39 @@ def bc_class_precedent_refresh_worker(
     )
 
 
+@app.function(
+    image=image,
+    timeout=900,  # per-asset openFDA sponsor lookup + PATCH; headroom as the
+                  # active universe grows past today's ~80 assets
+    secrets=[supabase_secrets],
+)
+def enrich_fda_asset_designations_worker(
+    stale_hours: int = 20,
+    limit: int = 500,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Hydrate the fda_assets binary-catalyst pre-gate inputs (priority_review,
+    breakthrough_designation, sponsor_prior_nda_count, first_time_sponsor,
+    designations_enriched_at). The reactor's bc-pregate reads these at dispatch;
+    un-enriched assets fail-open (pass), so new/changed assets stay ungated until
+    this runs. The daily cron passes stale_hours=20 so the 24h cadence re-enriches
+    the whole universe while a same-day manual run isn't reprocessed. Enricher +
+    inputs land in PR #200; see
+    modal_workers/scripts/enrich_fda_asset_designations.py."""
+    from modal_workers.scripts.enrich_fda_asset_designations import main
+
+    argv = ["--stale-hours", str(stale_hours), "--limit", str(limit)]
+    if dry_run:
+        argv.append("--dry-run")
+    exit_code = main(argv)
+    return {
+        "exit_code": exit_code,
+        "stale_hours": stale_hours,
+        "limit": limit,
+        "dry_run": dry_run,
+    }
+
+
 # ============================================================================
 # compute_v3_dispatch — multiplex FastAPI endpoint
 #
@@ -1018,6 +1051,7 @@ COMPUTE_V3_ACTIONS = frozenset({
     "calibration_refit_run",
     "fda_event_harvest_daily",
     "bc_class_precedent_refresh",
+    "enrich_fda_asset_designations",
 })
 
 # Spawn-only actions: dispatch fires the worker and returns immediately. Used
@@ -1034,6 +1068,7 @@ _SPAWN_ONLY_ACTIONS: Dict[str, str] = {
     "calibration_refit_run": "calibration_refit_run_worker",
     "fda_event_harvest_daily": "fda_event_harvest_daily_worker",
     "bc_class_precedent_refresh": "bc_class_precedent_refresh_worker",
+    "enrich_fda_asset_designations": "enrich_fda_asset_designations_worker",
 }
 
 
@@ -1193,6 +1228,17 @@ def _dispatch_compute_v3_action(action: str, args: Dict[str, Any]) -> Dict[str, 
         )
         kwargs = {}
         for k in ("lookback_years", "apply"):
+            if k in args:
+                kwargs[k] = args[k]
+        handle = fn.spawn(**kwargs)
+        return {"spawned": True, "function_call_id": handle.object_id}
+
+    if action == "enrich_fda_asset_designations":
+        fn = modal.Function.from_name(
+            "conan-v3-orchestrator", "enrich_fda_asset_designations_worker",
+        )
+        kwargs = {}
+        for k in ("stale_hours", "limit", "dry_run"):
             if k in args:
                 kwargs[k] = args[k]
         handle = fn.spawn(**kwargs)

@@ -175,6 +175,8 @@ def test_compute_v3_actions_set_matches_dispatcher_branches():
         "fda_event_harvest_daily",
         # D-129 WI-2 follow-up (2026-05-25)
         "bc_class_precedent_refresh",
+        # BC pre-gate designation enrichment — PR #200 follow-up (2026-06-04)
+        "enrich_fda_asset_designations",
     })
 
 
@@ -576,6 +578,35 @@ def test_dispatch_bc_class_precedent_refresh_passes_tuning_args(monkeypatch):
     assert captured["kwargs"] == {"lookback_years": 5, "apply": False}
 
 
+def test_dispatch_enrich_fda_asset_designations_spawns_worker(monkeypatch):
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    out = _dispatch_compute_v3_action("enrich_fda_asset_designations", {})
+    assert out["spawned"] is True
+    assert captured["app"] == "conan-v3-orchestrator"
+    assert captured["fn"] == "enrich_fda_asset_designations_worker"
+    assert captured["kwargs"] == {}
+
+
+def test_dispatch_enrich_fda_asset_designations_passes_tuning_args(monkeypatch):
+    """stale_hours/limit/dry_run reach the worker; unknown keys are dropped so
+    the worker signature stays canonical (mirrors the daily cron, which sends
+    only stale_hours)."""
+    captured = _patched_spawn(monkeypatch)
+    from modal_workers.orchestrator_app import _dispatch_compute_v3_action
+
+    _dispatch_compute_v3_action("enrich_fda_asset_designations", {
+        "stale_hours": 20,
+        "limit": 100,
+        "dry_run": True,
+        "ignored": "dropped",
+    })
+    assert captured["kwargs"] == {
+        "stale_hours": 20, "limit": 100, "dry_run": True,
+    }
+
+
 def test_spawn_only_actions_set_is_documented():
     """The _SPAWN_ONLY_ACTIONS map must list every spawn action so the
     multiplex can't develop two ways to spawn (one via if-chain, one via
@@ -588,6 +619,6 @@ def test_spawn_only_actions_set_is_documented():
     for action in (
         "earnings_calendar_fetch_daily", "fomc_calendar_refresh",
         "q1_audit_run", "q2_audit_run", "fda_event_harvest_daily",
-        "bc_class_precedent_refresh",
+        "bc_class_precedent_refresh", "enrich_fda_asset_designations",
     ):
         assert action in _SPAWN_ONLY_ACTIONS
