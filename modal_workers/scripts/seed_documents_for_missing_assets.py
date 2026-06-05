@@ -23,20 +23,21 @@ Adapters used:
   - federal_register.ingest_keyword_search(drug_name)
   - edgar.ingest_keyword_search(drug_name, forms="8-K,10-K,10-Q,S-1") — opt-in
 
-clinicaltrials is the most valuable: the asset_linker pass-1 source allowlist
-is currently `('clinicaltrials',)` (see modal_workers/extractor/asset_linker.py
-SOURCE_ALLOWLIST), so newly-ingested clinicaltrials docs will get classified
-into asset_documents automatically when the linker next runs. For the other
-sources, the title-match heuristic in backfill_v3_assessments.py will now
-find a match where it didn't before, even before the linker catches up.
+clinicaltrials is the most valuable: asset_linker pass-1 source eligibility
+resolves to `clinicaltrials` for the current trial-stage universe (derived from
+fda_assets.program_status via asset_linker_source_eligibility — issue #54), so
+newly-ingested clinicaltrials docs will get classified into asset_documents
+automatically when the linker next runs. For the other sources, the title-match
+heuristic in backfill_v3_assessments.py will now find a match where it didn't
+before, even before the linker catches up.
 
 EDGAR is opt-in (--with-edgar) because:
   - It requires SEC_USER_AGENT to be set,
   - The keyword search for short drug-name tokens returns lots of unrelated
     sponsor 8-Ks, and
-  - The asset_linker's source allowlist excludes EDGAR right now (a
-    2026-05-13 gold-set eval saw 0% pass-1 yield from EDGAR — see the
-    SOURCE_ALLOWLIST comment in asset_linker.py).
+  - asset_linker's source-eligibility rules exclude EDGAR right now (a
+    2026-05-13 gold-set eval saw 0% pass-1 yield from EDGAR — edgar maps to no
+    program_status in asset_linker_source_eligibility).
 
 Run:
   SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… \\
@@ -322,8 +323,8 @@ def ingest_one_asset(
             out.errors += 1
 
     # 1) ClinicalTrials.gov keyword search — try EACH query (drug_name tokens
-    # + compound_codes aliases). asset_linker actively classifies these per
-    # SOURCE_ALLOWLIST=('clinicaltrials',).
+    # + compound_codes aliases). asset_linker actively classifies these
+    # (clinicaltrials is source-eligible for the trial-stage universe).
     for query in queries:
         try:
             r = clinicaltrials_ingest.ingest_search(
@@ -373,9 +374,9 @@ def ingest_one_asset(
                        out.ticker, queries[0], exc)
         out.errors += 1
 
-    # 4) EDGAR — opt-in. asset_linker doesn't classify EDGAR docs (per
-    # SOURCE_ALLOWLIST), but the title-match heuristic in
-    # backfill_v3_assessments will pick them up.
+    # 4) EDGAR — opt-in. asset_linker doesn't classify EDGAR docs (edgar is not
+    # source-eligible in asset_linker_source_eligibility), but the title-match
+    # heuristic in backfill_v3_assessments will pick them up.
     if with_edgar:
         try:
             r = edgar_ingest.ingest_keyword_search(

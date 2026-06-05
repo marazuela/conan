@@ -11,9 +11,10 @@ Two modes:
   incremental (daily; daily_incremental_label)
     Sample 50 random new docs ingested in the last 24h, skip any already
     in asset_linker_gold_set, label with Sonnet 4.6. Designed for Phase 4
-    continuous-eval — catches recall drift when (a) the SOURCE_ALLOWLIST
-    becomes wrong as new approved-stage assets enter the universe, or (b)
-    pass-1 model behavior changes. ~$1–3 per daily run.
+    continuous-eval — catches recall drift when (a) the source-eligibility
+    rules (asset_linker_source_eligibility, issue #54) miss a source as new
+    approved-stage assets enter the universe, or (b) pass-1 model behavior
+    changes. ~$1–3 per daily run.
 
 Design rationale:
   - Primary labeler is Sonnet 4.6 (single-pass) with prompt caching on the
@@ -434,8 +435,9 @@ def label_gold_set(target_count: int = 500, arbitrate: bool = False, dry_run: bo
 def daily_incremental_label(target_count: int = 50, arbitrate: bool = False) -> Dict[str, Any]:
     """Daily continuous-eval — sample 50 random new docs from last 24h that
     aren't already in the gold set, label with Sonnet 4.6, persist. Designed
-    to catch recall drift when the SOURCE_ALLOWLIST or pass-1 model behavior
-    becomes wrong as the universe evolves.
+    to catch recall drift when the source-eligibility rules
+    (asset_linker_source_eligibility, issue #54) or pass-1 model behavior
+    become wrong as the universe evolves.
 
     Schedule: 03:00 UTC daily via @modal.function(schedule=...). If the Modal
     free-tier 5-schedules cap blocks this, fall back to pg_cron + an HTTP

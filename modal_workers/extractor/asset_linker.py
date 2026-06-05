@@ -60,30 +60,29 @@ MODEL = os.environ.get("ASSET_LINKER_PASS1_MODEL", "claude-sonnet-4-5-20250929")
 MAX_DOC_TOKENS_FOR_LINKER = 80_000
 TRIM_WINDOW_CHARS = 4_000  # window around each regex hit when trimming
 
-# Source allowlist for pass-1. Derived from a 2026-05-13 gold-set evaluation
-# (500 docs, stratified by source, Sonnet 4.6 labeler against active fda_assets):
+# Source eligibility for pass-1 is now DATA-DRIVEN off fda_assets.program_status
+# via the asset_linker_source_eligibility table (issue #54), replacing the old
+# hardcoded SOURCE_ALLOWLIST = ('clinicaltrials',) constant.
 #
-#     source            labeled  positives  rate
-#     dailymed              150          0   0.0%
-#     edgar                 100          0   0.0%
-#     openfda               100          0   0.0%
-#     federal_register       75          0   0.0%
-#     clinicaltrials         75         14  18.7%
+# WHY it was hardcoded: a 2026-05-13 gold-set evaluation (500 docs, stratified by
+# source, Sonnet 4.6 labeler) showed 100% of real links in the trial-stage
+# universe come from clinicaltrials; dailymed/edgar/openfda/federal_register
+# contributed 0/425. Correct then, but wrong the moment a post-approval asset
+# enters fda_assets (dailymed labels, openfda pharmacovigilance, federal_register
+# AdCom notices all become real link sources). A constant needed a code+deploy on
+# every universe-shape change.
 #
-# With the current 35-active-asset universe (heavily weighted toward AXS-05
-# and other trial-stage drugs), only clinicaltrials produces real links.
-# Spot-checks of 24 zero-label dailymed + 24 from edgar/openfda/fed_register
-# confirmed the labels: dailymed is OTC + generics, edgar is dominated by
-# Morgan Stanley structured-finance filings, openfda is ANDAs for generics,
-# federal_register is mostly Medicare/NOAA/HUD non-drug content. None of it
-# overlaps with the active universe.
-#
-# TODO: when post-approval assets enter fda_assets (program_status in
-# {'approved','post_marketing'}), broaden the allowlist to include dailymed
-# + openfda + federal_register. Eventually this should be derived from
-# fda_assets.program_status instead of hardcoded. The eligibility table
-# pattern lives in `~/.claude/plans/asset-linker-yield-optimization.md`.
-SOURCE_ALLOWLIST = ("clinicaltrials",)
+# NOW: load_eligible_sources() resolves the eligible source set from the
+# asset_linker_eligible_sources view (program_status -> source rules joined
+# against the active universe), so onboarding an approved asset auto-widens the
+# eligible sources with no code change. The orphan-status watchdog
+# (_asset_linker_source_eligibility_watchdog) flags any program_status the rule
+# table does not yet cover.
+
+# Fallback used by load_eligible_sources() if the eligibility view resolves to an
+# empty set or is unreadable — keeps the linker on its historically-safe source
+# rather than going dark (the resolve happens on every cron tick).
+FALLBACK_ELIGIBLE_SOURCES = ("clinicaltrials",)
 
 # Pydantic-ish output schema for the model
 LINK_TYPES = {"primary", "mentions", "pipeline_context", "safety_signal", "literature"}
@@ -264,9 +263,49 @@ def _active_asset_set_hash(client: SupabaseClient) -> str:
     return hashlib.md5(payload).hexdigest()
 
 
+def load_eligible_sources(client: SupabaseClient) -> List[str]:
+    """Resolve the DISTINCT documents.source values worth classifying for the
+    current active fda_assets universe, from the asset_linker_eligible_sources
+    view (which joins asset_linker_source_eligibility against active assets).
+
+    This is the dynamic replacement for the old SOURCE_ALLOWLIST constant
+    (issue #54): a post-approval asset entering fda_assets auto-widens the set
+    to dailymed/openfda/federal_register with no code change.
+
+    Fails safe: if the view resolves to an empty set (no active asset's
+    program_status maps to any source) or is unreadable, returns
+    FALLBACK_ELIGIBLE_SOURCES (clinicaltrials) so the linker keeps working on
+    its historically-safe source instead of going dark. The orphan-status
+    watchdog raises an operator_flag when a status is uncovered.
+    """
+    try:
+        rows = client._rest(
+            "GET", "asset_linker_eligible_sources",
+            params={"select": "source"},
+        ) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("eligible-sources lookup failed (%s); falling back to %s",
+                       exc, FALLBACK_ELIGIBLE_SOURCES)
+        return list(FALLBACK_ELIGIBLE_SOURCES)
+    sources = sorted({r["source"] for r in rows
+                      if isinstance(r, dict) and r.get("source")})
+    if not sources:
+        logger.warning(
+            "No eligible sources resolved from asset_linker_source_eligibility — "
+            "no active asset's program_status maps to any source. Falling back to "
+            "%s to avoid a dark linker; check the "
+            "asset_linker_source_eligibility_orphan operator_flag.",
+            FALLBACK_ELIGIBLE_SOURCES,
+        )
+        return list(FALLBACK_ELIGIBLE_SOURCES)
+    logger.info("Eligible pass-1 sources (from program_status rules): %s", sources)
+    return sources
+
+
 def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
                            doc_ids: Optional[List[str]] = None,
                            asset_set_hash: Optional[str] = None,
+                           eligible_sources: Optional[List[str]] = None,
                            ) -> List[Dict[str, Any]]:
     """Pull documents that need pass-1 evaluation. Newest-first so the most
     recent material lands quickly during a backfill.
@@ -286,6 +325,12 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
 
     `asset_set_hash` is the md5 produced by _active_asset_set_hash. Required
     in cron mode; ignored when `doc_ids` is set.
+
+    `eligible_sources` is the dynamic source allowlist (issue #54). When None
+    or empty in cron mode it is resolved via load_eligible_sources(client);
+    callers may pass an explicit non-empty list to avoid the extra query.
+    Ignored when `doc_ids` is set (the operator override bypasses source
+    filtering).
     """
     select = ",".join([
         "id", "source", "doc_type", "title", "url",
@@ -309,11 +354,17 @@ def load_documents_to_link(client: SupabaseClient, max_docs: int = 200,
         f"linker_classified_asset_set_hash.is.null,"
         f"linker_classified_asset_set_hash.neq.{asset_set_hash})"
     )
-    # Source allowlist: avoid paying Sonnet to classify docs whose source
-    # genuinely has no overlap with the active fda_assets universe (gold-set
-    # evidence above SOURCE_ALLOWLIST). PostgREST `in.(...)` accepts a
+    # Source allowlist: avoid paying Sonnet to classify docs whose source has no
+    # overlap with the active fda_assets universe. Resolved dynamically from
+    # fda_assets.program_status (issue #54) instead of a hardcoded constant, so a
+    # post-approval asset auto-widens the set. PostgREST `in.(...)` accepts a
     # comma-separated list.
-    source_filter = f"in.({','.join(SOURCE_ALLOWLIST)})"
+    # Resolve on None OR empty: an empty list would build `in.()` and match zero
+    # docs (a silently-dark linker). load_eligible_sources falls back to
+    # clinicaltrials rather than ever returning empty.
+    if not eligible_sources:
+        eligible_sources = load_eligible_sources(client)
+    source_filter = f"in.({','.join(eligible_sources)})"
     rows = client._rest(
         "GET", "documents",
         params={

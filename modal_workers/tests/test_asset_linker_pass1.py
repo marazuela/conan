@@ -31,6 +31,7 @@ for _k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "ANTHROPIC_API_KEY"):
 import anthropic
 
 from modal_workers.extractor.asset_linker import (
+    FALLBACK_ELIGIBLE_SOURCES,
     LinkerStats,
     PREFILTER_EXCLUDED_DOC_TYPES,
     _active_asset_set_hash,
@@ -40,6 +41,7 @@ from modal_workers.extractor.asset_linker import (
     build_keyword_index,
     classify_document,
     load_documents_to_link,
+    load_eligible_sources,
     prefilter_doc,
 )
 
@@ -528,7 +530,11 @@ def test_load_documents_filters_unclassified_or_stale_hash():
     sb = MagicMock()
     sb._rest = MagicMock(return_value=[_doc()])
 
-    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH)
+    # Pass eligible_sources explicitly so the function makes exactly one _rest
+    # call (the documents fetch) — the internal-resolve path is covered
+    # separately in test_load_documents_resolves_eligible_sources_when_none.
+    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH,
+                           eligible_sources=["clinicaltrials"])
 
     sb._rest.assert_called_once()
     call = sb._rest.call_args
@@ -544,6 +550,9 @@ def test_load_documents_filters_unclassified_or_stale_hash():
     assert "linker_classified_asset_set_hash.is.null" in or_value
     assert f"linker_classified_asset_set_hash.neq.{_TEST_HASH}" in or_value
     assert params.get("order") == "published_at.desc"
+    # Dynamic source filter (issue #54): replaces the old hardcoded
+    # SOURCE_ALLOWLIST = ('clinicaltrials',).
+    assert params.get("source") == "in.(clinicaltrials)"
 
 
 def test_load_documents_requires_hash_in_cron_mode():
@@ -583,6 +592,179 @@ def test_load_documents_does_not_query_asset_documents():
             "load_documents_to_link should NOT query asset_documents — that "
             "two-query JOIN-in-Python pattern caused the no-progress loop."
         )
+
+
+# ---------------------------------------------------------------------------
+# load_eligible_sources + dynamic source filter — issue #54: source eligibility
+# is derived from fda_assets.program_status (asset_linker_eligible_sources view)
+# instead of a hardcoded SOURCE_ALLOWLIST = ('clinicaltrials',) constant.
+# ---------------------------------------------------------------------------
+
+def test_load_eligible_sources_resolves_from_view():
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[{"source": "clinicaltrials"}])
+
+    out = load_eligible_sources(sb)
+
+    assert out == ["clinicaltrials"]
+    call = sb._rest.call_args
+    assert call.args[0] == "GET"
+    assert call.args[1] == "asset_linker_eligible_sources"
+    assert call.kwargs["params"].get("select") == "source"
+
+
+def test_load_eligible_sources_dedups_and_sorts():
+    """Multiple assets can map the same source; the view DISTINCTs but a defensive
+    de-dup + stable sort keeps the PostgREST `in.(...)` filter deterministic.
+    Null/empty source rows are ignored."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[
+        {"source": "openfda"}, {"source": "dailymed"},
+        {"source": "clinicaltrials"}, {"source": "dailymed"},
+        {"source": None}, {"source": ""},
+    ])
+
+    out = load_eligible_sources(sb)
+
+    assert out == ["clinicaltrials", "dailymed", "openfda"]
+
+
+def test_load_eligible_sources_falls_back_when_empty():
+    """No active asset's program_status maps to any source — fall back to
+    clinicaltrials so the linker never goes dark (the orphan watchdog flags it)."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[])
+
+    out = load_eligible_sources(sb)
+
+    assert out == list(FALLBACK_ELIGIBLE_SOURCES)
+    assert out == ["clinicaltrials"]
+
+
+def test_load_eligible_sources_falls_back_on_error():
+    """A failed view read must NOT crash pass-1 — fall back to clinicaltrials."""
+    sb = MagicMock()
+    sb._rest = MagicMock(side_effect=Exception("PostgREST 503"))
+
+    out = load_eligible_sources(sb)
+
+    assert out == ["clinicaltrials"]
+
+
+def test_load_documents_applies_dynamic_source_filter():
+    """The resolved eligible_sources list drives the PostgREST source filter,
+    so an approved asset (dailymed/openfda eligible) is reflected verbatim."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[_doc()])
+
+    load_documents_to_link(
+        sb, max_docs=20, asset_set_hash=_TEST_HASH,
+        eligible_sources=["clinicaltrials", "dailymed", "openfda", "federal_register"],
+    )
+
+    sb._rest.assert_called_once()
+    params = sb._rest.call_args.kwargs["params"]
+    assert params.get("source") == "in.(clinicaltrials,dailymed,openfda,federal_register)"
+
+
+def test_load_documents_resolves_eligible_sources_when_none():
+    """When eligible_sources is not passed, load_documents_to_link resolves it
+    via the view, then filters documents by the resolved set."""
+    sb = MagicMock()
+
+    def _rest(method, path, **kwargs):
+        if method == "GET" and path == "asset_linker_eligible_sources":
+            return [{"source": "clinicaltrials"}, {"source": "dailymed"}]
+        if method == "GET" and path == "documents":
+            return [_doc()]
+        raise AssertionError(f"unexpected call {method} {path}")
+    sb._rest = MagicMock(side_effect=_rest)
+
+    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH)
+
+    paths = [c.args[1] for c in sb._rest.call_args_list]
+    assert "asset_linker_eligible_sources" in paths
+    docs_call = [c for c in sb._rest.call_args_list if c.args[1] == "documents"][0]
+    assert docs_call.kwargs["params"].get("source") == "in.(clinicaltrials,dailymed)"
+
+
+def test_load_documents_resolves_when_eligible_sources_empty():
+    """An explicitly-empty list must trigger resolution, not build `in.()`
+    (which would match zero docs — a silently-dark linker)."""
+    sb = MagicMock()
+
+    def _rest(method, path, **kwargs):
+        if method == "GET" and path == "asset_linker_eligible_sources":
+            return [{"source": "clinicaltrials"}]
+        if method == "GET" and path == "documents":
+            return [_doc()]
+        raise AssertionError(f"unexpected call {method} {path}")
+    sb._rest = MagicMock(side_effect=_rest)
+
+    load_documents_to_link(sb, max_docs=20, asset_set_hash=_TEST_HASH,
+                           eligible_sources=[])
+
+    docs_call = [c for c in sb._rest.call_args_list if c.args[1] == "documents"][0]
+    src = docs_call.kwargs["params"].get("source")
+    assert src == "in.(clinicaltrials)"
+    assert src != "in.()"
+
+
+def test_load_documents_doc_ids_override_skips_source_resolution():
+    """The --doc-ids operator override targets specific rows regardless of
+    source, so it must NOT resolve or apply the source-eligibility filter."""
+    sb = MagicMock()
+    sb._rest = MagicMock(return_value=[_doc()])
+
+    load_documents_to_link(sb, max_docs=20, doc_ids=["doc-1"])
+
+    paths = [c.args[1] for c in sb._rest.call_args_list]
+    assert "asset_linker_eligible_sources" not in paths
+    assert sb._rest.call_args.kwargs["params"].get("source") is None
+
+
+def test_smoke_only_clinicaltrials_when_no_approved_assets():
+    """Issue #54 acceptance (smoke): with no approved assets, the view resolves
+    clinicaltrials only, so pass-1 filters source=in.(clinicaltrials) — identical
+    to the retired SOURCE_ALLOWLIST behavior."""
+    sb = MagicMock()
+
+    def _rest(method, path, **kwargs):
+        if method == "GET" and path == "asset_linker_eligible_sources":
+            return [{"source": "clinicaltrials"}]
+        if method == "GET" and path == "documents":
+            return [_doc()]
+        raise AssertionError(f"unexpected call {method} {path}")
+    sb._rest = MagicMock(side_effect=_rest)
+
+    load_documents_to_link(sb, max_docs=50, asset_set_hash=_TEST_HASH)
+
+    docs_call = [c for c in sb._rest.call_args_list if c.args[1] == "documents"][0]
+    assert docs_call.kwargs["params"].get("source") == "in.(clinicaltrials)"
+
+
+def test_manual_approved_asset_widens_to_dailymed_openfda():
+    """Issue #54 acceptance (manual): once an approved asset is present, the view
+    resolves dailymed/openfda/federal_register alongside clinicaltrials, so pass-1
+    begins pulling those sources."""
+    sb = MagicMock()
+
+    def _rest(method, path, **kwargs):
+        if method == "GET" and path == "asset_linker_eligible_sources":
+            return [{"source": "clinicaltrials"}, {"source": "dailymed"},
+                    {"source": "openfda"}, {"source": "federal_register"}]
+        if method == "GET" and path == "documents":
+            return [_doc()]
+        raise AssertionError(f"unexpected call {method} {path}")
+    sb._rest = MagicMock(side_effect=_rest)
+
+    load_documents_to_link(sb, max_docs=50, asset_set_hash=_TEST_HASH)
+
+    src = ([c for c in sb._rest.call_args_list
+            if c.args[1] == "documents"][0].kwargs["params"].get("source"))
+    assert src.startswith("in.(")
+    for s in ("clinicaltrials", "dailymed", "openfda", "federal_register"):
+        assert s in src, f"expected {s} in dynamic source filter, got {src!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -828,6 +1010,10 @@ def patched_main_env():
     def _rest_router(method, path, **kwargs):
         if method == "GET" and path == "fda_assets":
             return _assets()
+        if method == "GET" and path == "asset_linker_eligible_sources":
+            # _doc() rows are source="dailymed"; keep the resolved eligible set
+            # consistent so the e2e path exercises a non-trivial source filter.
+            return [{"source": "dailymed"}]
         if method == "GET" and path == "documents":
             return [_doc("doc-A"), _doc("doc-B"), _doc("doc-C")]
         if method == "POST" and path == "asset_linker_runs":
