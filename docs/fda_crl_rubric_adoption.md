@@ -73,6 +73,22 @@ when that report says `go`.
    active row → base-rate resumes instantly). `FDA_CRL_OVERRIDE_ENABLED=true|false`
    remains an explicit force-on / emergency kill-switch that overrides the row.
 
+   **Cross-effect to handle at cutover:** activating the override makes the rubric
+   source-of-truth for in-scope originals, which **supersedes** the per-agent
+   `fair_probability` composition there — notably `fda_medical_review`'s
+   `medical_fair_probability_modifier` is discarded for those events (it still
+   fully applies to supplements, resubmissions, non-NDA/BLA, and base-rate
+   fallbacks). When you flip the switch, update the `fda_medical_review`
+   scheduled-task prompt line *"the bridge will use the row but won't over-weight
+   it"* to note this supersession. (`fda_regulatory_review`'s confidence boost and
+   `fda_microstructure_review`'s market-side modifiers are unaffected — Seam 2
+   only touches `fair_probability`.)
+
+   **Pre-created scheduled-task stubs (disabled, in `~/.claude/scheduled-tasks/`):**
+   `fda-crl-shadow-report` (weekly — runs step 5's report + recommends activation
+   on a `go` verdict) and `fda-crl-application-linker` (weekly — backstop to the
+   in-scanner self-heal). Enable them post-deploy; both are inert until then.
+
 ## Durable follow-up — implemented
 
 The PDUFA watchlist scanner now backfills `application_number` at the source: the
