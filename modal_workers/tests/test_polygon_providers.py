@@ -22,6 +22,7 @@ from modal_workers.providers.polygon.base import (
     PolygonClient,
     PolygonError,
 )
+import modal_workers.providers.polygon.market_data as mdmod
 from modal_workers.providers.polygon.market_data import PolygonMarketData
 from modal_workers.providers.polygon.news_data import PolygonNewsData
 from modal_workers.providers.polygon.options_data import PolygonOptionsData
@@ -180,6 +181,81 @@ def test_market_market_cap_returns_float(client_factory):
     ])
     md = PolygonMarketData(client)
     assert md.get_market_cap("AXSM") == 12_345_678_900.0
+
+
+def test_market_cap_retries_transient_null_then_returns_value(client_factory):
+    """A 200 with results.market_cap=None is a transient throttle artifact: retry,
+    and adopt the value once Polygon recovers it. (Gate criterion-2 hardening:
+    one throttled call must not drop a tradeable name from the universe.)"""
+    client, session, _ = client_factory([
+        _FakeResponse(200, payload={"results": {"market_cap": None}}),   # throttle null
+        _FakeResponse(200, payload={"results": {"market_cap": None}}),   # still null
+        _FakeResponse(200, payload={"results": {"market_cap": 9_900_000_000}}),  # recovered
+    ])
+    md = PolygonMarketData(client)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep") as slp:
+        assert md.get_market_cap("PFE") == 9_900_000_000.0
+    assert session.request.call_count == 3      # retried until a real value appeared
+    assert slp.call_count == 2                  # backoff slept before each retry, not after success
+    # the confirmed value is the one cached (a later call is a no-network hit)
+    assert md.get_market_cap("PFE") == 9_900_000_000.0
+    assert session.request.call_count == 3
+
+
+def test_market_cap_persistent_null_returns_none_after_retries(client_factory):
+    """If market_cap stays null across all retries, return None (and cache it) —
+    but only after exhausting the retry budget (1 initial + _MCAP_NULL_RETRIES)."""
+    null_payload = {"results": {"market_cap": None}}
+    client, session, _ = client_factory([_FakeResponse(200, payload=null_payload)
+                                         for _ in range(mdmod._MCAP_NULL_RETRIES + 1)])
+    md = PolygonMarketData(client)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep"):
+        assert md.get_market_cap("ZYME") is None
+    assert session.request.call_count == mdmod._MCAP_NULL_RETRIES + 1
+    # None is cached -> a second call does not re-fetch
+    assert md.get_market_cap("ZYME") is None
+    assert session.request.call_count == mdmod._MCAP_NULL_RETRIES + 1
+
+
+def test_market_cap_structural_miss_not_retried(client_factory):
+    """A STRUCTURAL miss (no/empty results object) is a genuine no-data answer,
+    NOT a transient null — it must NOT consume the retry budget."""
+    # empty results object
+    client, session, _ = client_factory([_FakeResponse(200, payload={"results": {}})])
+    md = PolygonMarketData(client)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep") as slp:
+        assert md.get_market_cap("ETF1") is None
+    assert session.request.call_count == 1   # one fetch, no retries
+    assert slp.call_count == 0
+
+    # results entirely absent
+    client2, session2, _ = client_factory([_FakeResponse(200, payload={"status": "OK"})])
+    md2 = PolygonMarketData(client2)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep"):
+        assert md2.get_market_cap("ETF2") is None
+    assert session2.request.call_count == 1
+
+
+def test_market_cap_404_not_retried(client_factory):
+    """A 404 maps to None via the client (structural miss) and is not retried."""
+    client, session, _ = client_factory([_FakeResponse(404)])
+    md = PolygonMarketData(client)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep") as slp:
+        assert md.get_market_cap("ZZZZ") is None
+    assert session.request.call_count == 1
+    assert slp.call_count == 0
+
+
+def test_market_cap_first_call_value_no_retry(client_factory):
+    """A confirmed value on the first fetch short-circuits (no retry, no sleep)."""
+    client, session, _ = client_factory([
+        _FakeResponse(200, payload={"results": {"market_cap": 5_000_000_000}})
+    ])
+    md = PolygonMarketData(client)
+    with patch("modal_workers.providers.polygon.market_data.time.sleep") as slp:
+        assert md.get_market_cap("MRK") == 5_000_000_000.0
+    assert session.request.call_count == 1
+    assert slp.call_count == 0
 
 
 def test_market_get_adv_averages_dollar_volume(client_factory):

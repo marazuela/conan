@@ -1,0 +1,8 @@
+# A0 offline study (Light-v4 Phase-1 track A0).
+# Per tasks/bc_v4_a0_cohort_confidence.md §6: git-ignore the large raw Transparency
+# snapshot (~5 MB json + ~1.8 MB parquet); it is reproducible from the frozen
+# export via `python3 -m modal_workers.fetchers.universe.openfda_crl_transparency
+# --cached-json <path>`. Commit the small derived artifacts (cohort / metrics /
+# funnel / scored_cohort) so the OOS result is reviewable without the bulk dump.
+crl_transparency_raw_*.json
+crl_transparency_raw_*.parquet
