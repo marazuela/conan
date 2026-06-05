@@ -1,0 +1,103 @@
+{
+  "export_date": "2026-06-01",
+  "steps": [
+    {
+      "step": "raw records in snapshot",
+      "count": 439
+    },
+    {
+      "step": "letter_type == COMPLETE RESPONSE",
+      "count": 426
+    },
+    {
+      "step": "letter_year in {2025,2026}",
+      "count": 73
+    },
+    {
+      "step": "distinct NDA/BLA appnos (digit-normalized)",
+      "count": 63,
+      "records_no_parse": 7,
+      "multi_appno_letters": 3
+    },
+    {
+      "step": "exclude locked-2025 ApplNos (OOS cut)",
+      "count": 54,
+      "locked_overlap": 9
+    },
+    {
+      "step": "exclude biosimilars (text-flag OR Purple Book)",
+      "count": 40,
+      "excluded": 14
+    },
+    {
+      "step": "confirm first-cycle-original (Drugs@FDA + text)",
+      "count": 27,
+      "excluded_resubmission": 11,
+      "excluded_supplement": 0,
+      "excluded_ambiguous": 2
+    },
+    {
+      "step": "tier-A negatives (prospective-2026)",
+      "count": 33
+    },
+    {
+      "step": "tier-B candidate approvals scanned",
+      "count": 116,
+      "pages": 40
+    },
+    {
+      "step": "tier-B negatives selected (capped, year-mix)",
+      "count": 21,
+      "n_2025": 17,
+      "n_2026": 4
+    },
+    {
+      "step": "FINAL cohort",
+      "count": 81,
+      "n_pos": 27,
+      "n_neg": 54,
+      "n_neg_tier_a": 33,
+      "n_neg_tier_b": 21
+    },
+    {
+      "step": "ASSERT negatives disjoint from CR set",
+      "passed": true
+    }
+  ],
+  "excluded": {
+    "biosimilar": [
+      "BLA761385",
+      "BLA761266",
+      "BLA761320",
+      "BLA761435",
+      "BLA761424",
+      "BLA761027",
+      "BLA761462",
+      "BLA761376",
+      "BLA761377",
+      "BLA761403",
+      "BLA761147",
+      "BLA761461",
+      "BLA761271",
+      "BLA761471"
+    ],
+    "resubmission": [
+      "NDA216586",
+      "BLA761308",
+      "NDA218317",
+      "NDA216987",
+      "NDA218923",
+      "NDA216195",
+      "NDA215644",
+      "BLA761303",
+      "NDA210168",
+      "NDA214610",
+      "NDA218345"
+    ],
+    "supplement": [],
+    "ambiguous_first_cycle": [
+      "NDA210862",
+      "NDA216442"
+    ]
+  }
+}

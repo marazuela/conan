@@ -1,0 +1,104 @@
+{
+  "model_name": "M14_ADJUSTED_L1_ORIG_ONLY",
+  "model_version": "M14_ADJUSTED_L1_ORIG_v1_1_2026-05-30",
+  "source_folder": "bc_rubric_m14_2026-05-28",
+  "source_model": "M14 step 2 L1 CV winner; PubMed regex excluded",
+  "n_train": 780,
+  "n_val": 119,
+  "n_test": 130,
+  "n_test_pos": 9,
+  "C_selected_by_train_cv": 1.0,
+  "lr_intercept": -1.313078278391725,
+  "lr_coefficients": {
+    "n_prior_filings_log": -0.18257225720277084,
+    "priority": -0.553465984421398,
+    "is_bla": 1.2664888425978587,
+    "type5_or_3": 0.312588502294576,
+    "sponsor_has_orphan_history": -0.036666724256050325,
+    "sponsor_has_warning": 0.6331569462075598,
+    "n_drug_inspections_log": -0.414013665339801,
+    "has_bt": -0.24199246237226793,
+    "has_ft": -0.02858726788386768,
+    "has_aa": -1.2088464834986363,
+    "n_8ks_30_180_clean": -0.6401292112351235,
+    "ctgov_failed_primary": -0.029186345929598928,
+    "ctgov_any_randomized": 0.2071748401710937
+  },
+  "features": [
+    "n_prior_filings_log",
+    "priority",
+    "is_bla",
+    "type5_or_3",
+    "sponsor_has_orphan_history",
+    "sponsor_has_warning",
+    "n_drug_inspections_log",
+    "has_bt",
+    "has_ft",
+    "has_aa",
+    "n_8ks_30_180_clean",
+    "ctgov_failed_primary",
+    "ctgov_any_randomized"
+  ],
+  "excluded_m14_features": [
+    "sponsor_prior_day",
+    "drug_is_orphan",
+    "sponsor_has_recent_vai_fix",
+    "sponsor_has_recent_oai_fix",
+    "has_pr",
+    "had_adcomm_clean",
+    "briefing_concern_score_clean",
+    "edgar_covered",
+    "adc_any_endpoint",
+    "pm_hit",
+    "pm_miss",
+    "pm_no_signal"
+  ],
+  "platt_calibration": {
+    "a": 0.9305335574056478,
+    "b": -0.3927674217265676,
+    "fit_on": "validation_2024"
+  },
+  "raw_test_2025": {
+    "auc": 0.8103764921946741,
+    "auc_ci_low": 0.6370500672043011,
+    "auc_ci_high": 0.9509466355846774,
+    "perm_p": 0.0,
+    "brier": 0.07083940087757888,
+    "log_loss": 0.25507479419780565,
+    "calibration_slope": 0.823887793246377,
+    "calibration_intercept": -1.1997845134183656
+  },
+  "calibrated_test_2025": {
+    "auc": 0.8103764921946741,
+    "auc_ci_low": 0.6370500672043011,
+    "auc_ci_high": 0.9509466355846774,
+    "perm_p": 0.0,
+    "brier": 0.06346029640484624,
+    "log_loss": 0.23367858456266347,
+    "calibration_slope": 0.8654163435985176,
+    "calibration_intercept": -0.8832748693421768
+  },
+  "m13_comparison_same_test": {
+    "auc": 0.7943067033976124,
+    "auc_ci_low": 0.5880160519125683,
+    "auc_ci_high": 0.952755905511811,
+    "perm_p": 0.0,
+    "brier": 0.0635417382513096,
+    "log_loss": 0.24337845708366254,
+    "calibration_slope": 0.6333864161161573,
+    "calibration_intercept": -1.2432905015526212
+  },
+  "delta_auc_m14_adjusted_minus_m13": {
+    "mean": 0.01623923402633281,
+    "ci_low": -0.013937282229965046,
+    "ci_high": 0.0640041666666667,
+    "p_new_le_old": 0.2565
+  },
+  "refusal_rules": {
+    "cycle_type_not_first_cycle_orig": "refuse",
+    "is_biosimilar_bla": "refuse",
+    "n_prior_filings_lt_2": "score_low_confidence",
+    "n_8ks_30_180_clean_lte_0": "score_moderate_confidence_no_edgar_signal"
+  },
+  "production_status": "recommended_candidate_for_eod_ship_after_smoke_tests"
+}

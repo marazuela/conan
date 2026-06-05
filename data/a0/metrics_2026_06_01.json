@@ -1,0 +1,281 @@
+{
+  "export_date": "2026_06_01",
+  "model_version": "M14_ADJUSTED_L1_ORIG_v1_1_2026-05-30",
+  "scorer_path": "/Users/Pico/Downloads/BC_scoring_rubrics_export/NDA_M14_adjusted/scripts/score_m14_adjusted.py",
+  "n_scored": 81,
+  "sensitivity_runs": {
+    "full": {
+      "n": 81,
+      "n_pos": 27,
+      "n_neg": 54,
+      "auc_ranking": 0.6941,
+      "auc_sklearn": 0.7136,
+      "auc_ci_low": 0.5935,
+      "auc_ci_high": 0.8154,
+      "brier": 0.2253,
+      "calibration_slope": 1.2368,
+      "calibration_intercept": 1.4844,
+      "perm_p": 0.0005,
+      "per_band": {
+        "low": {
+          "n": 16,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.0283
+        },
+        "moderate": {
+          "n": 16,
+          "n_pos": 2,
+          "observed_crl_rate": 0.125,
+          "mean_p_crl": 0.1105
+        },
+        "elevated": {
+          "n": 41,
+          "n_pos": 19,
+          "observed_crl_rate": 0.4634,
+          "mean_p_crl": 0.1819
+        },
+        "high": {
+          "n": 8,
+          "n_pos": 6,
+          "observed_crl_rate": 0.75,
+          "mean_p_crl": 0.365
+        }
+      },
+      "band_high_vs_low_rate": {
+        "high": 0.75,
+        "low": 0.0
+      }
+    },
+    "nda_only": {
+      "n": 69,
+      "n_pos": 21,
+      "n_neg": 48,
+      "auc_ranking": 0.6409,
+      "auc_sklearn": 0.6691,
+      "auc_ci_low": 0.5331,
+      "auc_ci_high": 0.7909,
+      "brier": 0.2284,
+      "calibration_slope": 1.0395,
+      "calibration_intercept": 1.1848,
+      "perm_p": 0.013,
+      "per_band": {
+        "low": {
+          "n": 14,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.0286
+        },
+        "moderate": {
+          "n": 16,
+          "n_pos": 2,
+          "observed_crl_rate": 0.125,
+          "mean_p_crl": 0.1105
+        },
+        "elevated": {
+          "n": 39,
+          "n_pos": 19,
+          "observed_crl_rate": 0.4872,
+          "mean_p_crl": 0.1788
+        },
+        "high": {
+          "n": 0,
+          "observed_crl_rate": null
+        }
+      },
+      "band_high_vs_low_rate": {
+        "high": null,
+        "low": 0.0
+      }
+    },
+    "bla_only": {
+      "n": 12,
+      "n_pos": 6,
+      "n_neg": 6,
+      "auc_ranking": 1.0,
+      "auc_sklearn": 1.0,
+      "auc_ci_low": 1.0,
+      "auc_ci_high": 1.0,
+      "brier": 0.2076,
+      "calibration_slope": 1.3224,
+      "calibration_intercept": 1.2868,
+      "perm_p": 0.0005,
+      "per_band": {
+        "low": {
+          "n": 2,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.0263
+        },
+        "moderate": {
+          "n": 0,
+          "observed_crl_rate": null
+        },
+        "elevated": {
+          "n": 2,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.2418
+        },
+        "high": {
+          "n": 8,
+          "n_pos": 6,
+          "observed_crl_rate": 0.75,
+          "mean_p_crl": 0.365
+        }
+      },
+      "band_high_vs_low_rate": {
+        "high": 0.75,
+        "low": 0.0
+      }
+    },
+    "collapse_multi_appno": {
+      "n": 81,
+      "n_pos": 27,
+      "n_neg": 54,
+      "auc_ranking": 0.6941,
+      "auc_sklearn": 0.7136,
+      "auc_ci_low": 0.5935,
+      "auc_ci_high": 0.8154,
+      "brier": 0.2253,
+      "calibration_slope": 1.2368,
+      "calibration_intercept": 1.4844,
+      "perm_p": 0.0005,
+      "per_band": {
+        "low": {
+          "n": 16,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.0283
+        },
+        "moderate": {
+          "n": 16,
+          "n_pos": 2,
+          "observed_crl_rate": 0.125,
+          "mean_p_crl": 0.1105
+        },
+        "elevated": {
+          "n": 41,
+          "n_pos": 19,
+          "observed_crl_rate": 0.4634,
+          "mean_p_crl": 0.1819
+        },
+        "high": {
+          "n": 8,
+          "n_pos": 6,
+          "observed_crl_rate": 0.75,
+          "mean_p_crl": 0.365
+        }
+      },
+      "band_high_vs_low_rate": {
+        "high": 0.75,
+        "low": 0.0
+      }
+    },
+    "pos2026_only": {
+      "n": 61,
+      "n_pos": 7,
+      "n_neg": 54,
+      "auc_ranking": 0.7884,
+      "auc_sklearn": 0.8042,
+      "auc_ci_low": 0.6499,
+      "auc_ci_high": 0.9482,
+      "brier": 0.0838,
+      "calibration_slope": 1.4429,
+      "calibration_intercept": 0.3722,
+      "perm_p": 0.003,
+      "per_band": {
+        "low": {
+          "n": 16,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.0283
+        },
+        "moderate": {
+          "n": 14,
+          "n_pos": 0,
+          "observed_crl_rate": 0.0,
+          "mean_p_crl": 0.1111
+        },
+        "elevated": {
+          "n": 26,
+          "n_pos": 4,
+          "observed_crl_rate": 0.1538,
+          "mean_p_crl": 0.1911
+        },
+        "high": {
+          "n": 5,
+          "n_pos": 3,
+          "observed_crl_rate": 0.6,
+          "mean_p_crl": 0.3484
+        }
+      },
+      "band_high_vs_low_rate": {
+        "high": 0.6,
+        "low": 0.0
+      }
+    }
+  },
+  "leakage_canary": {
+    "shuffled_auc": 0.416,
+    "perm_p_on_real": 0.0005
+  },
+  "coverage": {
+    "n_scored": 81,
+    "mean_coverage": 0.3951,
+    "median_coverage": 0.5,
+    "min_coverage": 0.2,
+    "max_coverage": 0.5,
+    "per_feature_source_counts": {
+      "is_bla": {
+        "appno_prefix": 81
+      },
+      "n_drug_inspections_5y_fix": {
+        "absent": 81
+      },
+      "sponsor_has_warning": {
+        "live_warning_letters": 81
+      },
+      "has_bt": {
+        "absent": 81
+      },
+      "has_ft": {
+        "absent": 81
+      },
+      "has_aa": {
+        "absent": 81
+      },
+      "n_8ks_30_180_clean": {
+        "absent": 81
+      },
+      "ctgov_failed_primary": {
+        "absent_no_source": 81
+      },
+      "ctgov_any_randomized": {
+        "absent_no_source": 81
+      },
+      "sponsor_has_orphan_history": {
+        "absent_no_source": 81
+      },
+      "priority": {
+        "drugsfda_orig": 53
+      },
+      "SubmissionClassCode": {
+        "drugsfda_orig": 51
+      },
+      "n_prior_filings": {
+        "drugsfda_sponsor": 54
+      }
+    }
+  },
+  "method_notes": {
+    "auc": "ranking_auc (Mann-Whitney) from eval_harness/metrics.py, used as-is",
+    "auc_sklearn": "roc_auc_score (tie-aware) for reference + CI consistency",
+    "brier": "brier_score from fda_calibration_math.py, used as-is",
+    "boot_ci": "VERBATIM boot_ci from build_adjusted_m14.py (sklearn, seed 123, n=2000)",
+    "cal_slope": "VERBATIM cal_slope_intercept (sklearn LogisticRegression on logit(p))",
+    "perm_p": "VERBATIM perm_p from build_adjusted_m14.py",
+    "tier_a_negatives": "reuse precomputed p_m14_cal (M14 authors' PIT score); offline rebuild cross-check recorded",
+    "headline_ci_floor": "auc_ci_low from boot_ci on the FULL cohort"
+  }
+}

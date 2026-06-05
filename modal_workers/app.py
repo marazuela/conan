@@ -47,12 +47,22 @@ Trigger:  modal run modal_workers/app.py::<scanner_name>_once
 
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 import modal
 from fastapi import Header, HTTPException
 
 app = modal.App("conan-v2")
+
+# BC-FDA Light v4 — the M14 scorer's model artifacts are DATA files (.json/.csv)
+# under modal_workers/bc_score/_m14/models/. add_local_python_source copies .py
+# ONLY, so without an explicit mount bc_weekly_score_once would fail to load
+# nda_m14_adjusted.json / the locked-2025 reference in-container. The remote_path
+# mirrors the source layout so the scorer's Path(__file__).parent/"models" resolves.
+_BC_M14_MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "bc_score", "_m14", "models"
+)
 
 # Base image — one image for the whole fleet. Modal caches aggressively, so a shared
 # image is simpler than per-scanner slim images.
@@ -68,6 +78,7 @@ image = (
         "reportlab>=4.0",         # reporting_weekly (PDF render)
     )
     .add_local_python_source("modal_workers")
+    .add_local_dir(_BC_M14_MODELS_DIR, remote_path="/root/modal_workers/bc_score/_m14/models")
 )
 
 # Secrets — populate via Modal Dashboard or `modal secret create`.
@@ -704,6 +715,89 @@ def openfda_drug_shortages_once() -> dict:
     against fda_assets via application_number then proprietary_name ilike, and
     upserts. Skips rows that don't match the curated fda_assets set."""
     return _run_fetcher_snapshot("openfda_drug_shortages")
+
+
+# ==========================================================================
+# BC-FDA Light v4 — Phase 0 universe-build cron (THE GATE).
+#
+# bc_universe_pdufa enumerates pending, in-window, tradeable NDA/BLA names with a
+# real PDUFA date (EDGAR 8-K/6-K extraction -> Drugs@FDA appno recovery -> Polygon
+# tradeability) and writes the bc_* tables idempotently. It uses its own run()
+# entry (apply=True) rather than the catalyst-universe fetch() contract, and is
+# fail-loud via bc_pipeline_runs.
+#
+# Registry wiring (spec §5.2 option a): once DEPLOYED, this is dispatched by
+# dispatch_release_times via a public.scanners row (cadence='daily',
+# scheduled_hour_utc=13, status='operational'). 13 is a valid dispatch tick
+# ({6,8,13,17,21}); the INSERT in bc_universe_pdufa_DEPLOY.md is authoritative.
+# _dispatch() resolves the spawn
+# target as getattr(app, f"{name}_once") -> THIS function. The INSERT SQL is in
+# modal_workers/fetchers/universe/bc_universe_pdufa_DEPLOY.md and MUST NOT be run
+# before this code is deployed (an undeployed row would error the dispatcher).
+# Until deploy, this function is inert (v4 runs the deployed app, not this tree).
+#
+# timeout=1200s (20m): ~tens of EFTS body fetches + Polygon paced at ~13s/call
+# (~5 req/min plan ceiling) + a per-sponsor Drugs@FDA recovery query. Polygon
+# pacing dominates wall-clock; the registry timeout_hard_s mirrors this.
+# ==========================================================================
+
+@app.function(image=image, timeout=1200, secrets=[scanner_secrets, supabase_secrets])
+def bc_universe_pdufa_once() -> dict:
+    """BC Phase 0 universe build → bc_applications / bc_application_features /
+    bc_company_tradeable (idempotent, snapshot-versioned) + bc_pipeline_runs.
+    Requires SEC_USER_AGENT + POLYGON_API_KEY (+ OPENFDA_API_KEY for appno
+    recovery) from scanner-secrets. Writes via SUPABASE_SERVICE_ROLE_KEY."""
+    from modal_workers.fetchers.universe import bc_universe_pdufa as bc
+    result = bc.run(
+        apply=True,
+        window_days=120,        # = l3.window_days
+        lookback_days=None,     # defaults to window_days
+        size=100,
+        polygon_pace_s=13.0,    # ~5 req/min plan ceiling
+        max_polygon_names=None,
+        recover_appno=True,     # read-only Drugs@FDA real-NDA/BLA recovery
+        openfda_pace_s=0.2,     # gentle pacing under the openFDA shared-IP cap
+        max_appno_lookups=None,
+    )
+    return result["stats"]
+
+
+# ==========================================================================
+# BC-FDA Light v4 — Phase 1 weekly score-as-rank worker.
+#
+# bc_weekly_score (modal_workers/bc_score/run_weekly.py) is a ZERO-LLM,
+# deterministic worker: for the Phase-0 universe (bc_application_features rows
+# with a non-NULL pdufa_date, appl_type IN ('NDA','BLA')) it builds the M14
+# feature substrate point-in-time (NO look-ahead), scores each name with the
+# bc_-owned re-vendored M14 scorer (modal_workers.bc_score._m14), and writes a
+# risk-band + percentile rank to bc_rubric_scores. p_crl is persisted internally
+# (the bc_candidates matview gate keys on it) but never surfaced (band-only v1).
+# Idempotent (scored_at anchored to the snapshot date, not now()); fail-loud via
+# bc_pipeline_runs. The model JSON ships via the image's add_local_dir mount above.
+#
+# Scheduling (Phase 1 §2.2, deferred to deploy): folded into the existing
+# dispatch_weekly (Sun 12 UTC) via a public.scanners row
+# (name='bc_weekly_score', cadence='weekly', status='operational') so retiming/
+# pausing is a DB UPDATE — NOT a new @modal.Cron (the 5-cron cap). The scanners
+# INSERT is a separate, post-deploy step (NOT done in this PR). Until then this
+# function is inert. scanner_secrets carries SEC_USER_AGENT (8-K EFTS) +
+# OPENFDA_API_KEY (Drugs@FDA) + POLYGON_API_KEY (carried, unused in band-only v1);
+# supabase_secrets the service-role write creds.
+#
+# timeout=600s (10m): ~tens of names, each a per-sponsor Drugs@FDA query (cached)
+# + one EFTS-by-CIK 8-K count; no Polygon in the scoring path (band-only).
+# ==========================================================================
+
+@app.function(image=image, timeout=600, secrets=[scanner_secrets, supabase_secrets])
+def bc_weekly_score_once() -> dict:
+    """BC Phase 1 weekly score → bc_rubric_scores (risk-band + percentile rank) +
+    bc_application_features M14 columns, refresh bc_candidates, fail-loud via
+    bc_pipeline_runs. Idempotent (same-snapshot re-run merges in place). Reads the
+    Phase-0 universe; needs SEC_USER_AGENT + OPENFDA_API_KEY from scanner-secrets,
+    writes via SUPABASE_SERVICE_ROLE_KEY."""
+    from modal_workers.bc_score.run_weekly import run_weekly
+    from modal_workers.shared.supabase_client import SupabaseClient
+    return run_weekly(SupabaseClient(), apply=True)
 
 
 # ==========================================================================
