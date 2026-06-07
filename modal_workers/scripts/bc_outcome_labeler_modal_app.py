@@ -96,80 +96,16 @@ def _verify_compute_secret(provided: Optional[str]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# submissions source (Drugs@FDA) — reuse the bc_score DrugsFDA cached client.
-# For each pending/resolved candidate appno, the labeler's resolve.py consumes a
-# `submission_type`/`submission_status`/`submission_status_date`-shaped list; that
-# is exactly app.get("submissions") from DrugsFDA.application(appno). Surrogate
-# EDGAR8K: appnos have no Drugs@FDA record (their submissions stay absent => the
-# resolver degrades to the PDUFA-extension branch, never crashes).
+# Run body — delegate to the Modal-free entry (the single source of truth for the
+# input sourcing + run_labeler call, shared with the Cowork task / CLI). Keeping
+# the sourcing OUT of this Modal app means the Cowork trigger and this dormant
+# Modal path can never drift.
 # --------------------------------------------------------------------------- #
-def _build_submissions_by_app(
-    client: Any,
-    *,
-    today_iso: str,
-    openfda_sleep_s: float = 0.2,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """Return ``{application_number: [submission rows]}`` for resolved/maturing
-    candidates (pdufa_date <= today). Reuses ``modal_workers.shared.feature_builder_pit
-    .DrugsFDA`` (the §0.8 reuse). Best-effort: a Drugs@FDA miss leaves that appno out
-    of the map (resolver then has no approvals signal — graceful, not fatal)."""
-    from modal_workers.shared.feature_builder_pit import DrugsFDA, appl_is_bla
-
-    rows = client.select(
-        "bc_candidates",
-        params={
-            "select": "application_number,pdufa_date",
-            "pdufa_date": f"lte.{today_iso}",
-            "order": "pdufa_date.desc",
-        },
-    ) or []
-
-    dfda = DrugsFDA(sleep_s=openfda_sleep_s)
-    out: Dict[str, List[Dict[str, Any]]] = {}
-    for r in rows:
-        appno = str(r.get("application_number") or "").strip()
-        if not appno:
-            continue
-        # only REAL NDA/BLA appnos have a Drugs@FDA record; skip surrogate EDGAR8K:
-        if appl_is_bla(appno) is None:
-            continue
-        rec = dfda.application(appno)
-        if not rec:
-            continue
-        subs = rec.get("submissions") or []
-        if subs:
-            out[appno] = subs
-    return out
-
-
 def _run(apply: bool) -> Dict[str, Any]:
-    """Shared body: build market data + Drugs@FDA submissions, then run the labeler.
+    from modal_workers.bc_outcome_labeler.entry import run_once
 
-    ``run_labeler`` itself reads the candidate universe (apps=None), hydrates tickers,
-    pairs the pre-PDUFA score, and (when apply) opens/closes the fail-loud
-    bc_pipeline_runs row — so we do NOT duplicate any of that here. ``crl_records=None``
-    + ``crl_source_available`` defaulting to the (absent) transparency module's
-    importability means the CRL branch degrades to Drugs@FDA, per §5.1 design."""
-    from datetime import datetime, timezone
-
-    from modal_workers.bc_outcome_labeler.run_labeler import _build_market_data, run_labeler
-    from modal_workers.shared.supabase_client import SupabaseClient
-
-    client = SupabaseClient()
-    today_iso = datetime.now(timezone.utc).date().isoformat()
-
-    market_data = _build_market_data()  # None when POLYGON_API_KEY unset (price=null)
-    submissions_by_app = _build_submissions_by_app(client, today_iso=today_iso)
-
-    result = run_labeler(
-        client,
-        apply=apply,
-        market_data=market_data,
-        crl_records=None,                 # CRL Transparency optional; degrade to Drugs@FDA
-        submissions_by_app=submissions_by_app,
-    )
-    _print_report(result, apply=apply, n_submissions=len(submissions_by_app),
-                  has_market_data=market_data is not None)
+    result = run_once(apply=apply)
+    _print_report(result, apply=apply)
     return {"status": result["status"], "stats": result["stats"]}
 
 
@@ -209,13 +145,10 @@ def bc_outcome_labeler_endpoint(
     return _run(apply=True)
 
 
-def _print_report(result: Dict[str, Any], *, apply: bool, n_submissions: int,
-                  has_market_data: bool) -> None:
+def _print_report(result: Dict[str, Any], *, apply: bool) -> None:
     stats = result.get("stats", {})
     print("\n===== bc_outcome_labeler " + ("--apply" if apply else "DRY-RUN") + " (modal) =====")
     print(f"  status: {result.get('status')}")
-    print(f"  market_data: {'polygon' if has_market_data else 'NONE (price=null)'}")
-    print(f"  submissions_sourced: {n_submissions} app(s)")
     for k in ("n_candidate_apps", "n_resolved", "n_wrote", "n_failed",
               "horizons", "grace_days", "crl_source_available",
               "stale_pending_unresolved"):
